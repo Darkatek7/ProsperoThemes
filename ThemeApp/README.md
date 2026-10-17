@@ -17,6 +17,9 @@ launch evidence are recorded separately below.
   the new one does not write goes back to its backup (files already at their original are not rewritten).
   So themes replace each other instead of stacking. If one of them cannot be put back, the theme is not
   applied. **Restore defaults** (System tab, X) puts every backed-up file back.
+- **Where an app background goes:** applying a pack with an all-apps background asks in the confirm bar: X puts
+  it on apps without their own image, Triangle on all apps. The answer is saved as the background scope (the
+  same setting as Triangle on the System tab). Packs without one keep the plain X confirm.
 - **Other firmware, system updates:** nothing in the app is tied to 13.00; it compares the console's own
   files instead. Before the first system write every target is backed up and its payload checked against
   the console's file (its backup when there is one): same DDS size and DXGI format, same PNG size, same

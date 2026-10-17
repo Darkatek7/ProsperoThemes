@@ -156,14 +156,24 @@ public sealed class ThemeRenderer : IDisposable
             case ThemeView.StoreAddress: DrawStoreAddress(surface, browser.StoreEditor, enter, seconds); break;
         }
         DrawFooter(surface, browser.View);
-        if (browser.Pending != ThemeAction.None) DrawConfirm(surface, browser.Pending);
+        if (browser.Pending != ThemeAction.None) DrawConfirm(surface, browser.Pending, browser.ApplyAsksScope);
     }
 
-    /// <summary>The armed-action bar over the footer: a second X writes to the system, anything else cancels.</summary>
-    private void DrawConfirm(Surface s, ThemeAction pending)
+    /// <summary>
+    /// The armed-action bar over the footer: a second X writes to the system, anything else cancels. A pack with an
+    /// all-apps background asks where it goes: X for apps without their own image, Triangle for all apps.
+    /// </summary>
+    private void DrawConfirm(Surface s, ThemeAction pending, bool asksScope)
     {
         s.FillRect(0, 1010, 1920, 70, Ink);
         s.HLine(80, 1010, 1760, Accent);
+        if (pending == ThemeAction.Apply && asksScope)
+        {
+            int at = Hint(s, PadButton.Cross, "Apply to apps without their own image", 80, 1034, White);
+            at = Hint(s, PadButton.Triangle, "Apply to all apps", at, 1034, White);
+            Hint(s, PadButton.Circle, "Cancel", at, 1034, Muted);
+            return;
+        }
         string what = pending == ThemeAction.Apply ? "Apply theme to console now" : "Restore all defaults: backgrounds, icons, sounds";
         int x = Hint(s, PadButton.Cross, what, 80, 1034, White);
         Hint(s, PadButton.Circle, "Cancel", x, 1034, Muted);

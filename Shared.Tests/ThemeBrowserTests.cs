@@ -87,6 +87,35 @@ public class ThemeBrowserTests
     }
 
     [Fact]
+    public void An_all_apps_pack_asks_where_its_background_goes()
+    {
+        var browser = new ThemeBrowser(); browser.SetCount(1);
+        browser.Update(Input(confirm: true), asksScope: true);
+        browser.Update(Input(confirm: true), asksScope: true);
+        Assert.True(browser.ApplyAsksScope);
+        browser.Update(Input(), triangle: true, asksScope: true);
+        Assert.Equal(ThemeAction.Apply, browser.TakeAction());
+        Assert.True(browser.ApplyAllApps);
+        Assert.Equal(ThemeAction.None, browser.Pending);
+
+        browser.Update(Input(confirm: true), asksScope: true);
+        browser.Update(Input(confirm: true), asksScope: true);
+        Assert.Equal(ThemeAction.Apply, browser.TakeAction());
+        Assert.False(browser.ApplyAllApps);
+    }
+
+    [Fact]
+    public void Triangle_only_answers_an_apply_that_asks()
+    {
+        var browser = new ThemeBrowser(); browser.SetCount(1);
+        browser.Update(Input(confirm: true));
+        browser.Update(Input(confirm: true));
+        browser.Update(Input(), triangle: true);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+        Assert.Equal(ThemeAction.None, browser.Pending);
+    }
+
+    [Fact]
     public void Apply_needs_a_second_confirm_and_cancel_disarms_it()
     {
         var browser = new ThemeBrowser(); browser.SetCount(1);

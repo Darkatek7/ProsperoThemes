@@ -16,6 +16,13 @@ public sealed class ThemeBrowser
     public int TargetOffset { get; private set; }
     /// <summary>A system-changing action armed by one X press and waiting for the second; None otherwise.</summary>
     public ThemeAction Pending { get; private set; }
+    /// <summary>
+    /// The selected pack has an all-apps background, so an armed apply asks where it goes: X for apps without their
+    /// own image, Triangle for all apps. The app passes it in with every update.
+    /// </summary>
+    public bool ApplyAsksScope { get; private set; }
+    /// <summary>The answer of the last apply that asked: true for all apps (see <see cref="ApplyAsksScope"/>).</summary>
+    public bool ApplyAllApps { get; private set; }
     /// <summary>Focused card on the Community tab, or -1 when the list is empty.</summary>
     public int CommunitySelected { get; private set; } = -1;
     /// <summary>The store's sort order shown on the Community tab (Top, Downloads, New).</summary>
@@ -61,8 +68,10 @@ public sealed class ThemeBrowser
     // The tabs in header order; Detail and Preview belong to the library.
     private static readonly ThemeView[] Tabs = [ThemeView.Library, ThemeView.Community, ThemeView.Import, ThemeView.System];
 
-    public void Update(UiInput input, bool preview = false, bool options = false, int targetCount = 0, bool triangle = false)
+    public void Update(UiInput input, bool preview = false, bool options = false, int targetCount = 0, bool triangle = false,
+        bool asksScope = false)
     {
+        ApplyAsksScope = asksScope;
         if (View == ThemeView.Preview)
         {
             if (input.Cancel || preview) View = _previewOrigin;
@@ -84,10 +93,12 @@ public sealed class ThemeBrowser
         }
         if (Pending != ThemeAction.None)
         {
-            // Writing to the system takes a second, deliberate X; any other button disarms it.
-            if (input.Confirm) _action = Pending;
+            // Writing to the system takes a second, deliberate X (or Triangle for "all apps" when the apply asks);
+            // any other button disarms it.
+            if (input.Confirm) { _action = Pending; ApplyAllApps = false; }
+            else if (triangle && Pending == ThemeAction.Apply && ApplyAsksScope) { _action = Pending; ApplyAllApps = true; }
             if (input.Confirm || input.Cancel || input.Up || input.Down || input.Left || input.Right ||
-                input.PageUp || input.PageDown || preview || options)
+                input.PageUp || input.PageDown || preview || options || triangle)
                 Pending = ThemeAction.None;
             return;
         }

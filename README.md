@@ -38,9 +38,9 @@ Your library, backups and settings live in `/data/prospero-themes/`, so updating
 |---|---|
 | L1 / R1 | Switch tab (Library, Community, USB Import, System) |
 | D-pad / left stick | Move |
-| X | Details, apply, download |
+| X | Details, apply (for a theme with an app background: apply to apps without their own image), download |
 | Square | Fullscreen preview; on Community: change the sort order; on System: store address |
-| Triangle | On Community: like; on System: background scope (apps without their own image / all apps) |
+| Triangle | When applying a theme with an app background: apply to all apps; on Community: like; on System: background scope (apps without their own image / all apps) |
 | Options | Reload the library or the store list; on System: save a firmware report |
 | Circle | Back |
 

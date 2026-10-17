@@ -175,12 +175,15 @@ internal sealed class ThemeApp : ProsperoApp
         _browser.Update(UiInput.From(context.Input, context.PreviousInput),
             preview: context.Pressed(ScePadButton.Square), options: context.Pressed(ScePadButton.Options),
             targetCount: _browser.Selected >= 0 ? _entries[_browser.Selected].Manifest.Targets.Count : 0,
-            triangle: context.Pressed(ScePadButton.Triangle));
+            triangle: context.Pressed(ScePadButton.Triangle), asksScope: SelectedHasAllAppsBackground());
         switch (_browser.TakeAction())
         {
             case ThemeAction.ImportUsb: StartWork(DeviceThemeLibrary.ImportUsb); break;
             case ThemeAction.Reload: StartWork(DeviceThemeLibrary.Scan); break;
             case ThemeAction.Apply when _browser.Selected >= 0:
+                // The answer to "apps without their own image or all apps" is also the saved setting. The apply
+                // uses it even when settings.json cannot be written; only the next start would not know it.
+                if (_browser.ApplyAsksScope) SetBackgroundScope(_browser.ApplyAllApps);
                 string path = _entries[_browser.Selected].Path;
                 StartSystemWork("Applying theme…", applier => applier.Apply(ThemeArchive.Open(FileSystem.ReadAllBytes(path))));
                 break;
@@ -244,17 +247,35 @@ internal sealed class ThemeApp : ProsperoApp
 
     private void ToggleBackgroundScope()
     {
-        _allAppsBackgrounds = !_allAppsBackgrounds;
-        _renderer.AllAppsBackgrounds = _allAppsBackgrounds;
+        _renderer.ActionStatus = SetBackgroundScope(!_allAppsBackgrounds) ?? (_allAppsBackgrounds
+            ? "Takes effect on the next apply: backgrounds also replace the apps’ own images."
+            : "Takes effect on the next apply: apps with their own image keep it.");
+    }
+
+    /// <summary>
+    /// Sets and saves the background scope: Triangle on the System tab, or the answer when an apply asks. Null when it
+    /// was saved, otherwise why not.
+    /// </summary>
+    private string? SetBackgroundScope(bool allApps)
+    {
+        _allAppsBackgrounds = allApps;
+        _renderer.AllAppsBackgrounds = allApps;
         try
         {
-            _settings = _settings with { AllAppsBackgrounds = _allAppsBackgrounds };
+            _settings = _settings with { AllAppsBackgrounds = allApps };
             WriteSettings();
-            _renderer.ActionStatus = _allAppsBackgrounds
-                ? "Takes effect on the next apply: backgrounds also replace the apps’ own images."
-                : "Takes effect on the next apply: apps with their own image keep it.";
+            return null;
         }
-        catch (Exception ex) { _renderer.ActionStatus = "Setting not saved: " + ex.Message; }
+        catch (Exception ex) { return "Setting not saved: " + ex.Message; }
+    }
+
+    /// <summary>Whether the selected pack has an all-apps background, so applying it asks where that goes.</summary>
+    private bool SelectedHasAllAppsBackground()
+    {
+        if (_browser.Selected < 0) return false;
+        foreach (var target in _entries[_browser.Selected].Manifest.Targets)
+            if (target.Path == ProsperoThemes.Shared.AssetRoots.AllAppsBackground) return true;
+        return false;
     }
 
     /// <summary>
