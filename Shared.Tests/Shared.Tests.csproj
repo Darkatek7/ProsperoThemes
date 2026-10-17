@@ -35,6 +35,7 @@
     <Compile Include="..\ThemeApp\Library\ThemeApplier.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Library\ThemeLibraryEntry.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Library\CommunityList.cs" LinkBase="App" />
+    <Compile Include="..\ThemeApp\Library\FirmwareReport.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Library\AppSettings.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Ui\ThemeBrowser.cs;..\ThemeApp\Ui\StoreAddressEditor.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Ui\AtlasFont.cs;..\ThemeApp\Ui\ThemeRenderer.cs" LinkBase="App" />

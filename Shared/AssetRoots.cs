@@ -57,9 +57,10 @@ public static class AssetRoots
 
     /// <summary>
     /// The system tiles' own home backgrounds (FW 13.00, klog <c>SetBackgroundTransition NextImageUri</c>):
-    /// Media Gallery <c>bg_NPXS40056</c>, All Apps <c>bg_NPXS40139</c>, Game Library <c>bg_NPXS40071</c>, Store
-    /// <c>bg_NPXS40047</c> and the rest. Same format as <see cref="HubBackground"/> (3840×2160 BC7 in zstd), so
-    /// the applier gives each of them the theme's main background unless the pack names the file itself.
+    /// Media Gallery <c>bg_NPXS40075</c>, All Apps <c>bg_NPXS40056</c>, App Library <c>bg_NPXS40139</c>, Game Library
+    /// <c>bg_NPXS40071</c>, Store <c>bg_NPXS40047</c> and the rest (docs/13.00-screen-assets.md). Same format as
+    /// <see cref="HubBackground"/> (3840×2160 BC7 in zstd), so the applier gives each of them the theme's main
+    /// background unless the pack names the file itself; a console whose file differs keeps its own.
     /// </summary>
     public static readonly IReadOnlyList<string> SystemTileBackgrounds = new[]
     {

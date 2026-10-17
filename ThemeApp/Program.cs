@@ -30,6 +30,8 @@ internal sealed class ThemeApp : ProsperoApp
     // User settings (background scope, store address, anonymous device id), kept in settings.json.
     private AppSettings _settings = null!;
     private bool _allAppsBackgrounds;
+    /// <summary>The system software version ("13.000.000"), null when it could not be read.</summary>
+    private string? _firmware;
     // The community store: the list on screen and one HTTP client (Http/Ssl resolved at run time, see
     // StoreHttpClient), created on first use by the worker.
     private IReadOnlyList<CommunityTheme> _community = Array.Empty<CommunityTheme>();
@@ -52,6 +54,9 @@ internal sealed class ThemeApp : ProsperoApp
         if (json is null || !json.Contains(_settings.DeviceId)) SaveSettings();
         _allAppsBackgrounds = _settings.AllAppsBackgrounds;
         _renderer.AllAppsBackgrounds = _allAppsBackgrounds;
+        try { _firmware = SharpProspero.Platform.SystemInfo.SystemSoftwareVersion; }
+        catch { _firmware = null; }
+        _renderer.Firmware = _firmware ?? "";
         _browser.StoreUrl = _settings.StoreUrl;
         try
         {
@@ -133,7 +138,7 @@ internal sealed class ThemeApp : ProsperoApp
                 else
                 {
                     ApplyResult result = work(new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
-                        { IncludeAllApps = _allAppsBackgrounds });
+                        { IncludeAllApps = _allAppsBackgrounds, Firmware = _firmware });
                     (status, message) = (result.Success ? "Done" : "Not completed", result.Message);
                 }
             }
@@ -176,6 +181,7 @@ internal sealed class ThemeApp : ProsperoApp
                 StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals());
                 break;
             case ThemeAction.SaveStoreUrl: SaveStoreAddress(); break;
+            case ThemeAction.FirmwareReport: StartSystemWork("Saving firmware report…", _ => SaveFirmwareReport()); break;
             case ThemeAction.CommunityRefresh: StartCommunityList(); break;
             case ThemeAction.CommunityDownload when SelectedCommunity() is { } theme: StartCommunityDownload(theme); break;
             case ThemeAction.CommunityLike when SelectedCommunity() is { } theme: StartCommunityLike(theme); break;
@@ -188,6 +194,37 @@ internal sealed class ThemeApp : ProsperoApp
             && context.Pressed(ScePadButton.Triangle))
             ToggleBackgroundScope();
         if (_showStats) _stats.Draw(context.Surface, 1500, 1060, scale: 1, Color.White);
+    }
+
+    /// <summary>
+    /// Writes the firmware report to <see cref="FirmwareReport.Folder"/> and, when a USB drive is connected, next to
+    /// it on the drive. Reads only; runs on the worker with the helper started.
+    /// </summary>
+    private ApplyResult SaveFirmwareReport()
+    {
+        string? catalog = null;
+        try { catalog = FileSystem.ReadAllText(FirmwareReport.BundledCatalog); }
+        catch { /* the report then covers the backgrounds, tile icons and icons only */ }
+        string version = "unknown";
+        try { version = JsonValue.Parse(FileSystem.ReadAllText("/app0/sce_sys/param.json")).GetString("contentVersion", "unknown"); }
+        catch { }
+        List<string> paths = FirmwareReport.Paths(FirmwareReport.CatalogPaths(catalog));
+        byte[] report = FirmwareReport.Build(new HelperDeviceFiles(), _firmware, version,
+            ThemeApplier.FormatUtc(HelperDeviceFiles.UnixSeconds()), paths);
+        string name = FirmwareReport.FileName(_firmware);
+        FileSystem.CreateDirectoryRecursive(FirmwareReport.Folder);
+        FileSystem.WriteAllBytes(FirmwareReport.Folder + "/" + name, report);
+        string where = FirmwareReport.Folder + "/" + name;
+        try
+        {
+            if (FileSystem.Exists("/mnt/usb0"))
+            {
+                FileSystem.WriteAllBytes("/mnt/usb0/" + name, report);
+                where += " and on the USB drive";
+            }
+        }
+        catch { /* the copy in /data is enough */ }
+        return new ApplyResult(true, $"Firmware report ({paths.Count} files) saved to {where}.", Array.Empty<string>());
     }
 
     private void ToggleBackgroundScope()

@@ -95,8 +95,17 @@ public static class ThemeHelperClient
         if (reply != "REMOUNT rc=0") throw new InvalidOperationException("remount refused: " + reply);
     }
 
-    public static bool Exists(string path) =>
-        Request("STAT " + path, null, out _).StartsWith("OK size=", StringComparison.Ordinal);
+    /// <summary>
+    /// True for "OK size=", false for a failed stat ("STAT rc="). Any other answer (a path the helper refuses, no
+    /// answer at all) throws, so a helper problem is never taken for a missing file.
+    /// </summary>
+    public static bool Exists(string path)
+    {
+        string reply = Request("STAT " + path, null, out _);
+        if (reply.StartsWith("OK size=", StringComparison.Ordinal)) return true;
+        if (reply.StartsWith("STAT rc=", StringComparison.Ordinal)) return false;
+        throw new InvalidOperationException($"stat {path} failed: {(reply.Length == 0 ? "no answer" : reply)}");
+    }
 
     public static byte[] Read(string path)
     {

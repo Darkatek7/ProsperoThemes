@@ -12,11 +12,29 @@ launch evidence are recorded separately below.
 
 - Library navigation uses the d-pad or left stick. X opens details; Square opens fullscreen preview.
 - X in preview toggles the simulated home overlay; Circle returns to the screen that opened it.
-- L1/R1 switch between the Library, Community, USB Import and System tabs. Options reloads the library.
+- L1/R1 switch between the Library, Community, USB Import and System tabs. Options reloads the library (on System: firmware report).
 - **Apply starts from the defaults:** before a theme is written, every file an earlier theme changed and
   the new one does not write goes back to its backup (files already at their original are not rewritten).
   So themes replace each other instead of stacking. If one of them cannot be put back, the theme is not
   applied. **Restore defaults** (System tab, X) puts every backed-up file back.
+- **Other firmware, system updates:** nothing in the app is tied to 13.00; it compares the console's own
+  files instead. Before the first system write every target is backed up and its payload checked against
+  the console's file (its backup when there is one): same DDS size and DXGI format, same PNG size, same
+  zstd decoded size (a title's own `pic0.dds` may differ in size, the shell scales it). A file the
+  console does not have, or does not match, is skipped and listed; so is an icon the RCO does not hold.
+  The untitled search icon (`#875`) is used only when it is the 13.00 element (length and hash).
+  `backup/written.txt` records what the app last wrote to each file: a live file that matches neither
+  that nor its backup was replaced by the system (an update, or Sony's servers for `/mnt/rnps`); its old
+  backup moves to `backup/replaced/<time>/` and the live file becomes the new default, so Restore
+  defaults never writes an old firmware's file back. The System tab shows the firmware
+  (`SystemInfo.SystemSoftwareVersion`, "13.000.040" on the test console); `state.json` records it.
+- **Firmware report** (System tab, Options): writes `/data/prospero-themes/reports/firmware-<version>.json`
+  (and a copy to `/mnt/usb0` when a drive is connected): for every file in the bundled
+  `catalog/13.00.json`, the system tile backgrounds and tile icons and the icon container, whether it
+  exists, its size, hash and format, plus the RCO's icon list. Only reads. On the PC,
+  `python ThemePackCreator/theme_pack.py catalog-from-report <report> catalog/<fw>.json` turns it into a
+  catalog and lists what differs from 13.00. The 13.00 console's own report reproduces
+  `catalog/13.00.json` exactly.
 - The on-screen text is English (US spelling). The Inter font atlases cover ASCII plus the characters in
   `CHARS` of `tools/bake-assets.py` (`… · – × “ ” ‘ ’` and some accented Latin letters); keep new UI text
   inside that set.

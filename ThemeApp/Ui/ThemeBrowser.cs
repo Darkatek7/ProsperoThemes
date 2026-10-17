@@ -6,7 +6,7 @@ namespace ProsperoThemes.App.Ui;
 /// <summary>StoreAddress is the keyboard screen: opened from System, not a header tab, and it returns there.</summary>
 public enum ThemeView { Library, Detail, Preview, Community, Import, System, StoreAddress }
 /// <summary>SaveStoreUrl: Options in the store-address editor; the app reads <see cref="ThemeBrowser.StoreEditor"/>'s text.</summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport }
 
 public sealed class ThemeBrowser
 {
@@ -155,7 +155,9 @@ public sealed class ThemeBrowser
         }
         else if (View == ThemeView.Import && input.Confirm) _action = ThemeAction.ImportUsb;
         else if (View == ThemeView.System && input.Confirm) Pending = ThemeAction.RestoreOriginals;
-        if (options && View is ThemeView.Library or ThemeView.System) _action = ThemeAction.Reload;
+        if (options && View == ThemeView.Library) _action = ThemeAction.Reload;
+        // Only reads the console's files, so one press is enough.
+        if (options && View == ThemeView.System) _action = ThemeAction.FirmwareReport;
     }
 
     public ThemeAction TakeAction()

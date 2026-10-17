@@ -21,6 +21,7 @@ verification rather than a renderer.
 
     python theme_pack.py list
     python theme_pack.py catalog <stock-dir> <out.json> [--firmware 13.00]
+    python theme_pack.py catalog-from-report <report.json> <out.json> [--base ../catalog/13.00.json]
     python theme_pack.py create --stock <dir> --out <pack> [--id ID ...] TARGET=IMAGE [TARGET=IMAGE ...]
     python theme_pack.py inspect <pack>
     python theme_pack.py verify  <pack> [--stock <dir>]
@@ -59,7 +60,7 @@ import realzstd   # noqa: E402  - encode_bytes, decode_bytes
 ROOT = "vsh_asset"
 # The roots a pack may name. Mirrors Shared/AssetRoots.cs, which is the canonical list - change one and the
 # other, or Shared.Tests' pin (The_root_table_is_exactly_what_the_applier_mirrors) fails and says so.
-ROOTS = ("appmeta", "vsh_asset")
+ROOTS = ("appmeta", "rnps", "userapp", "vsh_asset")
 WIDTH, HEIGHT = 3840, 2160
 FORMAT_VERSION = 2
 
@@ -563,6 +564,89 @@ def cmd_catalog(args: argparse.Namespace) -> int:
     return 0
 
 
+# DXGI numbers the 13.00 catalog names (the report records the number, the catalog the name).
+DXGI_NAMES = {71: "BC1_UNORM", 98: "BC7_UNORM"}
+
+
+def cmd_catalog_from_report(args: argparse.Namespace) -> int:
+    """A catalog for another firmware from the app's firmware report (System tab, Options).
+
+    The report has sizes, hashes and header facts of the console's stock files. Rows whose file is byte for byte
+    the base catalog's keep all of the base row (codec details included); changed files get what the report knows
+    and keep the base row's labels; files the base does not list are added with the report's facts.
+    """
+    report = json.loads(Path(args.report).read_text(encoding="utf-8"))
+    base = json.loads(Path(args.base).read_text(encoding="utf-8"))
+    by_path = {a["path"]: a for a in base["assets"]}
+    raw = report.get("firmware") or "unknown"
+    parts = raw.split(".")
+    firmware = args.firmware or (f"{int(parts[0])}.{parts[1][:2]}" if len(parts) == 3 and len(parts[1]) == 3 else raw)
+
+    assets, same, changed, added, missing, errors = [], [], [], [], [], []
+    for f in report["files"]:
+        path = f["path"]
+        if "error" in f:
+            errors.append(f"{path}: {f['error']}")
+            continue
+        if not f.get("exists"):
+            if path in by_path:
+                missing.append(path)
+            continue
+        if not path.startswith(ROOT + "/") or path.endswith(".rco"):
+            continue   # tile icons and the icon container are reported below, not catalog rows
+        known = by_path.get(path)
+        if known and known["stock_sha256"] == f["sha256"]:
+            assets.append(dict(known))
+            same.append(path)
+            continue
+        row = {
+            "path": path,
+            "layer": known["layer"] if known else "unknown",
+            "screen": known["screen"] if known else Path(path).name.split(".")[0],
+            "name": known["name"] if known else "",
+            "confirmed": False,
+            "stock_bytes": f["bytes"],
+            "stock_sha256": f["sha256"],
+        }
+        fmt = f.get("format", "")
+        if fmt.startswith("dxgi") and fmt[4:].isdigit():
+            row["format"] = DXGI_NAMES.get(int(fmt[4:]), fmt)
+        elif fmt:
+            row["format"] = fmt
+        for key in ("width", "height"):
+            if key in f:
+                row[key] = f[key]
+        if "content_bytes" in f:
+            row["stock_content_bytes"] = f["content_bytes"]
+        assets.append(row)
+        (changed if known else added).append(path)
+
+    catalog = {"firmware": firmware, "format": FORMAT_VERSION, "source": f"firmware report, system software {raw}",
+               "assets": assets}
+    icons = next((f for f in report["files"] if f["path"].endswith("PUI_UI3.rco") and f.get("exists")), None)
+    if icons:
+        catalog["icon_container"] = {
+            "path": icons["path"], "stock_bytes": icons["bytes"], "stock_sha256": icons["sha256"],
+            "icons": len(icons.get("icons", [])),
+            "untitled": [i for i, x in enumerate(icons.get("icons", [])) if x.get("title") is None],
+        }
+    catalog["tile_icons"] = [{"path": f["path"], "exists": bool(f.get("exists")), **({"width": f["width"], "height": f["height"]} if "width" in f else {})}
+                             for f in report["files"] if f["path"].startswith("rnps/")]
+
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
+    print(f"catalog {firmware}: {len(assets)} assets -> {out}")
+    print(f"  same as {base['firmware']}: {len(same)}, changed: {len(changed)}, new: {len(added)}, missing: {len(missing)}")
+    for label, paths in (("changed", changed), ("new", added), ("missing", missing), ("error", errors)):
+        for p in paths:
+            print(f"  {label}: {p}")
+    if icons:
+        c = catalog["icon_container"]
+        print(f"  icon container: {c['icons']} icons, {len(c['untitled'])} untitled; #875 untitled: {875 in c['untitled']}")
+    return 0
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     stock_dir = Path(args.stock)
     out = Path(args.out)
@@ -705,6 +789,13 @@ def main() -> int:
     p_cat.add_argument("out")
     p_cat.add_argument("--firmware", default="13.00")
     p_cat.set_defaults(func=cmd_catalog)
+
+    p_report = sub.add_parser("catalog-from-report", help="write a catalog from the app's firmware report")
+    p_report.add_argument("report")
+    p_report.add_argument("out")
+    p_report.add_argument("--base", default=str(Path(__file__).resolve().parent.parent / "catalog" / "13.00.json"))
+    p_report.add_argument("--firmware", default=None, help="catalog name, e.g. 12.20 (default: from the report)")
+    p_report.set_defaults(func=cmd_catalog_from_report)
 
     p_create = sub.add_parser("create", help="build a pack from source images")
     p_create.add_argument("screens", nargs="*", metavar="TARGET=IMAGE")

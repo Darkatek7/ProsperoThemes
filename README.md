@@ -41,12 +41,25 @@ Your library, backups and settings live in `/data/prospero-themes/`, so updating
 | X | Details, apply, download |
 | Square | Fullscreen preview; on Community: change the sort order; on System: store address |
 | Triangle | On Community: like; on System: background scope (apps without their own image / all apps) |
-| Options | Reload the library or the store list |
+| Options | Reload the library or the store list; on System: save a firmware report |
 | Circle | Back |
 
 **Restore defaults** (System tab) puts every changed file back from the backups the app made before the first
 change. Applying a theme starts from the defaults too: whatever an earlier theme changed and the new one does
 not cover goes back to its original first, so themes never stack.
+
+## Other firmware versions
+
+Tested on 13.00, but nothing in the app is tied to it: before anything is written, every file a theme
+replaces is compared with the console's own copy (same image size and texture format). What does not fit
+this console is skipped and listed, never written. After a system update the app notices files the update
+replaced and takes those as the new defaults, so Restore defaults never puts an old firmware's file back.
+
+On another firmware, please send a report: System tab, Options saves
+`/data/prospero-themes/reports/firmware-<version>.json` (and a copy on a connected USB drive). It only
+reads, and describes the files a theme can change (sizes, hashes, formats, the icon list). Attach it to an
+issue on this repository; `ThemePackCreator/theme_pack.py catalog-from-report` turns it into a catalog for
+that firmware.
 
 ## Making themes
 

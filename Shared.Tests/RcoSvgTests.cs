@@ -98,6 +98,30 @@ public class RcoSvgTests
     }
 
     [Fact]
+    public void An_icon_this_container_does_not_have_is_skipped_and_the_rest_is_applied()
+    {
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+
+        ApplyResult result = new ThemeApplier(files, () => 0).Apply(
+            SvgPack("a", ("iconid_settings", Star), ("iconid_from_another_firmware", Star)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("iconid_from_another_firmware", result.Message);
+        (int o, int n) = RcoSvg.Find(Container(), "iconid_settings");
+        Assert.Contains("#f00", Encoding.UTF8.GetString(files.Files[RcoDevice], o, n));
+    }
+
+    [Fact]
+    public void The_untitled_search_icon_is_only_taken_by_position_when_it_is_the_13_00_one()
+    {
+        // 900 untitled icons: #875 exists, but it is not the 13.00 magnifier (another order, another firmware).
+        byte[] container = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Range(0, 900).Select(i => $"<svg><path d=\"M{i}\"/></svg>")));
+        var error = Assert.Throws<ThemePackException>(() => RcoSvg.Find(container, "iconid_search"));
+        Assert.Contains("not at #875", error.Message);
+    }
+
+    [Fact]
     public void A_second_icon_theme_starts_from_stock_and_restore_brings_stock_back()
     {
         var files = new MemoryDeviceFiles();
@@ -156,9 +180,14 @@ public class AllAppsBackgroundTests
 {
     private static byte[] Dds(byte fill)
     {
+        // A 3840x2160 BC7 header (DX10, DXGI 98) like every pic0.dds on 13.00; the pixels tell copies apart.
         var d = new byte[256];
+        Array.Fill(d, fill, 148, d.Length - 148);
         "DDS "u8.CopyTo(d);
-        Array.Fill(d, fill, 4, d.Length - 4);
+        BitConverter.GetBytes(2160).CopyTo(d, 12);
+        BitConverter.GetBytes(3840).CopyTo(d, 16);
+        "DX10"u8.CopyTo(d.AsSpan(84));
+        BitConverter.GetBytes(98).CopyTo(d, 128);
         return d;
     }
 

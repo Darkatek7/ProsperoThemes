@@ -71,6 +71,16 @@ public class ThemeApplierTests
 
     private static ThemeApplier Applier(FakeDeviceFiles fake) => new(fake, () => FixedNow);
 
+    /// <summary>A Zstandard frame header recording <paramref name="decodedSize"/>, then a tag that tells copies apart.</summary>
+    private static byte[] Frame(uint decodedSize, string tag)
+    {
+        var data = new byte[64];
+        new byte[] { 0x28, 0xB5, 0x2F, 0xFD, 0xA0 }.CopyTo(data, 0);   // single segment, 4-byte content size
+        BitConverter.GetBytes(decodedSize).CopyTo(data, 5);
+        Encoding.ASCII.GetBytes(tag).CopyTo(data, 9);
+        return data;
+    }
+
     // ---- tests ------------------------------------------------------------
 
     [Fact]
@@ -261,7 +271,112 @@ public class ThemeApplierTests
     }
 
     [Fact]
-    public void Remount_failure_writes_nothing()
+    public void A_file_the_system_replaced_becomes_the_new_default_instead_of_being_overwritten()
+    {
+        var fake = DeviceWithLive((Dev1, Live("stock-13")));
+        Assert.True(Applier(fake).Apply(SingleTargetPack()).Success);
+        fake.Files[Dev1] = Live("stock-14");   // a system update replaces the themed file
+
+        ApplyResult result = Applier(fake).RestoreOriginals();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("replaced by a system update", result.Message);
+        Assert.Equal(Live("stock-14"), fake.Files[Dev1]);
+        Assert.Equal(Live("stock-14"), fake.Files[Backup1]);
+        Assert.Contains(fake.Files, f => f.Key.StartsWith("/data/prospero-themes/backup/replaced/", StringComparison.Ordinal)
+            && f.Value.SequenceEqual(Live("stock-13")));
+    }
+
+    [Fact]
+    public void Applying_after_a_system_update_backs_up_the_new_file_first()
+    {
+        var fake = DeviceWithLive((Dev1, Live("stock-13")));
+        Assert.True(Applier(fake).Apply(SingleTargetPack()).Success);
+        fake.Files[Dev1] = Live("stock-14");
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, Zst("two"))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(Zst("two"), fake.Files[Dev1]);
+        Assert.Equal(Live("stock-14"), fake.Files[Backup1]);
+    }
+
+    [Fact]
+    public void The_clean_apply_leaves_a_file_the_system_replaced_alone()
+    {
+        var fake = DeviceWithLive((Dev1, Live("one")), (Dev2, Live("two")));
+        Assert.True(Applier(fake).Apply(MakePack(null, (Path1, Zst("a")), (Path2, Zst("b")))).Success);
+        fake.Files[Dev2] = Live("two-new");
+        fake.Writes.Clear();
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, Zst("c"))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(Live("two-new"), fake.Files[Dev2]);
+        Assert.DoesNotContain(Dev2 + ".tmp", fake.Writes);
+        Assert.Equal(Live("two-new"), fake.Files[Backup2]);
+    }
+
+    [Fact]
+    public void Files_written_by_an_older_build_still_count_as_the_apps_own()
+    {
+        var fake = DeviceWithLive((Dev1, Live("one")));
+        Assert.True(Applier(fake).Apply(SingleTargetPack()).Success);
+        Assert.True(fake.Files.Remove("/data/prospero-themes/" + ThemeApplier.WrittenRecord));
+
+        Assert.True(Applier(fake).RestoreOriginals().Success);
+        Assert.Equal(Live("one"), fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void A_target_this_console_does_not_have_is_skipped_before_anything_is_written()
+    {
+        var fake = DeviceWithLive((Dev1, Live("one")));
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, Zst("a")), (Path2, Zst("b"))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("bg_hub_second.dds.zst: this console has no such file", result.Message);
+        Assert.False(fake.Files.ContainsKey(Dev2));
+        Assert.Equal(Zst("a"), fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void A_payload_in_another_format_than_the_consoles_file_is_skipped()
+    {
+        var fake = DeviceWithLive((Dev1, Frame(8_294_548, "stock")), (Dev2, Frame(4_147_328, "stock")));
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, Frame(8_294_548, "a")), (Path2, Frame(8_294_548, "b"))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("zst 4147328 bytes decoded", result.Message);
+        Assert.Equal(Frame(4_147_328, "stock"), fake.Files[Dev2]);
+        Assert.Equal(Frame(8_294_548, "a"), fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void Nothing_is_written_when_no_target_fits()
+    {
+        var fake = DeviceWithLive((Dev1, Frame(4_147_328, "stock")));
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, Frame(8_294_548, "a"))));
+
+        Assert.False(result.Success);
+        Assert.Contains("nothing in this theme fits", result.Message);
+        Assert.Equal(0, fake.Remounts);
+        Assert.Equal(Frame(4_147_328, "stock"), fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void State_records_the_firmware()
+    {
+        var fake = DeviceWithLive((Dev1, Live("one")));
+        Assert.True(new ThemeApplier(fake, () => FixedNow) { Firmware = "13.000.000" }.Apply(SingleTargetPack()).Success);
+        Assert.Contains("\"firmware\": \"13.000.000\"", Encoding.UTF8.GetString(fake.Files[StatePath]));
+    }
+
+    [Fact]
+    public void Remount_failure_writes_nothing_on_the_system_side()
     {
         var fake = DeviceWithLive((Dev1, Live("one")));
         fake.RemountThrows = true;
@@ -270,7 +385,8 @@ public class ThemeApplierTests
 
         Assert.False(result.Success);
         Assert.Contains("remount denied", result.Message);
-        Assert.Empty(fake.Writes);
+        // Only the backup under /data was made, before the remount.
+        Assert.All(fake.Writes, w => Assert.StartsWith("/data/prospero-themes/", w));
         Assert.Equal(Live("one"), fake.Files[Dev1]);
     }
 

@@ -102,4 +102,13 @@ public class ThemeRendererTests
         long long_ = Frame(renderer, canvas, browser);
         Assert.Equal(3, new[] { none, set, long_ }.Distinct().Count());
     }
+
+    [Theory]
+    [InlineData("13.000.000", "13.00")]
+    [InlineData("11.020.000", "11.02")]
+    [InlineData("9.600.000", "9.60")]
+    [InlineData("", "unknown")]
+    [InlineData("13.00", "13.00")]
+    public void Firmware_shows_as_the_console_settings_show_it(string version, string label) =>
+        Assert.Equal(label, ThemeRenderer.FirmwareLabel(version));
 }

@@ -37,6 +37,8 @@ public sealed class ThemeRenderer : IDisposable
     public string ActionStatus { get; set; } = "";
     /// <summary>The background-scope setting shown on the System screen (see ThemeApplier.IncludeAllApps).</summary>
     public bool AllAppsBackgrounds { get; set; }
+    /// <summary>The system software version as the console reports it ("13.000.000"); empty when it could not be read.</summary>
+    public string Firmware { get; set; } = "";
 
     /// <summary>The community store's current list (Community tab), newest answer from the server.</summary>
     public IReadOnlyList<CommunityTheme> Community { get; set; } = Array.Empty<CommunityTheme>();
@@ -366,7 +368,7 @@ public sealed class ThemeRenderer : IDisposable
         _title.DrawText(s, "Everything in its place.", 75, 286 + enter, White);
         bool hasStore = browser.StoreUrl.Length > 0;
         string[] labels = ["Library", "Storage location", "Pack format", "Target system", "App backgrounds", "Store address"];
-        string[] values = [Plural(count, "theme"), "/data/prospero-themes/library", "Format 2  ·  ZIP / TAR", "PS5  ·  Firmware 13.00",
+        string[] values = [Plural(count, "theme"), "/data/prospero-themes/library", "Format 2  ·  ZIP / TAR", "PS5  ·  Firmware " + FirmwareLabel(Firmware),
             AllAppsBackgrounds ? "All apps, even with their own image" : "Only apps without their own image",
             hasStore ? browser.StoreUrl : "not set"];
         // Six rows at 70 px keep the last line above the Restore button at 892.
@@ -509,7 +511,7 @@ public sealed class ThemeRenderer : IDisposable
                 x = Hint(s, PadButton.Cross, "Restore defaults", 80, y);
                 x = Hint(s, PadButton.Triangle, "App backgrounds", x, y);
                 x = Hint(s, PadButton.Square, "Store address", x, y);
-                x = Hint(s, PadButton.Options, "Reload library", x, y);
+                x = Hint(s, PadButton.Options, "Firmware report", x, y);
                 Hint(s, PadButton.Circle, "Library", x, y);
                 break;
         }
@@ -552,6 +554,15 @@ public sealed class ThemeRenderer : IDisposable
     }
 
     /// <summary>"1 theme", "3 themes": the count with a regular English plural.</summary>
+    /// <summary>"13.000.000" as the console's settings show it ("13.00"); anything else as it came, "unknown" when empty.</summary>
+    public static string FirmwareLabel(string version)
+    {
+        string[] parts = version.Split('.');
+        if (parts.Length == 3 && parts[1].Length == 3 && int.TryParse(parts[0], out int major) && int.TryParse(parts[1], out _))
+            return $"{major}.{parts[1][..2]}";
+        return version.Length == 0 ? "unknown" : version;
+    }
+
     public static string Plural(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
 
     public static string TargetName(string path, string? screen) => screen switch
