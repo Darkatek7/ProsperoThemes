@@ -118,7 +118,15 @@ internal sealed class ThemeApp : ProsperoApp
     /// Runs a system-changing job on the worker: starts ThemeHelper if it is not running yet, then hands the
     /// job an applier whose theme-root writes go through it. The result lands in the status line.
     /// </summary>
-    private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work)
+    private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work) =>
+        StartHelperWork(busyText, needsHelper: true, _ => work(new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
+            { IncludeAllApps = _allAppsBackgrounds, Firmware = _firmware }));
+
+    /// <summary>
+    /// Starts the helper, then runs <paramref name="work"/> on the worker with the helper's problem (null when it
+    /// runs). With <paramref name="needsHelper"/> a problem ends the job before it starts.
+    /// </summary>
+    private void StartHelperWork(string busyText, bool needsHelper, Func<string?, ApplyResult> work)
     {
         if (_busy) return;
         _busy = true;
@@ -131,14 +139,13 @@ internal sealed class ThemeApp : ProsperoApp
             try
             {
                 string? helperProblem = ThemeHelperClient.EnsureRunning();
-                if (helperProblem is not null)
+                if (helperProblem is not null && needsHelper)
                 {
                     (status, message) = ("Helper not ready", helperProblem);
                 }
                 else
                 {
-                    ApplyResult result = work(new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
-                        { IncludeAllApps = _allAppsBackgrounds, Firmware = _firmware });
+                    ApplyResult result = work(helperProblem);
                     (status, message) = (result.Success ? "Done" : "Not completed", result.Message);
                 }
             }
@@ -181,7 +188,7 @@ internal sealed class ThemeApp : ProsperoApp
                 StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals());
                 break;
             case ThemeAction.SaveStoreUrl: SaveStoreAddress(); break;
-            case ThemeAction.FirmwareReport: StartSystemWork("Saving firmware report…", _ => SaveFirmwareReport()); break;
+            case ThemeAction.FirmwareReport: StartHelperWork("Saving firmware report…", needsHelper: false, SaveFirmwareReport); break;
             case ThemeAction.CommunityRefresh: StartCommunityList(); break;
             case ThemeAction.CommunityDownload when SelectedCommunity() is { } theme: StartCommunityDownload(theme); break;
             case ThemeAction.CommunityLike when SelectedCommunity() is { } theme: StartCommunityLike(theme); break;
@@ -198,9 +205,10 @@ internal sealed class ThemeApp : ProsperoApp
 
     /// <summary>
     /// Writes the firmware report to <see cref="FirmwareReport.Folder"/> and, when a USB drive is connected, next to
-    /// it on the drive. Reads only; runs on the worker with the helper started.
+    /// it on the drive. Reads only, and works without the helper too: then it records why the helper did not
+    /// start and reads what the app itself may read.
     /// </summary>
-    private ApplyResult SaveFirmwareReport()
+    private ApplyResult SaveFirmwareReport(string? helperProblem)
     {
         string? catalog = null;
         try { catalog = FileSystem.ReadAllText(FirmwareReport.BundledCatalog); }
@@ -209,8 +217,14 @@ internal sealed class ThemeApp : ProsperoApp
         try { version = JsonValue.Parse(FileSystem.ReadAllText("/app0/sce_sys/param.json")).GetString("contentVersion", "unknown"); }
         catch { }
         List<string> paths = FirmwareReport.Paths(FirmwareReport.CatalogPaths(catalog));
-        byte[] report = FirmwareReport.Build(new HelperDeviceFiles(), _firmware, version,
-            ThemeApplier.FormatUtc(HelperDeviceFiles.UnixSeconds()), paths);
+        var files = new ReportDeviceFiles(helperRunning: helperProblem is null);
+        byte[] report = FirmwareReport.Build(files, _firmware, version,
+            ThemeApplier.FormatUtc(HelperDeviceFiles.UnixSeconds()), paths, after: () =>
+            [
+                ("helper", helperProblem ?? "running"),
+                ("app_reads", files.AppReads.ToString()),
+                ("helper_reads", files.HelperReads.ToString()),
+            ]);
         string name = FirmwareReport.FileName(_firmware);
         FileSystem.CreateDirectoryRecursive(FirmwareReport.Folder);
         FileSystem.WriteAllBytes(FirmwareReport.Folder + "/" + name, report);
@@ -224,7 +238,8 @@ internal sealed class ThemeApp : ProsperoApp
             }
         }
         catch { /* the copy in /data is enough */ }
-        return new ApplyResult(true, $"Firmware report ({paths.Count} files) saved to {where}.", Array.Empty<string>());
+        string helper = helperProblem is null ? "" : " The theme helper did not start; the report says why.";
+        return new ApplyResult(true, $"Firmware report ({paths.Count} files) saved to {where}.{helper}", Array.Empty<string>());
     }
 
     private void ToggleBackgroundScope()

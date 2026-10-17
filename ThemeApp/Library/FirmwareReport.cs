@@ -63,8 +63,10 @@ public static class FirmwareReport
         return "firmware-" + new string(name.Select(c => char.IsAsciiLetterOrDigit(c) || c == '.' ? c : '_').ToArray()) + ".json";
     }
 
+    /// <param name="after">Extra top-level fields written after the files (e.g. which side read them).</param>
     public static byte[] Build(IDeviceFiles files, string? firmware, string appVersion, string whenUtc,
-        IEnumerable<string> logicalPaths, string dataRoot = "/data/prospero-themes")
+        IEnumerable<string> logicalPaths, string dataRoot = "/data/prospero-themes",
+        Func<IEnumerable<(string Key, string Value)>>? after = null)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, NewLine = "\n" }))
@@ -90,6 +92,9 @@ public static class FirmwareReport
                 w.WriteEndObject();
             }
             w.WriteEndArray();
+            if (after is not null)
+                foreach (var (key, value) in after())
+                    w.WriteString(key, value);
             w.WriteEndObject();
         }
         return buffer.WrittenSpan.ToArray();

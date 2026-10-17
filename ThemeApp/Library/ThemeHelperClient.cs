@@ -60,7 +60,9 @@ public static class ThemeHelperClient
             reply = TryPing(out _);
             if (reply is not null) return CheckTag(reply);
         }
-        return "The theme helper was sent but did not respond.";
+        return "The theme helper was sent to the ELF loader on port " + LoaderPort + " but did not start. " +
+            "Please report your jailbreak and loader at github.com/Darkatek7/ProsperoThemes/issues " +
+            "with a firmware report (System tab, Options).";
     }
 
     private static string? CheckTag(string reply) =>
@@ -197,7 +199,7 @@ public sealed class HelperDeviceFiles : IDeviceFiles
 
     private readonly DeviceFiles _local = new();
 
-    private static bool IsThemeRoot(string path) =>
+    internal static bool IsThemeRoot(string path) =>
         path.StartsWith("/system_ex/vsh_asset/", StringComparison.Ordinal) ||
         path.StartsWith("/user/appmeta/", StringComparison.Ordinal) ||
         path.StartsWith("/mnt/rnps/apps/", StringComparison.Ordinal) ||
@@ -235,4 +237,57 @@ public sealed class HelperDeviceFiles : IDeviceFiles
     public void RemountSystemExRw() => ThemeHelperClient.Remount();
 
     public IReadOnlyList<string> ListDirectories(string path) => ThemeHelperClient.List(path);
+}
+
+/// <summary>
+/// Read-only <see cref="IDeviceFiles"/> for the firmware report: the app's own file access first, the helper
+/// for what the app may not read, and no helper at all when it did not start (the report is how a console
+/// where it does not start gets diagnosed). Counts which side answered.
+/// </summary>
+public sealed class ReportDeviceFiles : IDeviceFiles
+{
+    private readonly DeviceFiles _local = new();
+    private readonly bool _helper;
+
+    public ReportDeviceFiles(bool helperRunning) => _helper = helperRunning;
+
+    public int AppReads { get; private set; }
+    public int HelperReads { get; private set; }
+
+    /// <summary>
+    /// The app may not see the theme roots at all (on 13.00 every one of them reads through the helper), so
+    /// without the helper a theme-root file is reported as unreadable, never as missing.
+    /// </summary>
+    public bool Exists(string path)
+    {
+        bool themeRoot = HelperDeviceFiles.IsThemeRoot(path);
+        try { if (_local.Exists(path)) return true; }
+        catch when (themeRoot) { /* not readable for the app: ask the helper */ }
+        if (!themeRoot) return false;
+        if (!_helper) throw new InvalidOperationException("not readable for the app without the theme helper");
+        return ThemeHelperClient.Exists(path);
+    }
+
+    public byte[] ReadAllBytes(string path)
+    {
+        try
+        {
+            byte[] data = _local.ReadAllBytes(path);
+            AppReads++;
+            return data;
+        }
+        catch when (_helper)
+        {
+            byte[] data = ThemeHelperClient.Read(path);
+            HelperReads++;
+            return data;
+        }
+    }
+
+    public void WriteAllBytes(string path, byte[] data) => throw new InvalidOperationException("the report only reads");
+    public void Move(string from, string to) => throw new InvalidOperationException("the report only reads");
+    public void DeleteFile(string path) => throw new InvalidOperationException("the report only reads");
+    public void CreateDirectoryRecursive(string path) => throw new InvalidOperationException("the report only reads");
+    public void RemountSystemExRw() => throw new InvalidOperationException("the report only reads");
+    public IReadOnlyList<string> ListDirectories(string path) => Array.Empty<string>();
 }
