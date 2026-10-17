@@ -7,7 +7,7 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
   restore the original look at any time.
 - **Community:** download themes other people published at [themes.darkatek7.com](https://themes.darkatek7.com),
   sort by rating, downloads or date, and like the ones you enjoy. Themes already in your library carry an
-  "In library" badge.
+  "In library" badge; when a creator publishes a new version, the card says "Update".
 - **USB import:** packs on a USB drive (its root or a `prospero-themes` folder) are checked and copied into the
   library.
 - **What a theme can change:** the home-screen background, including behind the system tiles (Game Library,

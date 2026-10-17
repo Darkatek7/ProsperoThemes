@@ -132,6 +132,21 @@ public static class CommunityList
         return ids;
     }
 
+    /// <summary>
+    /// The store ids with a newer version than the library holds: the store lists a hash that is not in the
+    /// library, while the pack recorded at the last download still is.
+    /// </summary>
+    public static HashSet<string> Updates(IEnumerable<CommunityTheme> themes, IReadOnlyDictionary<string, string> downloads,
+        IReadOnlySet<string> libraryDigests)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (CommunityTheme t in themes)
+            if (t.Sha256 is { } listed && !libraryDigests.Contains(listed)
+                && downloads.TryGetValue(t.Id, out string? recorded) && recorded != listed && libraryDigests.Contains(recorded))
+                ids.Add(t.Id);
+        return ids;
+    }
+
     private static bool IsDigest(string value)
     {
         if (value.Length != 64) return false;

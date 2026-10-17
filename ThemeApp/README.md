@@ -42,6 +42,10 @@ launch evidence are recorded separately below.
   card. The library names packs `<sha256>.p5theme`; the app records the hash of every download in
   `/data/prospero-themes/community.json` (store id → hash), and uses the store's `sha256` per item instead
   when the list carries one. A pack removed from the library loses its badge.
+- **Theme updates** (Community tab): cards show the store's version. When the store lists a hash that is not in
+  the library while the pack recorded in `community.json` is, the card carries an orange "Update" badge and X
+  says Update. The download moves the old pack to `/data/prospero-themes/attic/` (kept, not deleted); an
+  applied theme changes on the console only after it is applied again.
 - The bundled **Blue Hour** theme is a real format-2 pack carrying a ready-to-write BC7/zstd background
   for `bg_hub_default`, plus its PNG cover. It is not marked active merely because it is bundled.
 - USB import checks mounted `/mnt/usb0` through `/mnt/usb7`, each root and its `prospero-themes` folder.

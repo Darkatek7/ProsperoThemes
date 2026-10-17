@@ -44,6 +44,10 @@ public sealed class ThemeRenderer : IDisposable
     public Dictionary<string, byte[]> CommunityPreviews { get; } = new();
     /// <summary>Store ids whose pack is already in the library; their cards carry an "In library" badge.</summary>
     public IReadOnlySet<string> CommunityInLibrary { get; set; } = new HashSet<string>();
+    /// <summary>Store ids with a newer version than the library holds; their cards carry an "Update" badge.</summary>
+    public IReadOnlySet<string> CommunityUpdates { get; set; } = new HashSet<string>();
+    /// <summary>The community card under the cursor, for the footer's Download/Update hint.</summary>
+    public string? SelectedCommunityId { get; set; }
     public string CommunityStatus { get; set; } = "";
     private readonly Dictionary<string, PixelBuffer> _communityThumbs = new();
     private readonly HashSet<string> _failedThumbs = new();
@@ -291,12 +295,13 @@ public sealed class ThemeRenderer : IDisposable
             PixelBuffer? thumb = Thumb(t);
             if (thumb is not null) s.BlitScaled(thumb.AsSurface(), x, y, cardW, cardH);
             else s.BlitScaled(_fallback.AsSurface(), x, y, cardW, cardH);
-            if (CommunityInLibrary.Contains(t.Id))
+            bool update = CommunityUpdates.Contains(t.Id);
+            if (update || CommunityInLibrary.Contains(t.Id))
             {
-                const string badge = "In library";
+                string badge = update ? "Update" : "In library";
                 int bw = _small.MeasureText(badge) + 52;
                 int bx = x + cardW - bw - 14, by = y + 14;
-                s.FillRoundedRect(bx, by, bw, 40, 20, Accent);
+                s.FillRoundedRect(bx, by, bw, 40, 20, update ? Warn : Accent);
                 s.FillRoundedRect(bx + 14, by + 14, 12, 12, 6, PillInk);
                 _small.DrawText(s, badge, bx + 36, by + 7, PillInk);
             }
@@ -305,7 +310,11 @@ public sealed class ThemeRenderer : IDisposable
                 s.DrawRoundedRect(x - 6, y - 6, cardW + 12, cardH + 12, 10, White);
                 s.DrawRoundedRect(x - 5, y - 5, cardW + 10, cardH + 10, 10, White);
             }
-            _body.DrawClipped(s, t.Name, x, y + cardH + 12, index == selected ? White : Color.FromRgb(214, 222, 232), cardW);
+            string version = t.Version.Length > 0 ? "v" + t.Version : "";
+            int versionW = version.Length > 0 ? _small.MeasureText(version) : 0;
+            _body.DrawClipped(s, t.Name, x, y + cardH + 12, index == selected ? White : Color.FromRgb(214, 222, 232),
+                versionW > 0 ? cardW - versionW - 16 : cardW);
+            if (versionW > 0) _small.DrawText(s, version, x + cardW - versionW, y + cardH + 18, update ? Warn : Muted);
             _small.DrawClipped(s, $"{t.Author}  ·  {Plural(t.Likes, "like")}  ·  {Plural(t.Downloads, "download")}", x, y + cardH + 52, Muted, cardW);
             _small.DrawClipped(s, t.Contents, x, y + cardH + 80, Accent, cardW);
         }
@@ -479,7 +488,8 @@ public sealed class ThemeRenderer : IDisposable
                 Hint(s, PadButton.Circle, "Back", x, y);
                 break;
             case ThemeView.Community:
-                x = Hint(s, PadButton.Cross, "Download", 80, y);
+                x = Hint(s, PadButton.Cross,
+                    SelectedCommunityId is { } id && CommunityUpdates.Contains(id) ? "Update" : "Download", 80, y);
                 x = Hint(s, PadButton.Triangle, "Like", x, y);
                 x = Hint(s, PadButton.Options, "Refresh", x, y);
                 Hint(s, PadButton.Circle, "Library", x, y);

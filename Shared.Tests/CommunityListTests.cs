@@ -133,6 +133,30 @@ public class CommunityListTests
         Assert.Equal(["abc123def456"], CommunityList.InLibrary(list, new Dictionary<string, string>(), library));
     }
 
+    [Fact]
+    public void A_newer_listed_hash_marks_an_update_while_the_old_pack_is_in_the_library()
+    {
+        string json = Json.Replace("\"status\":\"approved\",", $"\"status\":\"approved\",\"sha256\":\"{HashB}\",");
+        var list = CommunityList.Parse(json, "https://themes.example");
+        var downloads = new Dictionary<string, string> { ["abc123def456"] = HashA };
+
+        var oldOnly = new HashSet<string> { HashA };
+        Assert.Equal(["abc123def456"], CommunityList.Updates(list, downloads, oldOnly));
+        Assert.Empty(CommunityList.InLibrary(list, downloads, oldOnly));
+        // Updated: the new pack is in the library, so it is badged as in the library and no update is left.
+        var both = new HashSet<string> { HashA, HashB };
+        Assert.Empty(CommunityList.Updates(list, downloads, both));
+        Assert.Equal(["abc123def456"], CommunityList.InLibrary(list, downloads, both));
+        // Never downloaded, or the old pack removed by hand: nothing to update.
+        Assert.Empty(CommunityList.Updates(list, new Dictionary<string, string>(), oldOnly));
+        Assert.Empty(CommunityList.Updates(list, downloads, new HashSet<string>()));
+    }
+
+    [Fact]
+    public void Without_a_listed_hash_there_is_no_update() =>
+        Assert.Empty(CommunityList.Updates(CommunityList.Parse(Json, "https://themes.example"),
+            new Dictionary<string, string> { ["abc123def456"] = HashA }, new HashSet<string> { HashA }));
+
     [Theory]
     [InlineData("/data/prospero-themes/library/layer-test.p5theme")]
     [InlineData("/data/prospero-themes/library/notes.txt")]

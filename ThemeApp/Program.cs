@@ -180,6 +180,7 @@ internal sealed class ThemeApp : ProsperoApp
             case ThemeAction.CommunityDownload when SelectedCommunity() is { } theme: StartCommunityDownload(theme); break;
             case ThemeAction.CommunityLike when SelectedCommunity() is { } theme: StartCommunityLike(theme); break;
         }
+        _renderer.SelectedCommunityId = SelectedCommunity()?.Id;
         _renderer.Draw(context.Surface, _browser, _entries, context.TotalSeconds, context.DeltaSeconds);
         _stats.Record((float)context.DeltaSeconds);
         if (context.Pressed(ScePadButton.R3)) _showStats = !_showStats;
@@ -326,6 +327,8 @@ internal sealed class ThemeApp : ProsperoApp
 
     private void StartCommunityDownload(CommunityTheme theme)
     {
+        // The pack an earlier download of this theme stored; an update replaces it in the library.
+        string? previous = _downloads.TryGetValue(theme.Id, out string? recorded) ? recorded : null;
         StartCommunityWork("Downloading “" + theme.Name + "”…", http =>
         {
             HttpResponse answer = http.Get(theme.DownloadUrl);
@@ -333,6 +336,12 @@ internal sealed class ThemeApp : ProsperoApp
             // Checked exactly like a USB import before it is stored.
             bool added = DeviceThemeLibrary.AddToLibrary(answer.Body, theme.Name);
             string digest = SharpProspero.Security.Sha256.HashHex(answer.Body);
+            bool replaced = false;
+            if (previous is not null && previous != digest)
+            {
+                try { replaced = DeviceThemeLibrary.Retire(previous); }
+                catch { /* the old version stays in the library next to the new one */ }
+            }
             _results.Post(() =>
             {
                 _downloads[theme.Id] = digest;
@@ -346,6 +355,9 @@ internal sealed class ThemeApp : ProsperoApp
                 _renderer.Community = updated;
                 _rescanAfterWork = true;
             });
+            if (replaced)
+                return "Updated “" + theme.Name + "”" + (theme.Version.Length > 0 ? " to v" + theme.Version : "") +
+                    ". If it is applied, apply it again to see the changes.";
             return added ? "“" + theme.Name + "” is now in your library." : "“" + theme.Name + "” is already in your library.";
         });
     }
@@ -357,6 +369,7 @@ internal sealed class ThemeApp : ProsperoApp
         foreach (ThemeLibraryEntry entry in _entries)
             if (CommunityList.LibraryDigest(entry.Path) is { } digest) digests.Add(digest);
         _renderer.CommunityInLibrary = CommunityList.InLibrary(_community, _downloads, digests);
+        _renderer.CommunityUpdates = CommunityList.Updates(_community, _downloads, digests);
     }
 
     private void StartCommunityLike(CommunityTheme theme)

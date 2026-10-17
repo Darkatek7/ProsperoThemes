@@ -111,6 +111,24 @@ public static class DeviceThemeLibrary
         return true;
     }
 
+    /// <summary>Where an older version of a community theme goes when its update is downloaded.</summary>
+    public const string Attic = "/data/prospero-themes/attic";
+
+    /// <summary>
+    /// Moves the pack named after <paramref name="digest"/> out of the library into <see cref="Attic"/>; it is
+    /// kept there, not deleted. Returns false when the library does not hold it.
+    /// </summary>
+    public static bool Retire(string digest)
+    {
+        string source = Root + "/" + digest + ".p5theme";
+        if (!FileSystem.Exists(source)) return false;
+        FileSystem.CreateDirectoryRecursive(Attic);
+        string target = Attic + "/" + digest + ".p5theme";
+        for (int n = 2; FileSystem.Exists(target); n++) target = Attic + "/" + digest + "-" + n + ".p5theme";
+        FileSystem.Move(source, target);
+        return true;
+    }
+
     private static bool IsPack(string name) => name.EndsWith(".p5theme", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".tar", StringComparison.OrdinalIgnoreCase);
 }
