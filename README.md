@@ -89,7 +89,9 @@ research repository. They are not part of this repository, and neither building 
 
 You need:
 - .NET 10, PowerShell 7 and Python 3 (for the PC tools);
-- the [SharpProspero](https://github.com/SvenGDK/SharpProspero) SDK, with `SHARPPROSPERO_ROOT` pointing at it;
+- the [SharpProspero](https://github.com/SvenGDK/SharpProspero) SDK, with `SHARPPROSPERO_ROOT` pointing at it.
+  Until [SvenGDK/SharpProspero#6](https://github.com/SvenGDK/SharpProspero/pull/6) is merged, use that
+  branch: without it the theme helper payload does not start on firmware 13.40 and later;
 - a PS5-format `libc.prx` from a game package in `third_party/modules/` (not included here).
 
 ```powershell
