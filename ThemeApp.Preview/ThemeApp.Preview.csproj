@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <SharpProsperoRoot Condition="'$(SharpProsperoRoot)' == ''">$(SHARPPROSPERO_ROOT)</SharpProsperoRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(SharpProsperoRoot)\src\SharpProspero\SharpProspero.csproj" />
+    <ProjectReference Include="$(SharpProsperoRoot)\tools\SharpProspero.Texture\SharpProspero.Texture.csproj" />
+    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
+    <Compile Include="..\ThemeApp\Ui\*.cs" LinkBase="Ui" />
+    <Compile Include="..\ThemeApp\Library\ThemeArchive.cs;..\ThemeApp\Library\ThemeLibraryEntry.cs;..\ThemeApp\Library\CommunityList.cs;..\ThemeApp\Library\AppSettings.cs" LinkBase="Library" />
+  </ItemGroup>
+</Project>

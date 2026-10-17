@@ -1,0 +1,28 @@
+{
+  "items": [
+    {
+      "id": "SLGdNPjA623-",
+      "name": "Blue Hour",
+      "author": "Prospero Studio",
+      "version": "1.0.0",
+      "description": "Ein stiller Ozean. Eine andere Welt.",
+      "size": 5715939,
+      "likes": 0,
+      "downloads": 0,
+      "createdAt": "2026-10-13T15:12:02.951Z",
+      "status": "approved",
+      "summary": {
+        "fallback": true,
+        "allApps": false,
+        "perApp": 0,
+        "icons": 0,
+        "tiles": 0
+      },
+      "previewUrl": "/api/themes/SLGdNPjA623-/preview.png",
+      "downloadUrl": "/api/themes/SLGdNPjA623-/download"
+    }
+  ],
+  "page": 1,
+  "pageSize": 24,
+  "total": 1
+}

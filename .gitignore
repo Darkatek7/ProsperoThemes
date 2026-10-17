@@ -1,0 +1,17 @@
+bin/
+obj/
+out/
+dist/
+.vs/
+*.user
+
+# Sony modules an application module must carry (libc.prx). Build inputs from a game package, not sources:
+# put a PS5-format libc.prx in third_party/modules/. The release ZIP carries the one it was built with.
+third_party/
+
+# Console-file backups and downloaded third-party tools (texconv, at9tool), see ZstdWrap/README.md.
+backups/
+external/
+
+__pycache__/
+*.pyc

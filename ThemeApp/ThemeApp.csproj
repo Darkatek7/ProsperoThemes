@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ProsperoThemes: the installable app module (design §6). Application module, not a payload, so it is
+       loaded by the console's own dynamic linker and must ship the modules the system does not publish
+       (see README - libc.prx is supplied via PROSPERO_MODULES). -->
+  <PropertyGroup>
+    <SharpProsperoRoot Condition="'$(SharpProsperoRoot)' == ''">$(SHARPPROSPERO_ROOT)</SharpProsperoRoot>
+  </PropertyGroup>
+
+  <Import Project="$(SharpProsperoRoot)\build\Prospero.App.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ProsperoThemes.App</RootNamespace>
+    <AssemblyName>ThemeApp</AssemblyName>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <ProsperoModuleName>eboot.bin</ProsperoModuleName>
+    <!-- The design's default: a hard 256 MiB ceiling on the managed heap. -->
+    <ProsperoHeapHardLimitBytes>268435456</ProsperoHeapHardLimitBytes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(SharpProsperoRoot)\src\SharpProspero\SharpProspero.csproj" />
+    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="sce_sys\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="assets\*.p5font;assets\*.p5theme;assets\fonts\OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Import Project="$(SharpProsperoRoot)\build\Prospero.App.targets" />
+
+</Project>

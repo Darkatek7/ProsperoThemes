@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Restricted privileged helper for Prospero Themes. Same shape as DevProbe, narrower surface. -->
+  <PropertyGroup>
+    <SharpProsperoRoot Condition="'$(SharpProsperoRoot)' == ''">$(SHARPPROSPERO_ROOT)</SharpProsperoRoot>
+  </PropertyGroup>
+
+  <Import Project="$(SharpProsperoRoot)\build\Prospero.Payload.props" />
+
+  <PropertyGroup>
+    <RootNamespace>ThemeHelper</RootNamespace>
+    <AssemblyName>ThemeHelper</AssemblyName>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(SharpProsperoRoot)\src\SharpProspero\SharpProspero.csproj" />
+  </ItemGroup>
+
+  <!-- Shared by every payload here: a single-client serve loop must not be able to block forever. -->
+  <ItemGroup>
+    <Compile Include="..\PayloadCommon\ClientTimeout.cs" Link="ClientTimeout.cs" />
+  </ItemGroup>
+
+  <Import Project="$(SharpProsperoRoot)\build\Prospero.Payload.targets" />
+
+</Project>

@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- PC unit tests for Shared/. The engine is pure computation with no console or service dependency,
+       which is the whole point of it living in managed C#: everything below runs offline on the PC.
+       Sources are consumed directly rather than as an assembly, matching the SDK's own test projects, so
+       the app can later compile the same files in without a dependency. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ProsperoThemes.Shared.Tests</RootNamespace>
+    <SharpProsperoRoot Condition="'$(SharpProsperoRoot)' == ''">$(SHARPPROSPERO_ROOT)</SharpProsperoRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(SharpProsperoRoot)\src\SharpProspero\SharpProspero.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
+    <Compile Include="..\ThemeApp\Library\ThemeArchive.cs" LinkBase="App" />
+    <Compile Include="..\ThemeApp\Library\ThemeApplier.cs" LinkBase="App" />
+    <Compile Include="..\ThemeApp\Library\ThemeLibraryEntry.cs" LinkBase="App" />
+    <Compile Include="..\ThemeApp\Library\CommunityList.cs" LinkBase="App" />
+    <Compile Include="..\ThemeApp\Library\AppSettings.cs" LinkBase="App" />
+    <Compile Include="..\ThemeApp\Ui\ThemeBrowser.cs;..\ThemeApp\Ui\StoreAddressEditor.cs" LinkBase="App" />
+    <Compile Include="..\ThemeApp\Ui\AtlasFont.cs;..\ThemeApp\Ui\ThemeRenderer.cs" LinkBase="App" />
+  </ItemGroup>
+
+  <!-- A real pack produced by ThemePackCreator, so the C# reader is exercised against the Python writer
+       rather than only against archives this project builds for itself. -->
+  <ItemGroup>
+    <None Include="fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\ThemeApp\assets\*.p5font" Link="renderer/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
