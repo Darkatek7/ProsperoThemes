@@ -14,20 +14,11 @@ public sealed record CommunityTheme(
     long Size, int Likes, int Downloads, string? PreviewUrl, string DownloadUrl,
     bool Fallback, bool AllApps, int PerApp, int Icons, int Tiles, string? Sha256 = null)
 {
-    /// <summary>What the pack changes, in one short line for the card.</summary>
-    public string Contents
-    {
-        get
-        {
-            var parts = new List<string>();
-            if (Fallback) parts.Add("Background");
-            if (AllApps) parts.Add("all apps");
-            if (PerApp > 0) parts.Add($"{PerApp} app image{(PerApp == 1 ? "" : "s")}");
-            if (Icons > 0) parts.Add($"{Icons} icon{(Icons == 1 ? "" : "s")}");
-            if (Tiles > 0) parts.Add($"{Tiles} tile icon{(Tiles == 1 ? "" : "s")}");
-            return parts.Count == 0 ? "Theme" : string.Join(" · ", parts);
-        }
-    }
+    /// <summary>
+    /// What the pack changes, in one short line for the card. Written by <see cref="PackSummary"/>, like the
+    /// library's own line for the same pack; the store's summary has no sound or video counts, so those are absent.
+    /// </summary>
+    public string Contents => PackSummary.Format(Fallback, AllApps, PerApp, Icons, Tiles);
 }
 
 /// <summary>
@@ -158,6 +149,44 @@ public static class CommunityList
     /// <summary>The <c>likes</c> count from a like/unlike answer, or -1.</summary>
     public static int ParseLikes(string json) =>
         JsonValue.TryParse(json, out JsonValue root) ? root.GetInt("likes", -1) : -1;
+
+    /// <summary>The <c>liked</c> flag of a like/unlike answer, or null when the answer does not carry one.</summary>
+    public static bool? ParseLiked(string json) =>
+        JsonValue.TryParse(json, out JsonValue root) && root["liked"].Type == JsonType.Boolean ? root["liked"].AsBool() : null;
+
+    /// <summary>
+    /// What the like button sends for a theme: a theme this console already liked is unliked with DELETE, any other
+    /// gets POST (which the store treats as idempotent, so a like made before the app kept a record just shows up).
+    /// </summary>
+    public static SharpProspero.Platform.HttpMethod LikeMethod(bool alreadyLiked) =>
+        alreadyLiked ? SharpProspero.Platform.HttpMethod.Delete : SharpProspero.Platform.HttpMethod.Post;
+
+    /// <summary>The store ids this console has liked, kept as a JSON array in <see cref="LikesPath"/>.</summary>
+    public const string LikesPath = "/data/prospero-themes/likes.json";
+
+    /// <summary>Reads <see cref="LikesPath"/>, tolerating a missing or broken file; anything that is not a non-empty id is skipped.</summary>
+    public static HashSet<string> ParseLikedIds(string? json)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(json) || !JsonValue.TryParse(json, out JsonValue root) || root.Type != JsonType.Array)
+            return ids;
+        for (int i = 0; i < root.Count; i++)
+        {
+            JsonValue item = root[i];
+            if (item.Type == JsonType.String && item.AsString() is { Length: > 0 and <= 128 } id) ids.Add(id);
+        }
+        return ids;
+    }
+
+    /// <summary>The text of <see cref="LikesPath"/>: the ids as a sorted JSON array, so the same set always writes the same file.</summary>
+    public static string FormatLikedIds(IEnumerable<string> ids)
+    {
+        var sorted = new List<string>(new HashSet<string>(ids, StringComparer.Ordinal));
+        sorted.Sort(StringComparer.Ordinal);
+        JsonValue array = JsonValue.NewArray();
+        foreach (string id in sorted) array.Add(id);
+        return array.Write(indented: true) + "\n";
+    }
 
     private static string? Absolute(string baseUrl, string? url)
     {

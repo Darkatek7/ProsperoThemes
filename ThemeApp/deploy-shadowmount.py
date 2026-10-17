@@ -99,7 +99,7 @@ def main():
         raise ValueError("Invalid title id.")
     if (module / "eboot.bin").read_bytes()[:4] == b"\x7fELF":
         raise ValueError("eboot.bin is unsigned; run the full application build.")
-    required = ["sce_sys/prospero-themes/blue-hour.p5theme", "sce_sys/prospero-themes/inter-22.p5font", "sce_sys/prospero-themes/inter-28.p5font", "sce_sys/prospero-themes/inter-36.p5font", "sce_sys/prospero-themes/inter-76.p5font", "sce_module/libc.prx"]
+    required = ["sce_sys/prospero-themes/blue-hour.p5theme", "sce_sys/prospero-themes/inter-22.p5font", "sce_sys/prospero-themes/inter-28.p5font", "sce_sys/prospero-themes/inter-36.p5font", "sce_sys/prospero-themes/inter-76.p5font", "sce_sys/prospero-themes/inter-48.p5font", "sce_sys/prospero-themes/inter-28-semibold.p5font", "sce_module/libc.prx"]
     for name in required:
         if not (module / name).is_file():
             raise ValueError(f"Missing app file: {name}")

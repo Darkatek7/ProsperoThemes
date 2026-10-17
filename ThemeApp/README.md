@@ -10,16 +10,31 @@ launch evidence are recorded separately below.
 
 ## Library, details and preview
 
-- Library navigation uses the d-pad or left stick. X opens details; Square opens fullscreen preview.
-- X in preview toggles the simulated home overlay; Circle returns to the screen that opened it.
-- L1/R1 switch between the Library, Community, USB Import and System tabs. Options reloads the library (on System: firmware report).
+- Library navigation uses the d-pad or left stick. X opens details; Square opens fullscreen preview; Options
+  reloads the library.
+- X in preview toggles the simulated home overlay; Circle (or Square) returns to the screen that opened it.
+- L1/R1 switch between the Library, Community, USB Import and System tabs. Circle goes back to the Library from
+  any tab.
+- **Questions first:** X on a theme's detail opens an Apply dialog; X on System's "Restore defaults" row opens a
+  Restore dialog (focus starts on Cancel). In a dialog the d-pad moves the focus, X takes the focused option, Circle
+  closes it; every other button is ignored. While the app is busy neither dialog opens ("Please wait…").
+- **Notices:** results and progress ("Applying theme…", "Download failed (404).") appear as one toast at the bottom
+  of the screen: in the footer band, or just above it when the text is long. It stays while the app is busy and fades
+  about six seconds after it was posted.
+- **Applied badge:** the library card and the detail cover of the theme the console shows now carry an
+  "Applied" badge (read from `state.json`; a restore removes it).
+- **What a pack changes** (Library line, Detail list, store cards) is written by `PackSummary` with the store's
+  counting rules: "Background · App background · 16 icons · 9 tile icons". The Detail screen lists the same groups
+  under "What it changes" (Background, App background, App images, Icons, Tile icons, Sounds, Videos, and Other files
+  for files that belong to none of them), with the number where there is more than one.
 - **Apply starts from the defaults:** before a theme is written, every file an earlier theme changed and
   the new one does not write goes back to its backup (files already at their original are not rewritten).
   So themes replace each other instead of stacking. If one of them cannot be put back, the theme is not
-  applied. **Restore defaults** (System tab, X) puts every backed-up file back.
-- **Where an app background goes:** applying a pack with an all-apps background asks in the confirm bar: X puts
-  it on apps without their own image, Triangle on all apps. The answer is saved as the background scope (the
-  same setting as Triangle on the System tab). Packs without one keep the plain X confirm.
+  applied. **Restore defaults** (System tab: X, then Restore defaults in the dialog) puts every backed-up file back.
+- **Where an app background goes:** applying a pack with an all-apps background asks in the Apply dialog:
+  "Apps without their own image", "All apps" or "Cancel" (focus starts on the saved scope; the d-pad picks, X
+  confirms, Circle cancels). The answer is saved as the background scope (the same setting as the App backgrounds
+  row on the System tab). Packs without one get the plain "Apply theme" / "Cancel" dialog.
 - **Other firmware, system updates:** nothing in the app is tied to 13.00; it compares the console's own
   files instead. Before the first system write every target is backed up and its payload checked against
   the console's file (its backup when there is one): same DDS size and DXGI format, same PNG size, same
@@ -31,7 +46,7 @@ launch evidence are recorded separately below.
   backup moves to `backup/replaced/<time>/` and the live file becomes the new default, so Restore
   defaults never writes an old firmware's file back. The System tab shows the firmware
   (`SystemInfo.SystemSoftwareVersion`, "13.000.040" on the test console); `state.json` records it.
-- **Firmware report** (System tab, Options): writes `/data/prospero-themes/reports/firmware-<version>.json`
+- **Firmware report** (System tab, Firmware report row): writes `/data/prospero-themes/reports/firmware-<version>.json`
   (and a copy to `/mnt/usb0` when a drive is connected): for every file in the bundled
   `catalog/13.00.json`, the system tile backgrounds and tile icons and the icon container, whether it
   exists, its size, hash and format, plus the RCO's icon list. Only reads. On the PC,
@@ -41,7 +56,10 @@ launch evidence are recorded separately below.
 - The on-screen text is English (US spelling). The Inter font atlases cover ASCII plus the characters in
   `CHARS` of `tools/bake-assets.py` (`… · – × “ ” ‘ ’` and some accented Latin letters); keep new UI text
   inside that set.
-- **Store address** (System tab): Square opens an on-screen keyboard that the app draws itself, so no system
+- **System tab:** a focusable list (d-pad up/down, X): App backgrounds (X switches between "Without own image" and
+  "All apps"), Store address (X opens the keyboard), Firmware report (X saves the report), Restore defaults (X asks
+  first). Circle goes back to the Library.
+- **Store address** (System tab, Store address row): X opens an on-screen keyboard that the app draws itself, so no system
   keyboard library is needed. The d-pad moves over the keys, X types the focused key (the bottom row has
   `http://`, `https://`, `:8080`, "Default" for the public store and "Clear all"), Square deletes the last character, Options saves
   and Circle discards. L1/R1 do nothing while typing. The address must start with `http://` or `https://`,
@@ -62,11 +80,21 @@ launch evidence are recorded separately below.
 - **"In library" badge** (Community tab): a store theme whose pack is in the library carries a badge on its
   card. The library names packs `<sha256>.p5theme`; the app records the hash of every download in
   `/data/prospero-themes/community.json` (store id → hash), and uses the store's `sha256` per item instead
-  when the list carries one. A pack removed from the library loses its badge.
+  when the list carries one. A pack removed from the library loses its badge. The ids of the themes this console
+  liked are kept next to `community.json`, in `/data/prospero-themes/likes.json` (see Likes below).
 - **Theme updates** (Community tab): cards show the store's version. When the store lists a hash that is not in
   the library while the pack recorded in `community.json` is, the card carries an orange "Update" badge and X
   says Update. The download moves the old pack to `/data/prospero-themes/attic/` (kept, not deleted); an
   applied theme changes on the console only after it is applied again.
+- **Community controls** (Community tab): the d-pad moves between the cards, X downloads (or updates), Square changes
+  the sort (Top rated, Most downloaded, New), Options refreshes the list, Circle goes back to the Library.
+- **Likes** (Community tab): Triangle likes the selected theme. On a theme this console already liked, Triangle removes
+  the like (the footer says "Unlike" there). A liked theme shows a heart on its card. The request is a POST to
+  the store's `/api/themes/<id>/like` (a DELETE for an unlike), with the console's device ID in an `X-Device-Id`
+  header, so the store counts one like per console. The heart and the footer follow the store's answer; a refused
+  request leaves the card unchanged and says why. The liked ids are written to `/data/prospero-themes/likes.json` (a
+  sorted JSON array) after each confirmed change, and read back at start, so the hearts survive a restart. If that
+  file cannot be written, the hearts last until the app quits.
 - The bundled **Blue Hour** theme is a real format-2 pack carrying a ready-to-write BC7/zstd background
   for `bg_hub_default`, plus its PNG cover. It is not marked active merely because it is bundled.
 - USB import checks mounted `/mnt/usb0` through `/mnt/usb7`, each root and its `prospero-themes` folder.
@@ -88,10 +116,11 @@ source files stay in the repository and are excluded from the runtime artifact.
 dotnet run --project ThemeApp.Preview/ThemeApp.Preview.csproj -p:SharpProsperoRoot=$env:SHARPPROSPERO_ROOT
 ```
 
-Open `http://127.0.0.1:5185`. Arrow keys navigate, Enter is X, Escape is Circle, V is Square and Q/E are
-L1/R1. This host invokes the same `ThemeBrowser` and `ThemeRenderer` as the PS5; only file/image decoding
-and input transport differ. `--screenshots` renders every screen (Library, Detail, Preview, Artwork, Community, Import, System and
-the store-address keyboard) to `ThemeApp.Preview/out/`.
+Open `http://127.0.0.1:5185`. Arrow keys navigate, Enter is X, Escape is Circle, V is Square, Q/E are
+L1/R1, T is Triangle (like) and O is Options. This host invokes the same `ThemeBrowser` and `ThemeRenderer` as the
+PS5; only file/image decoding and input transport differ. `--screenshots` renders every screen (Library, Detail, Preview, Artwork, Community, Import, System and
+the store-address keyboard) and the new states (the Apply, scope and Restore dialogs, each System row focused, the
+three kinds of toast, the Applied badge) to `ThemeApp.Preview/out/`.
 
 ## ShadowMount deployment
 

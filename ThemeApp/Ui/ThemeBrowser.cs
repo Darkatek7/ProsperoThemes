@@ -1,28 +1,57 @@
 using SharpProspero.Ui;
 using System;
+using System.Collections.Generic;
 
 namespace ProsperoThemes.App.Ui;
 
 /// <summary>StoreAddress is the keyboard screen: opened from System, not a header tab, and it returns there.</summary>
 public enum ThemeView { Library, Detail, Preview, Community, Import, System, StoreAddress }
-/// <summary>SaveStoreUrl: Options in the store-address editor; the app reads <see cref="ThemeBrowser.StoreEditor"/>'s text.</summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport }
+/// <summary>
+/// SaveStoreUrl: Options in the store-address editor; the app reads <see cref="ThemeBrowser.StoreEditor"/>'s text.
+/// ToggleBackgroundScope: the System row for app backgrounds. Busy: a press that needed the app to be idle (the app
+/// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
+/// </summary>
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, Busy }
+
+/// <summary>
+/// The modal question over Detail or System. Apply asks to apply; ApplyScope is the same for a pack with an all-apps
+/// background and asks where that background goes; Restore asks before the defaults are put back.
+/// </summary>
+public enum DialogKind { None, Apply, ApplyScope, Restore }
+
+/// <summary>The focusable rows of the System screen, top to bottom.</summary>
+public enum SystemRow { Backgrounds, StoreAddress, FirmwareReport, Restore }
 
 public sealed class ThemeBrowser
 {
+    private static readonly string[] ApplyOptions = ["Apply theme", "Cancel"];
+    private static readonly string[] ScopeOptions = ["Apps without their own image", "All apps", "Cancel"];
+    private static readonly string[] RestoreOptions = ["Restore defaults", "Cancel"];
+
+    /// <summary>Number of focusable rows on the System screen.</summary>
+    public const int SystemRowCount = 4;
+
     public ThemeView View { get; private set; }
     public int Selected { get; private set; } = -1;
     public bool ShowOverlay { get; private set; } = true;
-    public int TargetOffset { get; private set; }
-    /// <summary>A system-changing action armed by one X press and waiting for the second; None otherwise.</summary>
-    public ThemeAction Pending { get; private set; }
-    /// <summary>
-    /// The selected pack has an all-apps background, so an armed apply asks where it goes: X for apps without their
-    /// own image, Triangle for all apps. The app passes it in with every update.
-    /// </summary>
+    /// <summary>The open dialog, or <see cref="DialogKind.None"/>. While one is open it takes every button.</summary>
+    public DialogKind Dialog { get; private set; }
+    /// <summary>The focused option of the open dialog (an index into <see cref="DialogOptions"/>).</summary>
+    public int DialogFocus { get; private set; }
+    /// <summary>The options of the open dialog, in order; the last one is always Cancel. Empty without a dialog.</summary>
+    public IReadOnlyList<string> DialogOptions => Dialog switch
+    {
+        DialogKind.Apply => ApplyOptions,
+        DialogKind.ApplyScope => ScopeOptions,
+        DialogKind.Restore => RestoreOptions,
+        _ => Array.Empty<string>(),
+    };
+    /// <summary>The apply that was just confirmed came from the scope question (see <see cref="ApplyAllApps"/>).</summary>
     public bool ApplyAsksScope { get; private set; }
-    /// <summary>The answer of the last apply that asked: true for all apps (see <see cref="ApplyAsksScope"/>).</summary>
+    /// <summary>The answer of the last apply that asked: true for "All apps", false for apps without their own image.</summary>
     public bool ApplyAllApps { get; private set; }
+    /// <summary>The focused row of the System screen (a <see cref="SystemRow"/>).</summary>
+    public int SystemSelected { get; private set; }
     /// <summary>Focused card on the Community tab, or -1 when the list is empty.</summary>
     public int CommunitySelected { get; private set; } = -1;
     /// <summary>The store's sort order shown on the Community tab (Top, Downloads, New).</summary>
@@ -41,7 +70,8 @@ public sealed class ThemeBrowser
         _count = Math.Max(0, count);
         Selected = _count == 0 ? -1 : Math.Clamp(Selected, 0, _count - 1);
         if (_count == 0 && View is ThemeView.Detail or ThemeView.Preview) View = ThemeView.Library;
-        TargetOffset = 0;
+        // The library changed under the question, so it may no longer be about the pack that is selected.
+        Dialog = DialogKind.None;
     }
 
     public void SetCommunityCount(int count)
@@ -54,7 +84,7 @@ public sealed class ThemeBrowser
     public void OpenStoreAddress(string text, string notice = "")
     {
         StoreEditor = new StoreAddressEditor(text) { Notice = notice };
-        Pending = ThemeAction.None;
+        Dialog = DialogKind.None;
         View = ThemeView.StoreAddress;
     }
 
@@ -68,10 +98,23 @@ public sealed class ThemeBrowser
     // The tabs in header order; Detail and Preview belong to the library.
     private static readonly ThemeView[] Tabs = [ThemeView.Library, ThemeView.Community, ThemeView.Import, ThemeView.System];
 
-    public void Update(UiInput input, bool preview = false, bool options = false, int targetCount = 0, bool triangle = false,
-        bool asksScope = false)
+    /// <summary>
+    /// One frame of buttons. <paramref name="preview"/> is Square, <paramref name="options"/> Options and
+    /// <paramref name="triangle"/> Triangle. <paramref name="asksScope"/> says the selected pack has an all-apps
+    /// background (its apply asks where that goes), <paramref name="allAppsScope"/> is the saved answer, and
+    /// <paramref name="busy"/> that a worker job is running: then nothing that changes the console or the settings
+    /// is started (the press becomes <see cref="ThemeAction.Busy"/> instead).
+    /// </summary>
+    public void Update(UiInput input, bool preview = false, bool options = false, bool triangle = false,
+        bool asksScope = false, bool allAppsScope = false, bool busy = false)
     {
-        ApplyAsksScope = asksScope;
+        // One Update is one frame, and an open dialog answers first. The X that opens a dialog (below) returns
+        // right after opening it, so the same X cannot also confirm it.
+        if (Dialog != DialogKind.None)
+        {
+            UpdateDialog(input, busy);
+            return;
+        }
         if (View == ThemeView.Preview)
         {
             if (input.Cancel || preview) View = _previewOrigin;
@@ -89,17 +132,6 @@ public sealed class ThemeBrowser
                 if (input.Confirm) StoreEditor.Press();
                 if (preview) StoreEditor.Backspace();
             }
-            return;
-        }
-        if (Pending != ThemeAction.None)
-        {
-            // Writing to the system takes a second, deliberate X (or Triangle for "all apps" when the apply asks);
-            // any other button disarms it.
-            if (input.Confirm) { _action = Pending; ApplyAllApps = false; }
-            else if (triangle && Pending == ThemeAction.Apply && ApplyAsksScope) { _action = Pending; ApplyAllApps = true; }
-            if (input.Confirm || input.Cancel || input.Up || input.Down || input.Left || input.Right ||
-                input.PageUp || input.PageDown || preview || options || triangle)
-                Pending = ThemeAction.None;
             return;
         }
         if (input.Cancel || options && View == ThemeView.Detail)
@@ -136,9 +168,9 @@ public sealed class ThemeBrowser
             if (options) _action = ThemeAction.CommunityRefresh;
             return;
         }
-        if (preview && View == ThemeView.System)
+        if (View == ThemeView.System)
         {
-            OpenStoreAddress(StoreUrl);
+            UpdateSystem(input, busy);
             return;
         }
         if (preview && Selected >= 0 && View is ThemeView.Library or ThemeView.Detail)
@@ -154,21 +186,84 @@ public sealed class ThemeBrowser
             if (input.Left || input.Up) Selected = Math.Max(0, Selected - 1);
             if (input.Home) Selected = 0;
             if (input.End) Selected = _count - 1;
-            if (input.Confirm) { View = ThemeView.Detail; TargetOffset = 0; }
+            if (input.Confirm) View = ThemeView.Detail;
         }
         else if (View == ThemeView.Detail)
         {
-            int maxOffset = Math.Max(0, targetCount - 5);
-            TargetOffset = Math.Clamp(TargetOffset, 0, maxOffset);
-            if (input.Down && TargetOffset < maxOffset) TargetOffset++;
-            if (input.Up && TargetOffset > 0) TargetOffset--;
-            if (input.Confirm) Pending = ThemeAction.Apply;
+            // Writing to the console always goes through a question first.
+            if (input.Confirm)
+            {
+                if (busy) _action = ThemeAction.Busy;
+                else if (asksScope) OpenDialog(DialogKind.ApplyScope, allAppsScope ? 1 : 0);
+                else OpenDialog(DialogKind.Apply, 0);
+            }
         }
         else if (View == ThemeView.Import && input.Confirm) _action = ThemeAction.ImportUsb;
-        else if (View == ThemeView.System && input.Confirm) Pending = ThemeAction.RestoreOriginals;
         if (options && View == ThemeView.Library) _action = ThemeAction.Reload;
-        // Only reads the console's files, so one press is enough.
-        if (options && View == ThemeView.System) _action = ThemeAction.FirmwareReport;
+    }
+
+    private void UpdateSystem(UiInput input, bool busy)
+    {
+        if (input.Up) SystemSelected = Math.Max(0, SystemSelected - 1);
+        if (input.Down) SystemSelected = Math.Min(SystemRowCount - 1, SystemSelected + 1);
+        if (!input.Confirm) return;
+        switch ((SystemRow)SystemSelected)
+        {
+            case SystemRow.Backgrounds:
+                _action = busy ? ThemeAction.Busy : ThemeAction.ToggleBackgroundScope;
+                break;
+            case SystemRow.StoreAddress:
+                // Typing starts on the next frame: this X only opens the keyboard.
+                OpenStoreAddress(StoreUrl);
+                break;
+            case SystemRow.FirmwareReport:
+                _action = busy ? ThemeAction.Busy : ThemeAction.FirmwareReport;
+                break;
+            case SystemRow.Restore:
+                if (busy) _action = ThemeAction.Busy;
+                else OpenDialog(DialogKind.Restore, RestoreOptions.Length - 1);   // starts on Cancel
+                break;
+        }
+    }
+
+    private void OpenDialog(DialogKind kind, int focus)
+    {
+        Dialog = kind;
+        DialogFocus = focus;
+    }
+
+    // Left/Right and Up/Down move the focus, X takes the focused option, O closes; every other button is ignored.
+    private void UpdateDialog(UiInput input, bool busy)
+    {
+        int last = DialogOptions.Count - 1;   // Cancel is always the last option
+        if (input.Cancel) { Dialog = DialogKind.None; return; }
+        if (input.Confirm)
+        {
+            DialogKind kind = Dialog;
+            int chosen = DialogFocus;
+            Dialog = DialogKind.None;
+            if (chosen >= last) return;   // Cancel
+            if (busy) { _action = ThemeAction.Busy; return; }
+            switch (kind)
+            {
+                case DialogKind.Apply:
+                    ApplyAsksScope = false;
+                    ApplyAllApps = false;
+                    _action = ThemeAction.Apply;
+                    break;
+                case DialogKind.ApplyScope:
+                    ApplyAsksScope = true;
+                    ApplyAllApps = chosen == 1;
+                    _action = ThemeAction.Apply;
+                    break;
+                case DialogKind.Restore:
+                    _action = ThemeAction.RestoreOriginals;
+                    break;
+            }
+            return;
+        }
+        int step = (input.Right || input.Down ? 1 : 0) - (input.Left || input.Up ? 1 : 0);
+        if (step != 0) DialogFocus = Math.Clamp(DialogFocus + step, 0, last);
     }
 
     public ThemeAction TakeAction()

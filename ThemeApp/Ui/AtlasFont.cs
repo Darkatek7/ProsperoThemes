@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Text;
 using SharpProspero.Graphics;
 
 namespace ProsperoThemes.App.Ui;
@@ -62,6 +63,88 @@ public sealed class AtlasFont : ITextFont
             }
             x += glyph.Advance;
         }
+    }
+
+    /// <summary>Draws the text with its horizontal centre at <paramref name="centerX"/>; <paramref name="y"/> is the top of the line.</summary>
+    public void DrawCentered(Surface surface, ReadOnlySpan<char> text, int centerX, int y, Color color)
+        => DrawText(surface, text, centerX - MeasureText(text) / 2, y, color);
+
+    /// <summary>
+    /// Breaks <paramref name="text"/> into lines no wider than <paramref name="maxWidth"/> pixels, at most
+    /// <paramref name="maxLines"/> of them (<c>int.MaxValue</c> for no limit). Lines break at spaces; a word wider
+    /// than a whole line is broken between letters; a '\n' starts a new line and blank lines are kept (except at
+    /// the end of the text). When text is left over, the last line ends in '…' and still fits. Nothing to show, or a
+    /// non-positive width or line count, gives an empty list. Measured with this font's advances, so the result
+    /// matches <see cref="DrawText"/>.
+    /// </summary>
+    public IReadOnlyList<string> Wrap(string text, int maxWidth, int maxLines)
+    {
+        var lines = new List<string>();
+        if (string.IsNullOrEmpty(text) || maxWidth <= 0 || maxLines <= 0) return lines;
+        text = text.TrimEnd();   // a trailing newline is not a reason to truncate
+        int space = Get(' ').Advance;
+        var line = new StringBuilder();
+        int lineWidth = 0;
+        // Gathers one line more than asked for, which is how truncation is noticed; returns true once that one exists.
+        bool Flush()
+        {
+            lines.Add(line.ToString());
+            line.Clear();
+            lineWidth = 0;
+            return lines.Count > maxLines;
+        }
+
+        bool full = false;
+        foreach (string paragraph in text.Replace("\r", "").Split('\n'))
+        {
+            string[] words = paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length == 0 && (full = Flush())) break;
+            foreach (string word in words)
+            {
+                int wordWidth = MeasureText(word);
+                if (line.Length > 0 && lineWidth + space + wordWidth <= maxWidth)
+                {
+                    line.Append(' ').Append(word);
+                    lineWidth += space + wordWidth;
+                    continue;
+                }
+                if (line.Length > 0 && (full = Flush())) break;
+                int start = 0;
+                // A word wider than the line goes on in pieces, each as long as fits (at least one letter).
+                while (wordWidth > maxWidth)
+                {
+                    int end = start, width = 0;
+                    while (end < word.Length && (end == start || width + Get(word[end]).Advance <= maxWidth)) width += Get(word[end++]).Advance;
+                    lines.Add(word[start..end]);
+                    if (lines.Count > maxLines) { full = true; break; }
+                    wordWidth -= width;
+                    start = end;
+                }
+                if (full) break;
+                line.Append(word, start, word.Length - start);
+                lineWidth = wordWidth;
+            }
+            if (full) break;
+            if (line.Length > 0 && (full = Flush())) break;
+        }
+        if (full)
+        {
+            lines.RemoveRange(maxLines, lines.Count - maxLines);
+            lines[maxLines - 1] = WithEllipsis(lines[maxLines - 1], maxWidth);
+        }
+        else if (line.Length > 0) lines.Add(line.ToString());
+        while (lines.Count > 0 && lines[^1].Length == 0) lines.RemoveAt(lines.Count - 1);
+        return lines;
+    }
+
+    // The line with "…" at its end, shortened (and trailing spaces dropped) until both fit in maxWidth.
+    private string WithEllipsis(string line, int maxWidth)
+    {
+        int dots = Get('…').Advance;
+        int length = line.Length, width = MeasureText(line);
+        while (length > 0 && width + dots > maxWidth) width -= Get(line[--length]).Advance;
+        while (length > 0 && line[length - 1] == ' ') length--;
+        return line[..length] + "…";
     }
 
     public void DrawClipped(Surface surface, string text, int x, int y, Color color, int maxWidth)

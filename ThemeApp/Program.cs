@@ -40,6 +40,11 @@ internal sealed class ThemeApp : ProsperoApp
     private bool _rescanAfterWork;
     // Store id -> pack hash of every theme downloaded here (CommunityList.DownloadsPath), for the badges.
     private Dictionary<string, string> _downloads = new(StringComparer.Ordinal);
+    // Store ids this console has liked (CommunityList.LikesPath), for the hearts and for choosing like or unlike.
+    // Changed on the frame thread only; the renderer reads the same set.
+    private readonly HashSet<string> _liked = new(StringComparer.Ordinal);
+    // The sort the last list load was started with, to notice a sort pressed while the app was busy (see StartCommunityWork).
+    private int _listSort;
 
     protected override void OnLoad()
     {
@@ -57,6 +62,8 @@ internal sealed class ThemeApp : ProsperoApp
         try { _firmware = SharpProspero.Platform.SystemInfo.SystemSoftwareVersion; }
         catch { _firmware = null; }
         _renderer.Firmware = _firmware ?? "";
+        try { _renderer.AppVersion = JsonValue.Parse(FileSystem.ReadAllText("/app0/sce_sys/param.json")).GetString("contentVersion", ""); }
+        catch { /* the System screen then shows no app version */ }
         _browser.StoreUrl = _settings.StoreUrl;
         try
         {
@@ -64,6 +71,13 @@ internal sealed class ThemeApp : ProsperoApp
                 _downloads = CommunityList.ParseDownloads(FileSystem.ReadAllText(CommunityList.DownloadsPath));
         }
         catch { /* no badges for earlier downloads; new ones are recorded again */ }
+        try
+        {
+            if (FileSystem.Exists(CommunityList.LikesPath))
+                foreach (string id in CommunityList.ParseLikedIds(FileSystem.ReadAllText(CommunityList.LikesPath))) _liked.Add(id);
+        }
+        catch { /* no hearts for earlier likes until they are pressed again (the store keeps one like per console) */ }
+        _renderer.CommunityLiked = _liked;
         StartWork(DeviceThemeLibrary.Scan);
     }
 
@@ -76,9 +90,13 @@ internal sealed class ThemeApp : ProsperoApp
         return result;
     }
 
-    private void StartWork(Func<LibrarySnapshot> work)
+    /// <summary>
+    /// Scans (or imports into) the library on the worker. The scan's message stays on the USB Import screen; an
+    /// import also shows it as a notice, and a failure always does.
+    /// </summary>
+    private void StartWork(Func<LibrarySnapshot> work, bool announce = false)
     {
-        if (_busy) return;
+        if (_busy) { Wait(); return; }
         _busy = true;
         _renderer.Busy = true;
         _renderer.Status = "Loading library…";
@@ -87,13 +105,20 @@ internal sealed class ThemeApp : ProsperoApp
             try
             {
                 var snapshot = work();
+                string? applied = ReadApplied();
                 _results.Post(() =>
                 {
                     _renderer.ResetCovers();
                     _entries = snapshot.Entries;
                     _browser.SetCount(_entries.Count);
+                    _renderer.AppliedId = applied;
                     RefreshCommunityBadges();
-                    _renderer.LibraryStatus = snapshot.Message;
+                    // The USB Import screen shows the last import's result; a plain scan has nothing to say there.
+                    if (announce)
+                    {
+                        _renderer.LibraryStatus = snapshot.Message;
+                        _renderer.Notify(snapshot.Message, NoticeLevel.Info);
+                    }
                     _renderer.Status = ThemeRenderer.Plural(_entries.Count, "theme");
                     _renderer.Busy = false;
                     _busy = false;
@@ -105,6 +130,7 @@ internal sealed class ThemeApp : ProsperoApp
                 _results.Post(() =>
                 {
                     _renderer.LibraryStatus = message;
+                    _renderer.Notify(message, NoticeLevel.Error);
                     _renderer.Status = "Check file access";
                     _renderer.Busy = false;
                     _busy = false;
@@ -114,9 +140,19 @@ internal sealed class ThemeApp : ProsperoApp
         _worker.Start();
     }
 
+    /// <summary>The manifest id of the theme the console shows now (state.json, see <see cref="AppliedTheme"/>), or null.</summary>
+    private static string? ReadApplied()
+    {
+        try { return FileSystem.Exists(AppliedTheme.Path) ? AppliedTheme.Read(FileSystem.ReadAllText(AppliedTheme.Path)) : null; }
+        catch { return null; }
+    }
+
+    /// <summary>A press that needs the app idle came while a job runs.</summary>
+    private void Wait() => _renderer.Notify("Please wait…", NoticeLevel.Info);
+
     /// <summary>
     /// Runs a system-changing job on the worker: starts ThemeHelper if it is not running yet, then hands the
-    /// job an applier whose theme-root writes go through it. The result lands in the status line.
+    /// job an applier whose theme-root writes go through it. The result is shown as a notice.
     /// </summary>
     private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work) =>
         StartHelperWork(busyText, needsHelper: true, _ => work(new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
@@ -128,14 +164,15 @@ internal sealed class ThemeApp : ProsperoApp
     /// </summary>
     private void StartHelperWork(string busyText, bool needsHelper, Func<string?, ApplyResult> work)
     {
-        if (_busy) return;
+        if (_busy) { Wait(); return; }
         _busy = true;
         _renderer.Busy = true;
         _renderer.Status = busyText;
-        _renderer.ActionStatus = busyText;
+        _renderer.Notify(busyText, NoticeLevel.Info);
         _worker = new Thread(() =>
         {
             string message, status;
+            bool ok = false;
             try
             {
                 string? helperProblem = ThemeHelperClient.EnsureRunning();
@@ -147,16 +184,19 @@ internal sealed class ThemeApp : ProsperoApp
                 {
                     ApplyResult result = work(helperProblem);
                     (status, message) = (result.Success ? "Done" : "Not completed", result.Message);
+                    ok = result.Success;
                 }
             }
             catch (Exception ex)
             {
                 (status, message) = ("Error", ex.Message);
             }
+            string? applied = ReadApplied();
             _results.Post(() =>
             {
                 _renderer.Status = status;
-                _renderer.ActionStatus = message;
+                _renderer.AppliedId = applied;
+                _renderer.Notify(message, ok ? NoticeLevel.Success : NoticeLevel.Error);
                 _renderer.Busy = false;
                 _busy = false;
             });
@@ -174,11 +214,13 @@ internal sealed class ThemeApp : ProsperoApp
         }
         _browser.Update(UiInput.From(context.Input, context.PreviousInput),
             preview: context.Pressed(ScePadButton.Square), options: context.Pressed(ScePadButton.Options),
-            targetCount: _browser.Selected >= 0 ? _entries[_browser.Selected].Manifest.Targets.Count : 0,
-            triangle: context.Pressed(ScePadButton.Triangle), asksScope: SelectedHasAllAppsBackground());
+            triangle: context.Pressed(ScePadButton.Triangle), asksScope: SelectedHasAllAppsBackground(),
+            allAppsScope: _allAppsBackgrounds, busy: _busy);
         switch (_browser.TakeAction())
         {
-            case ThemeAction.ImportUsb: StartWork(DeviceThemeLibrary.ImportUsb); break;
+            case ThemeAction.Busy: Wait(); break;
+            case ThemeAction.ToggleBackgroundScope: ToggleBackgroundScope(); break;
+            case ThemeAction.ImportUsb: StartWork(DeviceThemeLibrary.ImportUsb, announce: true); break;
             case ThemeAction.Reload: StartWork(DeviceThemeLibrary.Scan); break;
             case ThemeAction.Apply when _browser.Selected >= 0:
                 // The answer to "apps without their own image or all apps" is also the saved setting. The apply
@@ -200,9 +242,6 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.Draw(context.Surface, _browser, _entries, context.TotalSeconds, context.DeltaSeconds);
         _stats.Record((float)context.DeltaSeconds);
         if (context.Pressed(ScePadButton.R3)) _showStats = !_showStats;
-        if (_browser.View == ThemeView.System && _browser.Pending == ThemeAction.None && !_busy
-            && context.Pressed(ScePadButton.Triangle))
-            ToggleBackgroundScope();
         if (_showStats) _stats.Draw(context.Surface, 1500, 1060, scale: 1, Color.White);
     }
 
@@ -247,14 +286,19 @@ internal sealed class ThemeApp : ProsperoApp
 
     private void ToggleBackgroundScope()
     {
-        _renderer.ActionStatus = SetBackgroundScope(!_allAppsBackgrounds) ?? (_allAppsBackgrounds
+        if (SetBackgroundScope(!_allAppsBackgrounds) is { } problem)
+        {
+            _renderer.Notify(problem, NoticeLevel.Error);
+            return;
+        }
+        _renderer.Notify(_allAppsBackgrounds
             ? "Takes effect on the next apply: backgrounds also replace the apps’ own images."
-            : "Takes effect on the next apply: apps with their own image keep it.");
+            : "Takes effect on the next apply: apps with their own image keep it.", NoticeLevel.Success);
     }
 
     /// <summary>
-    /// Sets and saves the background scope: Triangle on the System tab, or the answer when an apply asks. Null when it
-    /// was saved, otherwise why not.
+    /// Sets and saves the background scope: the App backgrounds row on the System tab, or the answer when an apply
+    /// asks. Null when it was saved, otherwise why not.
     /// </summary>
     private string? SetBackgroundScope(bool allApps)
     {
@@ -286,7 +330,7 @@ internal sealed class ThemeApp : ProsperoApp
     {
         string url = AppSettings.NormalizeStoreUrl(_browser.StoreEditor.Text);
         if (AppSettings.StoreUrlProblem(url) is { } problem) { _browser.ResumeStoreAddress(problem); return; }
-        if (url == _settings.StoreUrl) { _renderer.ActionStatus = "Store address unchanged."; return; }
+        if (url == _settings.StoreUrl) { _renderer.Notify("Store address unchanged.", NoticeLevel.Info); return; }
         // A store job still running would deliver the old store's list into the new address.
         if (_busy) { _browser.ResumeStoreAddress("The app is still busy. Press Options again in a moment."); return; }
         _settings = _settings with { StoreUrl = url };
@@ -296,12 +340,14 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.ResetCommunity();
         _browser.SetCommunityCount(0);
         _renderer.CommunityStatus = "";
+        _renderer.CommunityError = false;
+        _renderer.CommunityListSort = -1;
         try
         {
             WriteSettings();
-            _renderer.ActionStatus = url.Length == 0 ? "Store address removed." : "Store address saved.";
+            _renderer.Notify(url.Length == 0 ? "Store address removed." : "Store address saved.", NoticeLevel.Success);
         }
-        catch (Exception ex) { _renderer.ActionStatus = "Store address not saved, so it only lasts until you quit: " + ex.Message; }
+        catch (Exception ex) { _renderer.Notify("Store address not saved, so it only lasts until you quit: " + ex.Message, NoticeLevel.Error); }
     }
 
     private void SaveSettings()
@@ -329,54 +375,73 @@ internal sealed class ThemeApp : ProsperoApp
     private CommunityTheme? SelectedCommunity() =>
         _browser.CommunitySelected >= 0 && _browser.CommunitySelected < _community.Count ? _community[_browser.CommunitySelected] : null;
 
+    /// <summary>What a store job reports: the text and how it reads.</summary>
+    private readonly record struct StoreResult(string Message, NoticeLevel Level);
+
     /// <summary>
-    /// Runs a store job on the worker with the shared HTTP client; the text it returns lands in the
-    /// Community status line. Without a store address nothing is sent.
+    /// Runs a store job on the worker with the shared HTTP client and shows the text it returns as a notice.
+    /// A job that loads the list (<paramref name="loadsList"/>) also keeps its text as the Community tab's empty or
+    /// error state. A result without text posts no notice (and takes the progress notice down). Without a store address
+    /// nothing is sent. Returns whether the job started.
     /// </summary>
-    private void StartCommunityWork(string busyText, Func<StoreHttpClient, string> work)
+    private bool StartCommunityWork(string busyText, Func<StoreHttpClient, StoreResult> work, bool loadsList = false)
     {
-        if (_busy) return;
+        if (_busy) { Wait(); return false; }
         if (_settings.StoreUrl.Length == 0)
         {
-            _renderer.CommunityStatus = "No store set. On the System tab, press Square and enter the store address.";
-            return;
+            _renderer.CommunityStatus = "No store set. On the System tab, choose Store address and enter the address.";
+            return false;
         }
         _busy = true;
         _renderer.Busy = true;
-        _renderer.CommunityStatus = busyText;
+        if (loadsList) _renderer.CommunityStatus = busyText;
+        _renderer.Notify(busyText, NoticeLevel.Info);
         _worker = new Thread(() =>
         {
-            string message;
+            StoreResult result;
             try
             {
                 _http ??= StoreHttpClient.Create("ProsperoThemes/1.0");
-                message = work(_http);
+                result = work(_http);
             }
-            catch (Exception ex) { message = "Can’t reach the store: " + ex.Message; }
+            catch (Exception ex) { result = new StoreResult("Can’t reach the store: " + ex.Message, NoticeLevel.Error); }
             _results.Post(() =>
             {
-                _renderer.CommunityStatus = message;
+                // The state text is only drawn while the list is empty; a list that is on screen never carries it.
+                if (loadsList)
+                {
+                    _renderer.CommunityStatus = result.Level == NoticeLevel.Error || _community.Count == 0 ? result.Message : "";
+                    _renderer.CommunityError = result.Level == NoticeLevel.Error;
+                }
+                if (result.Message.Length > 0) _renderer.Notify(result.Message, result.Level);
+                else _renderer.ClearNotice();
                 _renderer.Busy = false;
                 _busy = false;
+                // A sort pressed while this job ran was refused ("Please wait"), so the pills moved but the list did
+                // not; load it now, in the sort the pills show.
+                if (_browser.CommunitySort != _listSort) StartCommunityList();
             });
         }) { IsBackground = true, Name = "Community" };
         _worker.Start();
+        return true;
     }
 
     private void StartCommunityList()
     {
         string baseUrl = _settings.StoreUrl;
         var sort = (CommunitySort)_browser.CommunitySort;
-        StartCommunityWork($"Loading themes · {CommunityList.Label(sort)}…", http =>
+        bool started = StartCommunityWork($"Loading themes · {CommunityList.Label(sort)}…", http =>
         {
             HttpResponse answer = http.Get(CommunityList.ListUrl(baseUrl, sort));
-            if (!answer.IsSuccess) return "Store responded with status " + answer.StatusCode + ".";
+            if (!answer.IsSuccess) return new StoreResult("Store responded with status " + answer.StatusCode + ".", NoticeLevel.Error);
             List<CommunityTheme> list = CommunityList.Parse(System.Text.Encoding.UTF8.GetString(answer.Body), baseUrl);
             _results.Post(() =>
             {
                 _renderer.ResetCommunity();
                 _community = list;
                 _renderer.Community = list;
+                // The header names the sort this list came with, not the one the pills show now.
+                _renderer.CommunityListSort = (int)sort;
                 _browser.SetCommunityCount(list.Count);
                 RefreshCommunityBadges();
             });
@@ -394,8 +459,12 @@ internal sealed class ThemeApp : ProsperoApp
                 }
                 catch { /* a missing preview leaves the placeholder */ }
             }
-            return list.Count == 0 ? "No themes in the store yet." : ThemeRenderer.Plural(list.Count, "theme") + " · " + CommunityList.Label(sort);
-        });
+            // A loaded list needs no toast: the screen shows the count and the sort.
+            return list.Count == 0
+                ? new StoreResult("No themes in the store yet.", NoticeLevel.Info)
+                : new StoreResult("", NoticeLevel.Success);
+        }, loadsList: true);
+        if (started) _listSort = (int)sort;
     }
 
     private void StartCommunityDownload(CommunityTheme theme)
@@ -405,7 +474,7 @@ internal sealed class ThemeApp : ProsperoApp
         StartCommunityWork("Downloading “" + theme.Name + "”…", http =>
         {
             HttpResponse answer = http.Get(theme.DownloadUrl);
-            if (!answer.IsSuccess) return "Download failed (" + answer.StatusCode + ").";
+            if (!answer.IsSuccess) return new StoreResult("Download failed (" + answer.StatusCode + ").", NoticeLevel.Error);
             // Checked exactly like a USB import before it is stored.
             bool added = DeviceThemeLibrary.AddToLibrary(answer.Body, theme.Name);
             string digest = SharpProspero.Security.Sha256.HashHex(answer.Body);
@@ -429,9 +498,11 @@ internal sealed class ThemeApp : ProsperoApp
                 _rescanAfterWork = true;
             });
             if (replaced)
-                return "Updated “" + theme.Name + "”" + (theme.Version.Length > 0 ? " to v" + theme.Version : "") +
-                    ". If it is applied, apply it again to see the changes.";
-            return added ? "“" + theme.Name + "” is now in your library." : "“" + theme.Name + "” is already in your library.";
+                return new StoreResult("Updated “" + theme.Name + "”" + (theme.Version.Length > 0 ? " to v" + theme.Version : "") +
+                    ". If it is applied, apply it again to see the changes.", NoticeLevel.Success);
+            return added
+                ? new StoreResult("“" + theme.Name + "” is now in your library.", NoticeLevel.Success)
+                : new StoreResult("“" + theme.Name + "” is already in your library.", NoticeLevel.Info);
         });
     }
 
@@ -445,14 +516,23 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.CommunityUpdates = CommunityList.Updates(_community, _downloads, digests);
     }
 
+    /// <summary>
+    /// Triangle on a store card: likes the theme, or takes the like back when this console already liked it. The
+    /// answer carries the new count and whether the theme is liked now; the heart follows that, and the ids this
+    /// console liked are kept in likes.json so the hearts survive a restart.
+    /// </summary>
     private void StartCommunityLike(CommunityTheme theme)
     {
         string url = CommunityList.LikeUrl(_settings.StoreUrl, theme.Id), device = _settings.DeviceId;
-        StartCommunityWork("Sending like…", http =>
+        bool unlike = _liked.Contains(theme.Id);
+        StartCommunityWork(unlike ? "Removing like…" : "Sending like…", http =>
         {
-            HttpResponse answer = http.Send(SharpProspero.Platform.HttpMethod.Post, url, default, ["X-Device-Id: " + device]);
-            int likes = answer.IsSuccess ? CommunityList.ParseLikes(System.Text.Encoding.UTF8.GetString(answer.Body)) : -1;
-            if (likes < 0) return "Like not saved (" + answer.StatusCode + ").";
+            HttpResponse answer = http.Send(CommunityList.LikeMethod(unlike), url, default, ["X-Device-Id: " + device]);
+            string body = answer.IsSuccess ? System.Text.Encoding.UTF8.GetString(answer.Body) : "";
+            int likes = answer.IsSuccess ? CommunityList.ParseLikes(body) : -1;
+            if (likes < 0) return new StoreResult((unlike ? "Like not removed (" : "Like not saved (") + answer.StatusCode + ").", NoticeLevel.Error);
+            // The store says what it did; without an answer for it, the request decides.
+            bool liked = CommunityList.ParseLiked(body) ?? !unlike;
             _results.Post(() =>
             {
                 var updated = new List<CommunityTheme>(_community);
@@ -460,8 +540,15 @@ internal sealed class ThemeApp : ProsperoApp
                 if (i >= 0) updated[i] = updated[i] with { Likes = likes };
                 _community = updated;
                 _renderer.Community = updated;
+                if (liked) _liked.Add(theme.Id); else _liked.Remove(theme.Id);
+                try
+                {
+                    FileSystem.CreateDirectoryRecursive("/data/prospero-themes");
+                    FileSystem.WriteAllText(CommunityList.LikesPath, CommunityList.FormatLikedIds(_liked));
+                }
+                catch { /* the heart lasts until the app quits */ }
             });
-            return "Thanks! “" + theme.Name + "” now has " + ThemeRenderer.Plural(likes, "like") + ".";
+            return new StoreResult(liked ? "Liked “" + theme.Name + "”." : "Like removed from “" + theme.Name + "”.", NoticeLevel.Success);
         });
     }
 

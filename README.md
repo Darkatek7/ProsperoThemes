@@ -3,11 +3,12 @@
 A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPSA90210`). Tested on firmware
 13.00.
 
-- **Library:** browse your theme packs (`.p5theme`), look at the details and a fullscreen preview, apply one and
-  restore the original look at any time.
+- **Library:** browse your theme packs (`.p5theme`), look at the details (what the theme changes) and a fullscreen
+  preview, apply one and restore the original look at any time. The theme the console shows now is marked "Applied".
 - **Community:** download themes other people published at [themes.darkatek7.com](https://themes.darkatek7.com),
-  sort by rating, downloads or date, and like the ones you enjoy. Themes already in your library carry an
-  "In library" badge; when a creator publishes a new version, the card says "Update".
+  sort them by top rated, most downloaded or new, and like the ones you enjoy. Themes already in your library carry
+  an "In library" badge; when a creator publishes a new version, the card says "Update". A theme you liked shows a
+  heart, and Triangle on it removes the like.
 - **USB import:** packs on a USB drive (its root or a `prospero-themes` folder) are checked and copied into the
   library.
 - **What a theme can change:** the home-screen background, including behind the system tiles (Game Library,
@@ -34,19 +35,28 @@ Your library, backups and settings live in `/data/prospero-themes/`, so updating
 
 ## Controls
 
-| Button | Action |
+| Screen | Buttons |
 |---|---|
-| L1 / R1 | Switch tab (Library, Community, USB Import, System) |
-| D-pad / left stick | Move |
-| X | Details, apply (for a theme with an app background: apply to apps without their own image), download |
-| Square | Fullscreen preview; on Community: change the sort order; on System: store address |
-| Triangle | When applying a theme with an app background: apply to all apps; on Community: like; on System: background scope (apps without their own image / all apps) |
-| Options | Reload the library or the store list; on System: save a firmware report |
-| Circle | Back |
+| Every screen | L1 / R1 switch tab (Library, Community, USB Import, System). D-pad or left stick moves. Circle goes back to the Library. |
+| Library | X opens the details. Square opens the fullscreen preview. Options reloads the library. |
+| Details | X applies the theme (it asks first). Square opens the preview. Circle goes back. |
+| Apply dialog | D-pad chooses, X confirms, Circle cancels. |
+| Preview | X shows or hides the home overlay. Square or Circle goes back. |
+| Community | X downloads (or updates). Triangle likes, or removes your like. Square changes the sort. Options refreshes the list. |
+| USB Import | X imports from USB. |
+| System | D-pad picks a row, X acts on it. |
 
-**Restore defaults** (System tab) puts every changed file back from the backups the app made before the first
-change. Applying a theme starts from the defaults too: whatever an earlier theme changed and the new one does
-not cover goes back to its original first, so themes never stack.
+Results and progress ("Applying theme…", "Download failed (404).") appear as a short message at the bottom of the
+screen.
+
+**Applying asks first.** A theme with an app background asks where that background goes: "Apps without their own
+image" or "All apps" (Cancel is the third choice). The answer is also saved as the App backgrounds setting on the
+System tab, where X switches between the two. Themes without an app background get "Apply theme" or "Cancel".
+
+**Restore defaults** is the last row on the System tab. X opens a dialog that asks first. Cancel is selected at the
+start, so choose "Restore defaults" and press X to go ahead. It puts every changed file back from the backups the
+app made before the first change. Applying a theme starts from the defaults too: whatever an earlier theme changed
+and the new one does not cover goes back to its original first, so themes never stack.
 
 ## Other firmware versions
 
@@ -55,7 +65,7 @@ replaces is compared with the console's own copy (same image size and texture fo
 this console is skipped and listed, never written. After a system update the app notices files the update
 replaced and takes those as the new defaults, so Restore defaults never puts an old firmware's file back.
 
-On another firmware, please send a report: System tab, Options saves
+On another firmware, please send a report: on the System tab, X on the Firmware report row saves
 `/data/prospero-themes/reports/firmware-<version>.json` (and a copy on a connected USB drive). It only
 reads, and describes the files a theme can change (sizes, hashes, formats, the icon list). Attach it to an
 issue on this repository; `ThemePackCreator/theme_pack.py catalog-from-report` turns it into a catalog for
@@ -108,7 +118,9 @@ ShadowMountPlus to register it.
 
 The Community tab talks only to the store address set on the System tab (default
 `https://themes.darkatek7.com`). Likes are counted once per console through a random ID that the app creates on
-first start (`/data/prospero-themes/settings.json`). The ID is anonymous and not linked to your account.
+first start (`/data/prospero-themes/settings.json`); each like sends that ID to the store. The ID is anonymous and
+not linked to your account. The console also keeps its own list of the themes it liked, in
+`/data/prospero-themes/likes.json`, so the hearts show again after a restart. That list stays on the console.
 
 ## License
 

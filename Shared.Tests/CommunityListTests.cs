@@ -29,7 +29,7 @@ public class CommunityListTests
         Assert.Equal(340, a.Downloads);
         Assert.Equal("https://themes.example/api/themes/abc123def456/preview.png", a.PreviewUrl);
         Assert.Equal("https://themes.example/api/themes/abc123def456/download", a.DownloadUrl);
-        Assert.Equal("Background · all apps · 2 app images · 3 icons", a.Contents);
+        Assert.Equal("Background · App background · 2 app images · 3 icons", a.Contents);
         Assert.Null(list[1].PreviewUrl);
         Assert.Equal("https://cdn.example/zz.p5theme", list[1].DownloadUrl);
     }

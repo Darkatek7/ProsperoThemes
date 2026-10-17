@@ -119,6 +119,25 @@ public class ThemeApplierTests
     }
 
     [Fact]
+    public void The_state_file_names_the_applied_pack_until_a_restore()
+    {
+        var fake = DeviceWithLive((Dev1, Live("one")));
+        var applier = Applier(fake);
+        Assert.Null(AppliedTheme.Read(fake.Files.TryGetValue(StatePath, out byte[]? none) ? Encoding.UTF8.GetString(none) : null));
+
+        Assert.True(applier.Apply(SingleTargetPack()).Success);
+        Assert.Equal("t-apply", AppliedTheme.Read(Encoding.UTF8.GetString(fake.Files[StatePath])));
+
+        Assert.True(applier.Restore(SingleTargetPack()).Success);
+        Assert.Null(AppliedTheme.Read(Encoding.UTF8.GetString(fake.Files[StatePath])));
+
+        Assert.True(applier.Apply(SingleTargetPack()).Success);
+        Assert.Equal("t-apply", AppliedTheme.Read(Encoding.UTF8.GetString(fake.Files[StatePath])));
+        Assert.True(applier.RestoreOriginals().Success);
+        Assert.Null(AppliedTheme.Read(Encoding.UTF8.GetString(fake.Files[StatePath])));
+    }
+
+    [Fact]
     public void RestoreOriginals_undoes_every_pack_applied_since_the_backup()
     {
         byte[] live1 = Live("one"), live2 = Live("two");

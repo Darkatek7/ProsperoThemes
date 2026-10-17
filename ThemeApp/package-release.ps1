@@ -30,8 +30,10 @@ if (-not $SkipBuild) {
 }
 
 $module = Join-Path $here "out/module"
-foreach ($required in "eboot.bin", "sce_sys/param.json", "sce_sys/icon0.png", "sce_module/libc.prx",
-                      "sce_sys/prospero-themes/ThemeHelper.elf", "sce_sys/prospero-themes/blue-hour.p5theme") {
+# A missing font atlas stops the app at startup, so every atlas the renderer loads is checked here.
+$fonts = "inter-22", "inter-28", "inter-28-semibold", "inter-36", "inter-48", "inter-76" | ForEach-Object { "sce_sys/prospero-themes/$_.p5font" }
+foreach ($required in @("eboot.bin", "sce_sys/param.json", "sce_sys/icon0.png", "sce_module/libc.prx",
+                        "sce_sys/prospero-themes/ThemeHelper.elf", "sce_sys/prospero-themes/blue-hour.p5theme") + $fonts) {
     if (-not (Test-Path (Join-Path $module $required))) { throw "Package is missing $required." }
 }
 
