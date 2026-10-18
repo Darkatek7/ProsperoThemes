@@ -16,6 +16,12 @@ public sealed partial class ThemeRenderer
     /// header names this one, not the sort the pills have moved to, so "24 themes · Top rated" always describes the list.
     /// </summary>
     public int CommunityListSort { get; set; } = -1;
+    /// <summary>
+    /// The category (an index into <see cref="CommunityCategories.List"/>, -1 for all themes) the list on screen was loaded
+    /// with, like <see cref="CommunityListSort"/>: the count line and the empty state describe the list, not the chip the
+    /// cursor has moved to. Only read once <see cref="CommunityListSort"/> says a list was loaded.
+    /// </summary>
+    public int CommunityListCategory { get; set; } = -1;
     /// <summary>Whether <see cref="CommunityStatus"/> reports a failed load (the empty state then says so and offers a retry).</summary>
     public bool CommunityError { get; set; }
 
@@ -30,13 +36,21 @@ public sealed partial class ThemeRenderer
     private static readonly HintItem[] CommunityUpdateUnlikeHints =
         [new(PadButton.Cross, "Update"), new(PadButton.Triangle, "Unlike"), new(PadButton.Options, "Refresh"), new(PadButton.Circle, "Back")];
     private static readonly HintItem[] CommunityEmptyHints = [new(PadButton.Options, "Refresh"), new(PadButton.Circle, "Back")];
+    // With the filter chips focused: X picks the chip; the d-pad hint says how to get back to the cards when there are some.
+    private static readonly HintItem[] CommunityChipHints =
+        [new(PadButton.Cross, "Select"), new(PadButton.DPad, "Move · Down for themes"), new(PadButton.Square, "Sort"), new(PadButton.Circle, "Back")];
+    private static readonly HintItem[] CommunityChipEmptyHints =
+        [new(PadButton.Cross, "Select"), new(PadButton.DPad, "Move"), new(PadButton.Square, "Sort"), new(PadButton.Circle, "Back")];
 
     /// <summary>
     /// The footer hints of the store: Update instead of Download for a theme with a newer version, Unlike instead of
-    /// Like for one this console liked. With no list there is nothing to download or like, only to refresh.
+    /// Like for one this console liked. With no list there is nothing to download or like, only to refresh. While the
+    /// filter chips have the focus the cards are not in play, so the hints are the chips' (also for an empty list: the
+    /// chips are how to pick another category).
     /// </summary>
     internal HintItem[] CommunityHints(ThemeBrowser browser)
     {
+        if (browser.CommunityChipFocused) return Community.Count == 0 ? CommunityChipEmptyHints : CommunityChipHints;
         if (Community.Count == 0 || SelectedCommunityId is not { } id) return CommunityEmptyHints;
         bool update = CommunityUpdates.Contains(id), liked = CommunityLiked.Contains(id);
         return update ? (liked ? CommunityUpdateUnlikeHints : CommunityUpdateLikeHints)
@@ -50,8 +64,10 @@ public sealed partial class ThemeRenderer
     // three text lines of the panel leave (a centre crop of the preview, about 2:1, never a stretch).
     private const int CommunityColumns = 4, CommunityGap = 24, CommunityVisibleRows = 2;
     internal const int CommunityCardW = (Theme.ContentWidth - (CommunityColumns - 1) * CommunityGap) / CommunityColumns;   // 414
-    // The sort control sits under the eyebrow row; the grid starts below it with room for the focus glow (12 px).
-    private const int CommunitySortY = Theme.ContentTop + 36, CommunitySortH = 44;
+    // The sort pills and the filter chips share one row under the eyebrow row; the grid starts below it with room for the
+    // focus glow (12 px). The row is 8 px lower than the sort pills alone were, so the glow of a focused chip (12 px) stays
+    // clear of the eyebrow line above, and it ends 18 px above the grid.
+    internal const int CommunitySortY = Theme.ContentTop + 44, CommunitySortH = 44;
     internal const int CommunityGridTop = 282;
     internal const int CommunityRowGap = CommunityGap;
     internal const int CommunityCardH = (Theme.ContentBottom - CommunityGridTop - CommunityRowGap) / CommunityVisibleRows;   // 319
@@ -84,9 +100,18 @@ public sealed partial class ThemeRenderer
     private int _communityDecodes;
     /// <summary>How many store cards have been made so far (a card is made once, and again only when it changes); for the tests.</summary>
     internal int CommunityBakes { get; private set; }
+    // The row's layout, measured once: the sort pills' widths, then the filter chips. Chip x is relative to the first chip;
+    // the chips scroll inside the viewport that starts at _communityChipsLeft and ends at the right safe edge.
     private int[]? _communitySortWidth;
+    private int[]? _communityChipX, _communityChipW;
+    private int _communityChipsLeft, _communityChipsTotal;
+    // Scroll of the chips in pixels (eased toward the position the focused or chosen chip needs), where it is heading, and
+    // the view start it was last placed for (a view that is entered again starts in place instead of gliding in).
+    private float _communityChipScroll, _communityChipTarget;
+    private bool _communityChipReady;
+    private double _communityChipViewStart = -1;
     private string _communityCountText = "";
-    private int _communityCountFor = -1, _communityCountSort = -1;
+    private int _communityCountFor = -1, _communityCountSort = -1, _communityCountCategory = -2;
     private string? _communityStateHeading, _communityStateText;
     private IReadOnlyList<string> _communityStateBody = Array.Empty<string>();
     private readonly Dictionary<int, byte[]> _communityHeartMasks = new();
@@ -109,39 +134,153 @@ public sealed partial class ThemeRenderer
         if (count > 0) DrawRight(_small, s, CommunityCountText(count, browser), Theme.ContentRight, y, Muted);
 
         // The three sorts as a row of capsules: the active one white, the others glass. The Square hint follows on the same line.
-        if (_communitySortWidth is null) LayoutCommunitySort();
+        if (_communitySortWidth is null) LayoutCommunityRow();
         int x = Theme.SafeX, top = CommunitySortY + enter;
         for (int i = 0; i < _communitySortWidth!.Length; i++)
         {
             bool on = i == browser.CommunitySort;
             int w = _communitySortWidth[i];
-            if (on) Paint.Capsule(s, x, top, w, CommunitySortH, White);
-            else
-            {
-                Paint.Capsule(s, x, top, w, CommunitySortH, Theme.Panel);
-                Paint.StrokeRoundedRect(s, x, top, w, CommunitySortH, CommunitySortH / 2, 1, Theme.PanelStroke);
-            }
-            DrawMid(_label, s, CommunityList.Label((CommunitySort)i), x + w / 2, top + (CommunitySortH - _label.LineHeight) / 2, on ? PillInk : Muted);
+            DrawCommunityPill(s, x, top, w, on, false, CommunityList.Label((CommunitySort)i));
             x += w + Theme.Unit;
         }
         Hint(s, PadButton.Square, "Sort", x + Theme.Unit, top + (CommunitySortH - _small.LineHeight) / 2);
+        DrawCommunityChips(s, browser, top);
     }
 
-    private void LayoutCommunitySort()
+    // One capsule of the row: the active sort or the chosen category white, the others glass. A chip the cursor is on (and
+    // that is not the chosen one) reads white on the glass; its ring is drawn separately, over its neighbours.
+    private void DrawCommunityPill(Surface s, int x, int top, int w, bool on, bool cursor, string label)
+    {
+        if (on) Paint.Capsule(s, x, top, w, CommunitySortH, White);
+        else
+        {
+            Paint.Capsule(s, x, top, w, CommunitySortH, Theme.Panel);
+            Paint.StrokeRoundedRect(s, x, top, w, CommunitySortH, CommunitySortH / 2, 1, Theme.PanelStroke);
+        }
+        DrawMid(_label, s, label, x + w / 2, top + (CommunitySortH - _label.LineHeight) / 2, on ? PillInk : cursor ? White : Muted);
+    }
+
+    // The sort pills' widths, then the filter chips (All and the twelve categories) after the Sort hint: all measured once.
+    private const int CommunityChipPad = 20, CommunityChipsGap = 48, CommunityChipPeek = 80;
+
+    private static string CommunityChipLabel(int chip) => CommunityCategories.LabelAt(chip - 1);
+
+    private void LayoutCommunityRow()
     {
         _communitySortWidth = new int[3];
-        for (int i = 0; i < 3; i++) _communitySortWidth[i] = _label.MeasureText(CommunityList.Label((CommunitySort)i)) + 2 * 24;
+        int x = Theme.SafeX;
+        for (int i = 0; i < 3; i++)
+        {
+            _communitySortWidth[i] = _label.MeasureText(CommunityList.Label((CommunitySort)i)) + 2 * 24;
+            x += _communitySortWidth[i] + Theme.Unit;
+        }
+        // The chips start a little after the Square hint, which sits one unit after the last pill.
+        _communityChipsLeft = x + Theme.Unit + HintWidth(new HintItem(PadButton.Square, "Sort")) + CommunityChipsGap;
+        int chips = ThemeBrowser.CommunityChipCount;
+        _communityChipX = new int[chips];
+        _communityChipW = new int[chips];
+        int at = 0;
+        for (int i = 0; i < chips; i++)
+        {
+            _communityChipX[i] = at;
+            at += (_communityChipW[i] = _label.MeasureText(CommunityChipLabel(i)) + 2 * CommunityChipPad) + Theme.Unit;
+        }
+        _communityChipsTotal = at - Theme.Unit;
     }
 
-    // "24 themes · Top rated", from the sort the list was loaded with; formatted again only when either changes.
+    /// <summary>Screen x of the left edge of chip <paramref name="chip"/> (0 is "All") as the row is scrolled now; for the tests.</summary>
+    internal int CommunityChipScreenX(int chip)
+    {
+        if (_communityChipX is null) LayoutCommunityRow();
+        return _communityChipsLeft + _communityChipX![chip] - (int)MathF.Round(_communityChipScroll);
+    }
+
+    /// <summary>Width of chip <paramref name="chip"/>; for the tests.</summary>
+    internal int CommunityChipWidth(int chip)
+    {
+        if (_communityChipW is null) LayoutCommunityRow();
+        return _communityChipW![chip];
+    }
+
+    /// <summary>The viewport the chips scroll in: from <c>Left</c> to the right safe edge.</summary>
+    internal (int Left, int Right) CommunityChipViewport
+    {
+        get
+        {
+            if (_communityChipX is null) LayoutCommunityRow();
+            return (_communityChipsLeft, Theme.ContentRight);
+        }
+    }
+
+    // The chip that has to stay in view: the one the cursor is on, or else the chosen one.
+    private static int CommunityChipInView(ThemeBrowser browser) =>
+        Math.Clamp(browser.CommunityChipFocused ? browser.CommunityChip : browser.CommunityCategory + 1, 0, ThemeBrowser.CommunityChipCount - 1);
+
+    // Moves the chips only when the chip in view would otherwise leave the viewport (keeping a neighbour peeking in), eased
+    // like the grid; the first draw of a view starts in place.
+    private void UpdateCommunityChipScroll(ThemeBrowser browser)
+    {
+        if (_communityChipViewStart != _viewStart) { _communityChipViewStart = _viewStart; _communityChipReady = false; }
+        int viewWidth = Theme.ContentRight - _communityChipsLeft;
+        int chip = CommunityChipInView(browser);
+        float left = _communityChipX![chip], right = left + _communityChipW![chip];
+        float target = _communityChipTarget;
+        if (left - target < CommunityChipPeek) target = left - CommunityChipPeek;
+        else if (right - target > viewWidth - CommunityChipPeek) target = right - viewWidth + CommunityChipPeek;
+        target = Math.Clamp(target, 0f, Math.Max(0, _communityChipsTotal - viewWidth));
+        _communityChipTarget = target;
+        if (!_communityChipReady) { _communityChipScroll = target; _communityChipReady = true; }
+        else
+        {
+            _communityChipScroll += (target - _communityChipScroll) * CommunityEase;
+            if (MathF.Abs(target - _communityChipScroll) < 0.5f) _communityChipScroll = target;
+        }
+    }
+
+    /// <summary>
+    /// The filter chips, to the right of the sort pills and a hairline: the chosen one white, the others glass. They are
+    /// cut at the viewport's edges (a half chip says there is more) and scroll to keep the focused or chosen one in view.
+    /// The cursor's chip gets the focus ring when the row has the focus, drawn last so its glow lies over the neighbours.
+    /// </summary>
+    private void DrawCommunityChips(Surface s, ThemeBrowser browser, int top)
+    {
+        UpdateCommunityChipScroll(browser);
+        int left = _communityChipsLeft, viewWidth = Theme.ContentRight - left;
+        Paint.FillRect(s, left - CommunityChipsGap / 2, top + 8, 1, CommunitySortH - 16, White.WithAlpha(36));
+        Surface strip = s.Region(left, top, viewWidth, CommunitySortH);
+        int scroll = (int)MathF.Round(_communityChipScroll);
+        int chosen = browser.CommunityCategory + 1, cursor = browser.CommunityChipFocused ? browser.CommunityChip : -1;
+        for (int i = 0; i < _communityChipX!.Length; i++)
+        {
+            int x = _communityChipX[i] - scroll, w = _communityChipW![i];
+            if (x + w <= 0 || x >= viewWidth) continue;
+            DrawCommunityPill(strip, x, 0, w, i == chosen, i == cursor, CommunityChipLabel(i));
+        }
+        if (cursor < 0) return;
+        // The ring and its glow reach 12 px past the chip, so they get a band a little wider than the viewport.
+        const int room = 14;
+        Surface ring = s.Region(left - room, top - room, viewWidth + 2 * room, CommunitySortH + 2 * room);
+        Paint.FocusRing(ring, _communityChipX[cursor] - scroll + room, room, _communityChipW![cursor], CommunitySortH, CommunitySortH / 2, Accent);
+    }
+
+    // The category the list on screen was loaded with (-1 for all themes). Before the app has loaded any list (the tests
+    // draw one directly) it is the chip that is chosen.
+    private int CommunityLoadedCategory(ThemeBrowser browser) => CommunityListSort is >= 0 and <= 2 ? CommunityListCategory : browser.CommunityCategory;
+
+    // "24 themes · Anime · Top rated" (without the category for all themes), from the sort and category the list was loaded
+    // with; formatted again only when one of them or the count changes.
     private string CommunityCountText(int count, ThemeBrowser browser)
     {
         int sort = CommunityListSort is >= 0 and <= 2 ? CommunityListSort : browser.CommunitySort;
-        if (count != _communityCountFor || sort != _communityCountSort)
+        int category = CommunityLoadedCategory(browser);
+        if (category < -1 || category >= CommunityCategories.Count) category = -1;
+        if (count != _communityCountFor || sort != _communityCountSort || category != _communityCountCategory)
         {
             _communityCountFor = count;
             _communityCountSort = sort;
-            _communityCountText = Plural(count, "theme") + " · " + CommunityList.Label((CommunitySort)sort);
+            _communityCountCategory = category;
+            _communityCountText = Plural(count, "theme") + (category >= 0 ? " · " + CommunityCategories.LabelAt(category) : "")
+                + " · " + CommunityList.Label((CommunitySort)sort);
         }
         return _communityCountText;
     }
@@ -183,8 +322,8 @@ public sealed partial class ThemeRenderer
             CommunityCard(items[index]).Draw(band, x - CommunityBandLeft, y - CommunityBandTop);
             if (index == selected) { focusShown = true; focusX = x - CommunityBandLeft; focusY = y - CommunityBandTop; }
         }
-        // After every card, so the glow lies over the neighbours instead of under them.
-        if (focusShown) Paint.FocusRing(band, focusX, focusY, CommunityCardW, CommunityCardH, Theme.RadiusCard);
+        // After every card, so the glow lies over the neighbours instead of under them. Not while the filter chips have the focus.
+        if (focusShown && !browser.CommunityChipFocused) Paint.FocusRing(band, focusX, focusY, CommunityCardW, CommunityCardH, Theme.RadiusCard);
         PrefetchCommunityCards(items, top, rows);
     }
 
@@ -213,6 +352,12 @@ public sealed partial class ThemeRenderer
         if (browser.StoreUrl.Length == 0) { heading = "No store set"; body = "Set the store address on the System tab."; }
         else if (Busy) { heading = "Loading themes…"; body = "Getting the list from the store."; }
         else if (CommunityError) { heading = "Can’t load the themes"; body = CommunityStatus; }
+        else if (CommunityStatus.Length > 0 && CommunityLoadedCategory(browser) >= 0)
+        {
+            // A filtered list that came back empty: the store has themes, only none in this category.
+            heading = "No themes in this category yet";
+            body = "Pick another category above, or press Options to check again.";
+        }
         else if (CommunityStatus.Length > 0) { heading = "No themes in the store yet"; body = "Press Options to check again."; }
         else { heading = "No themes loaded"; body = "Press Options to refresh."; }
         bool failed = !Busy && browser.StoreUrl.Length > 0 && CommunityError;
@@ -297,10 +442,49 @@ public sealed partial class ThemeRenderer
             DrawCommunityHeart(c, 14 + (40 - 22) / 2, 14 + (40 - CommunityHeartHeight(22)) / 2, 22, filled: true, CommunityHeart);
         }
 
+        DrawCommunityCategories(c, t);
         DrawCommunityPanel(c, t, update, liked);
         Paint.StrokeRoundedRect(c, 0, 0, CommunityCardW, CommunityCardH, Theme.RadiusCard, 1, Theme.PanelStroke);
         _communityStamps[t.Id] = new CommunityStamp(t, preview ? flags : (byte)(flags & ~CommunityFlagPreview));
         return _communityImages.Add(t.Id, card, CommunityCardW, CommunityCardH, Theme.RadiusCard);
+    }
+
+    // The theme's categories as small ink-glass capsules along the bottom edge of the picture (the badges of the pack's state
+    // are at its top): as many whole ones as fit, then "+N" for the rest. Made with the card, so a frame only copies them.
+    internal const int CommunityCategoryBadgeH = 32;
+    private void DrawCommunityCategories(Surface card, CommunityTheme t)
+    {
+        IReadOnlyList<string> ids = t.Categories;
+        if (ids.Count == 0) return;
+        const int pad = 14, gap = 8, edge = 14, available = CommunityCardW - 2 * edge;
+        var labels = new string[ids.Count];
+        var widths = new int[ids.Count];
+        for (int i = 0; i < labels.Length; i++)
+        {
+            labels[i] = CommunityCategories.LabelAt(CommunityCategories.IndexOf(ids[i]));
+            widths[i] = _small.MeasureText(labels[i]) + 2 * pad;
+        }
+        // The most whole badges that fit with the "+N" the others need.
+        int shown = labels.Length;
+        while (shown > 0 && BadgesWidth(shown) > available) shown--;
+        int BadgesWidth(int n)
+        {
+            int total = -gap;
+            for (int i = 0; i < n; i++) total += widths[i] + gap;
+            if (n < labels.Length) total += gap + _small.MeasureText("+" + (labels.Length - n)) + 2 * pad;
+            return total;
+        }
+        int x = edge, top = CommunityImageH - edge - CommunityCategoryBadgeH;
+        for (int i = 0; i <= shown && i < labels.Length; i++)
+        {
+            bool more = i == shown;   // the badge after the last whole one is the "+N"
+            string text = more ? "+" + (labels.Length - shown) : labels[i];
+            int w = more ? _small.MeasureText(text) + 2 * pad : widths[i];
+            Paint.Capsule(card, x, top, w, CommunityCategoryBadgeH, Theme.Ink.WithAlpha(200));
+            Paint.StrokeRoundedRect(card, x, top, w, CommunityCategoryBadgeH, CommunityCategoryBadgeH / 2, 1, White.WithAlpha(52));   // the shape still reads on a dark picture
+            DrawMid(_small, card, text, x + w / 2, top + (CommunityCategoryBadgeH - _small.LineHeight) / 2, White);
+            x += w + gap;
+        }
     }
 
     // The picture: the store preview cropped to the picture's shape and scaled once, or the shared placeholder until it has

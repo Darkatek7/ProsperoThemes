@@ -19,6 +19,56 @@ public sealed record CommunityTheme(
     /// library's own line for the same pack; the store's summary has no sound or video counts, so those are absent.
     /// </summary>
     public string Contents => PackSummary.Format(Fallback, AllApps, PerApp, Icons, Tiles);
+
+    /// <summary>
+    /// The category ids the store lists the theme under (0 to 3, from <see cref="CommunityCategories"/>); empty for a
+    /// theme without any and for a store that predates categories. An init property, so the positional constructor
+    /// stays as it was and a <c>with</c> copy (a like or download count coming in) keeps it.
+    /// </summary>
+    public IReadOnlyList<string> Categories { get; init; } = Array.Empty<string>();
+}
+
+/// <summary>One theme category: the id the store's API uses and the label the app shows.</summary>
+public readonly record struct CommunityCategory(string Id, string Label);
+
+/// <summary>
+/// The store's fixed category list, in the order the filter chips show it. MUST MATCH <c>web/shared/src/categories.ts</c>
+/// (ids and labels, same order): the store validates <c>?category=</c> against its copy and answers 400 for an id it
+/// does not know.
+/// </summary>
+public static class CommunityCategories
+{
+    public static readonly CommunityCategory[] List =
+    [
+        new("anime", "Anime"),
+        new("games", "Games"),
+        new("movies-tv", "Movies & TV"),
+        new("cartoon", "Cartoon"),
+        new("nature", "Nature"),
+        new("space", "Space"),
+        new("fantasy", "Fantasy"),
+        new("sci-fi", "Sci-Fi"),
+        new("pixel-art", "Pixel art"),
+        new("minimal", "Minimal"),
+        new("abstract", "Abstract"),
+        new("seasonal", "Seasonal"),
+    ];
+
+    public static int Count => List.Length;
+
+    /// <summary>The index of <paramref name="id"/> in <see cref="List"/>, or -1 when the store does not know it.</summary>
+    public static int IndexOf(string id)
+    {
+        for (int i = 0; i < List.Length; i++)
+            if (string.Equals(List[i].Id, id, StringComparison.Ordinal)) return i;
+        return -1;
+    }
+
+    /// <summary>The id at <paramref name="index"/> (an index into <see cref="List"/>), or null for -1 ("All") and anything out of range.</summary>
+    public static string? IdAt(int index) => (uint)index < (uint)List.Length ? List[index].Id : null;
+
+    /// <summary>The label at <paramref name="index"/>, or "All" for -1 and anything out of range.</summary>
+    public static string LabelAt(int index) => (uint)index < (uint)List.Length ? List[index].Label : "All";
 }
 
 /// <summary>
@@ -41,8 +91,13 @@ public static class CommunityList
         _ => "Top rated",
     };
 
-    public static string ListUrl(string baseUrl, CommunitySort sort, int page = 1, int pageSize = 24) =>
-        $"{baseUrl.TrimEnd('/')}/api/themes?sort={SortKey(sort)}&page={page}&pageSize={pageSize}";
+    /// <summary>
+    /// The list request. <paramref name="category"/> is a category id (see <see cref="CommunityCategories"/>); without
+    /// one the store lists every theme. The id is escaped, so only what the store would accept reaches it intact.
+    /// </summary>
+    public static string ListUrl(string baseUrl, CommunitySort sort, string? category = null, int page = 1, int pageSize = 24) =>
+        $"{baseUrl.TrimEnd('/')}/api/themes?sort={SortKey(sort)}&page={page}&pageSize={pageSize}"
+        + (string.IsNullOrEmpty(category) ? "" : "&category=" + Uri.EscapeDataString(category));
 
     public static string LikeUrl(string baseUrl, string id) => $"{baseUrl.TrimEnd('/')}/api/themes/{Uri.EscapeDataString(id)}/like";
 
@@ -65,9 +120,29 @@ public static class CommunityList
                 e["size"].AsLong(), e.GetInt("likes"), e.GetInt("downloads"),
                 Absolute(baseUrl, e.GetString("previewUrl")), Absolute(baseUrl, download)!,
                 s.GetBool("fallback"), s.GetBool("allApps"), s.GetInt("perApp"), s.GetInt("icons"), s.GetInt("tiles"),
-                IsDigest(e.GetString("sha256")) ? e.GetString("sha256").ToLowerInvariant() : null));
+                IsDigest(e.GetString("sha256")) ? e.GetString("sha256").ToLowerInvariant() : null)
+            { Categories = ParseCategories(e["categories"]) });
         }
         return list;
+    }
+
+    /// <summary>
+    /// The known category ids of a <c>categories</c> array, in the store's order. Ids this app does not know (a store
+    /// newer than the app), repeats and anything that is not a string are dropped; a missing field (a store that
+    /// predates categories) gives an empty list.
+    /// </summary>
+    private static IReadOnlyList<string> ParseCategories(JsonValue array)
+    {
+        if (array.Type != JsonType.Array || array.Count == 0) return Array.Empty<string>();
+        var ids = new List<string>(array.Count);
+        for (int i = 0; i < array.Count; i++)
+        {
+            JsonValue item = array[i];
+            if (item.Type != JsonType.String) continue;
+            int index = CommunityCategories.IndexOf(item.AsString());
+            if (index >= 0 && !ids.Contains(CommunityCategories.List[index].Id)) ids.Add(CommunityCategories.List[index].Id);
+        }
+        return ids.Count == 0 ? Array.Empty<string>() : ids;
     }
 
     /// <summary>

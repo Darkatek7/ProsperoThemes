@@ -88,6 +88,18 @@ launch evidence are recorded separately below.
   applied theme changes on the console only after it is applied again.
 - **Community controls** (Community tab): the d-pad moves between the cards, X downloads (or updates), Square changes
   the sort (Top rated, Most downloaded, New), Options refreshes the list, Circle goes back to the Library.
+- **Category filter** (Community tab): a row of chips to the right of the sort pills, "All" and the store's twelve
+  categories (Anime, Games, Movies & TV, Cartoon, Nature, Space, Fantasy, Sci-Fi, Pixel art, Minimal, Abstract,
+  Seasonal). D-pad up from the cards' top row focuses the row (with no cards, Up and Down toggle between it and the
+  cards, so another category can always be picked); Left and Right move between the chips, X chooses the focused chip
+  (the list reloads with `?category=<id>`, the cursor goes back to the first card), Down returns to the cards. Square
+  (sort) and Options (refresh) work from either row; Triangle and X keep their meaning on the cards only. The chosen
+  chip is white, the focused one carries the focus ring, and the row scrolls to keep the focused (else the chosen) chip
+  in view. The count line names what the list on screen was loaded with ("24 themes · Anime · Top rated"), and an
+  empty filter says "No themes in this category yet". A card lists its categories as small capsules along the bottom of
+  its picture. A press while the app is busy moves the chip but starts no load; the list is loaded as soon as the job
+  ends (the same rule as the sort). The category ids and labels in `CommunityCategories` (`Library/CommunityList.cs`)
+  must match `web/shared/src/categories.ts`.
 - **Likes** (Community tab): Triangle likes the selected theme. On a theme this console already liked, Triangle removes
   the like (the footer says "Unlike" there). A liked theme shows a heart on its card. The request is a POST to
   the store's `/api/themes/<id>/like` (a DELETE for an unlike), with the console's device ID in an `X-Device-Id`

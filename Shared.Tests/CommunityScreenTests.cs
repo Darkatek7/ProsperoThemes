@@ -89,8 +89,259 @@ public unsafe class CommunityScreenTests
         Assert.Equal(Theme.ContentBottom, ThemeRenderer.CommunityGridTop + 2 * ThemeRenderer.CommunityCardH + ThemeRenderer.CommunityRowGap);
         Assert.Equal(ThemeRenderer.CommunityCardH + ThemeRenderer.CommunityRowGap, ThemeRenderer.CommunityRowStride);
         // The focus glow reaches 12 px: it must stay clear of the sort row above and the footer below.
-        Assert.True(ThemeRenderer.CommunityGridTop - 12 > 212 + 44, "glow touches the sort row");
+        Assert.True(ThemeRenderer.CommunityGridTop - 12 > ThemeRenderer.CommunitySortY + ThemeRenderer.CommunitySortH, "glow touches the sort row");
         Assert.True(Theme.ContentBottom + 12 < Theme.FooterY, "glow touches the footer");
+    }
+
+    [Fact]
+    public void The_chip_rows_glow_stays_clear_of_the_eyebrow_line_and_of_the_cards()
+    {
+        // A focused chip's ring and glow reach 12 px past its capsule.
+        int eyebrowBottom = Theme.ContentTop + Font("inter-22.p5font").LineHeight;
+        Assert.True(ThemeRenderer.CommunitySortY - 12 >= eyebrowBottom, "chip glow touches the eyebrow line and the count");
+        Assert.True(ThemeRenderer.CommunitySortY + ThemeRenderer.CommunitySortH + 12 <= ThemeRenderer.CommunityGridTop, "chip glow reaches the cards");
+    }
+
+    // ---- Filter chips -------------------------------------------------------------------------------------------------
+
+    private static readonly UiInput Up = UiInput.None with { Up = true }, Down = UiInput.None with { Down = true };
+    private static readonly UiInput Left = UiInput.None with { Left = true }, Right = UiInput.None with { Right = true };
+    private static readonly UiInput Confirm = UiInput.None with { Confirm = true };
+
+    private static int ChipRowY => ThemeRenderer.CommunitySortY;
+    private static bool Accentish(uint p) => ((p >> 16) & 0xFF) is > 120 and < 190 && ((p >> 8) & 0xFF) > 180 && (p & 0xFF) > 225;
+
+    // The focus ring is a 3 px Accent band 4 to 6 px above the chip's top edge: the pixel 5 px above its middle.
+    private static bool RingOnChip(Surface s, ThemeRenderer r, int chip) =>
+        Accentish(Px(s, r.CommunityChipScreenX(chip) + r.CommunityChipWidth(chip) / 2, ChipRowY - 5));
+
+    [Fact]
+    public void The_chip_row_shows_all_chosen_white_and_gives_the_focused_chip_a_ring()
+    {
+        using var screen = new Screen(8);
+        ThemeRenderer r = screen.Renderer;
+        Surface s = screen.Settle();
+        // "All" is the chosen chip: white inside its capsule (left of the label), and it is the first chip of the viewport.
+        var (left, right) = r.CommunityChipViewport;
+        Assert.Equal(left, r.CommunityChipScreenX(0));
+        Assert.True(left > 700 && left < 1000, "the chips start after the sort pills and their hint");
+        Assert.True(Bright(Px(s, r.CommunityChipScreenX(0) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
+        Assert.False(Bright(Px(s, r.CommunityChipScreenX(2) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));   // Games: glass
+        Assert.False(RingOnChip(s, r, 0));                // a card has the focus
+        Assert.True(Bright(Px(s, CardX(0) + w() / 2, ThemeRenderer.CommunityGridTop - 5)));   // its ring
+
+        screen.Browser.Update(Up);
+        s = screen.Settle();
+        Assert.True(RingOnChip(s, r, 0));                 // the chip has it now
+        Assert.False(Bright(Px(s, CardX(0) + w() / 2, ThemeRenderer.CommunityGridTop - 5)));   // and the card has not
+
+        screen.Browser.Update(Right); screen.Browser.Update(Right);
+        s = screen.Settle();
+        Assert.False(RingOnChip(s, r, 0));
+        Assert.True(RingOnChip(s, r, 2));
+        // The cursor is on Games but nothing is chosen yet: "All" stays white, Games stays glass.
+        Assert.True(Bright(Px(s, r.CommunityChipScreenX(0) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
+        Assert.False(Bright(Px(s, r.CommunityChipScreenX(2) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
+        screen.Browser.Update(Confirm);
+        Assert.Equal(1, screen.Browser.CommunityCategory);
+        s = screen.Settle();
+        Assert.False(Bright(Px(s, r.CommunityChipScreenX(0) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
+        Assert.True(Bright(Px(s, r.CommunityChipScreenX(2) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
+
+        static int w() => ThemeRenderer.CommunityCardW;
+    }
+
+    [Fact]
+    public void The_chips_scroll_so_the_focused_one_stays_inside_the_viewport_and_never_past_the_ends()
+    {
+        using var screen = new Screen(8);
+        ThemeRenderer r = screen.Renderer;
+        var (left, right) = r.CommunityChipViewport;
+        int last = ThemeBrowser.CommunityChipCount - 1;
+        screen.Settle();
+        // Not every chip fits at first: that is what the scrolling is for.
+        Assert.True(r.CommunityChipScreenX(last) + r.CommunityChipWidth(last) > right, "all the chips fit; the row needs no scroll");
+
+        screen.Browser.Update(Up);
+        for (int chip = 1; chip <= last; chip++)
+        {
+            screen.Browser.Update(Right);
+            Surface s = screen.Settle();
+            int x = r.CommunityChipScreenX(chip), w = r.CommunityChipWidth(chip);
+            Assert.True(x >= left && x + w <= right, $"chip {chip} is outside the viewport ({x}..{x + w} of {left}..{right})");
+            Assert.True(RingOnChip(s, r, chip), $"chip {chip} has no ring");
+        }
+        // At the last chip the row is as far as it goes: its right edge is the viewport's, not further in.
+        Assert.Equal(right, r.CommunityChipScreenX(last) + r.CommunityChipWidth(last));
+        for (int chip = last - 1; chip >= 0; chip--)
+        {
+            screen.Browser.Update(Left);
+            screen.Settle();
+            int x = r.CommunityChipScreenX(chip);
+            Assert.True(x >= left && x + r.CommunityChipWidth(chip) <= right, $"chip {chip} is outside the viewport on the way back");
+        }
+        Assert.Equal(left, r.CommunityChipScreenX(0));   // back at the start, not scrolled past it
+    }
+
+    [Fact]
+    public void The_scroll_glides_between_chips_and_snaps_when_the_tab_is_entered_again()
+    {
+        using var screen = new Screen(8);
+        ThemeRenderer r = screen.Renderer;
+        int last = ThemeBrowser.CommunityChipCount - 1;
+        var (left, right) = r.CommunityChipViewport;
+        screen.Settle();
+        screen.Browser.Update(Up);
+        for (int i = 0; i < last; i++) screen.Browser.Update(Right);
+        screen.Frame();
+        // One frame later the row has started to move but is not there yet.
+        int x = r.CommunityChipScreenX(last) + r.CommunityChipWidth(last);
+        Assert.True(x > right, "the scroll jumped instead of gliding");
+        Assert.True(r.CommunityChipScreenX(0) < left, "the scroll has not started");
+        screen.Settle();
+        Assert.Equal(right, r.CommunityChipScreenX(last) + r.CommunityChipWidth(last));
+
+        // Leave the tab in the middle of a glide back to the start and come back: the first frame has the row in place
+        // (the chosen chip, "All", is what has to be in view) instead of gliding the rest of the way.
+        screen.Browser.Update(Up);
+        for (int i = 0; i < last; i++) screen.Browser.Update(Left);
+        screen.Frame();
+        Assert.True(r.CommunityChipScreenX(0) < left);
+        screen.Browser.Update(UiInput.None with { PageDown = true });
+        screen.Frame(5);
+        screen.Browser.Update(UiInput.None with { PageUp = true });
+        Assert.Equal(ThemeView.Community, screen.Browser.View);
+        screen.Frame();
+        Assert.Equal(left, r.CommunityChipScreenX(0));
+    }
+
+    [Fact]
+    public void Footer_hints_while_the_chips_are_focused_are_the_chips_hints_even_without_cards()
+    {
+        using var screen = new Screen(3);
+        ThemeRenderer r = screen.Renderer;
+        string[] Labels() => r.CommunityHints(screen.Browser).Select(h => h.Label).ToArray();
+        Assert.Equal(["Download", "Like", "Refresh", "Back"], Labels());
+        screen.Browser.Update(Up);
+        Assert.Equal(["Select", "Move · Down for themes", "Sort", "Back"], Labels());
+        Assert.True(r.CommunityHints(screen.Browser).Length <= 4);
+        Assert.Same(r.CommunityHints(screen.Browser), r.CommunityHints(screen.Browser));
+        // Without cards the way back to them is not offered, but the chips still are.
+        r.Community = Array.Empty<CommunityTheme>();
+        Assert.Equal(["Select", "Move", "Sort", "Back"], Labels());
+        screen.Browser.Update(Down);
+        Assert.Equal(["Refresh", "Back"], Labels());
+    }
+
+    [Fact]
+    public void The_count_line_names_the_category_the_list_was_loaded_with()
+    {
+        using var screen = new Screen(8);
+        screen.Renderer.CommunityListSort = (int)CommunitySort.Top;
+        screen.Renderer.CommunityListCategory = -1;
+        long Count() => CountHash(screen.Settle());
+        long all = Count();
+        // Choosing a chip does not change the line until the filtered list has arrived.
+        screen.Browser.Update(Up);
+        screen.Browser.Update(Right);
+        screen.Browser.Update(Confirm);
+        Assert.Equal(0, screen.Browser.CommunityCategory);
+        Assert.Equal(all, Count());
+        screen.Renderer.CommunityListCategory = 0;
+        long anime = Count();
+        Assert.NotEqual(all, anime);
+        // The line is wider with a category in it ("8 themes · Anime · Top rated"): text starts further left.
+        screen.Renderer.CommunityListCategory = 7;   // Sci-Fi
+        Assert.NotEqual(anime, Count());
+        screen.Renderer.CommunityListCategory = -1;
+        Assert.Equal(all, Count());
+
+        static long CountHash(Surface s)
+        {
+            long hash = 17;
+            for (int y = Theme.ContentTop; y < Theme.ContentTop + 32; y++)
+                for (int x = Theme.ContentRight - 460; x < Theme.ContentRight; x++) hash = unchecked(hash * 31 + Px(s, x, y));
+            return hash;
+        }
+    }
+
+    [Fact]
+    public void An_empty_filtered_list_says_the_category_is_empty_not_the_store()
+    {
+        using var screen = new Screen(0);
+        screen.Browser.StoreUrl = "http://store.example";
+        screen.Renderer.CommunityListSort = (int)CommunitySort.Top;
+        long Shot()
+        {
+            Surface s = screen.Settle();
+            long hash = 17;
+            for (int y = 400; y < 760; y++)
+                for (int x = 400; x < 1520; x++) hash = unchecked(hash * 31 + Px(s, x, y));
+            return hash;
+        }
+        screen.Renderer.CommunityStatus = "No themes in the store yet.";
+        screen.Renderer.CommunityListCategory = -1;
+        long store = Shot();
+        screen.Renderer.CommunityStatus = "No themes in this category yet.";
+        screen.Renderer.CommunityListCategory = 3;
+        long category = Shot();
+        Assert.NotEqual(store, category);
+        // The text comes from the category the list was loaded with, not from the chip the cursor is on.
+        screen.Renderer.CommunityListCategory = -1;
+        screen.Browser.Update(Up);
+        screen.Browser.Update(Right); screen.Browser.Update(Right); screen.Browser.Update(Confirm);
+        Assert.Equal(store, Shot());
+    }
+
+    [Fact]
+    public void A_card_lists_its_categories_along_the_bottom_of_its_picture_and_a_card_without_them_does_not()
+    {
+        using var screen = new Screen(4);
+        screen.Items[0] = screen.Items[0] with { Categories = ["anime", "games"] };
+        screen.Items[1] = screen.Items[1] with { Categories = ["movies-tv", "pixel-art", "seasonal"] };   // too wide to show all three
+        screen.Renderer.Community = screen.Items;
+        Surface s = screen.Settle();
+        int top = ThemeRenderer.CommunityGridTop + (ThemeRenderer.CommunityCardH - 112) - 14 - ThemeRenderer.CommunityCategoryBadgeH;   // the picture is what the 112 px text panel leaves
+        int BrightIn(int card) => Count(s, CardX(card) + 14, top, ThemeRenderer.CommunityCardW - 28, ThemeRenderer.CommunityCategoryBadgeH, Bright);
+        Assert.True(BrightIn(0) > 40, "the first card's categories are not drawn");
+        Assert.True(BrightIn(1) > BrightIn(0), "three categories draw more than two");
+        Assert.Equal(0, BrightIn(2));
+        Assert.Equal(0, BrightIn(3));
+        // Nothing of it reaches the card's text panel below or the picture's top edge above.
+        Assert.Equal(0, Count(s, CardX(0) + 14, ThemeRenderer.CommunityGridTop + 16, ThemeRenderer.CommunityCardW - 28, 100, Bright));
+    }
+
+    [Fact]
+    public void Steady_frames_with_the_chips_focused_and_scrolled_allocate_nothing_beyond_the_focus_ring()
+    {
+        using var screen = new Screen(24);
+        screen.Renderer.CommunityListSort = 0;
+        // Paint.FocusRing allocates a few bytes in a Debug build (a collection expression) and none when optimised: measure
+        // it under the same conditions so only what the chip row itself allocates is held against it.
+        Surface scratch = screen.Canvas.AsSurface();
+        for (int i = 0; i < 3; i++) Paint.FocusRing(scratch, 100, 100, 200, 80, 14);
+        long ringBefore = GC.GetAllocatedBytesForCurrentThread();
+        Paint.FocusRing(scratch, 100, 100, 200, 80, 14);
+        long ring = GC.GetAllocatedBytesForCurrentThread() - ringBefore;
+
+        // The chips focused, the last one chosen and the row scrolled to it, with a category on the list.
+        screen.Browser.Update(Up);
+        for (int i = 0; i < ThemeBrowser.CommunityChipCount; i++) screen.Browser.Update(Right);
+        screen.Browser.Update(Confirm);
+        screen.Renderer.CommunityListCategory = screen.Browser.CommunityCategory;
+        screen.Settle();
+        screen.Frame(40);   // the runtime's own warm-up (tiered JIT) is over after a few dozen frames
+        var perFrame = new long[40];
+        for (int i = 0; i < perFrame.Length; i++)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            screen.Frame();
+            perFrame[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        // The JIT may allocate on this thread in some frames; garbage made by the screen would show in every one.
+        int run = 0, best = 0;
+        foreach (long bytes in perFrame) { run = bytes <= ring ? run + 1 : 0; best = Math.Max(best, run); }
+        Assert.True(best >= 10, $"bytes allocated per steady frame: {string.Join(", ", perFrame)} (a focus ring is {ring})");
     }
 
     [Fact]

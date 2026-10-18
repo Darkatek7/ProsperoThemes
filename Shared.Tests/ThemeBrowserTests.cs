@@ -115,6 +115,182 @@ public class ThemeBrowserTests
         Assert.Equal(0, browser.CommunitySelected);
     }
 
+    // ---- Community: the category chips ---------------------------------------------------------------
+
+    private static ThemeBrowser OnCommunity(int cards)
+    {
+        var browser = new ThemeBrowser();
+        browser.Update(UiInput.None with { PageDown = true });
+        Assert.Equal(ThemeView.Community, browser.View);
+        browser.TakeAction();   // the first visit asks for the list
+        browser.SetCommunityCount(cards);
+        return browser;
+    }
+
+    private static void Press(ThemeBrowser browser, UiInput input, int times)
+    {
+        for (int i = 0; i < times; i++) browser.Update(input);
+    }
+
+    [Fact]
+    public void Up_from_the_top_row_focuses_the_chips_and_down_returns_to_the_cards()
+    {
+        var browser = OnCommunity(10);
+        Assert.False(browser.CommunityChipFocused);
+        Assert.Equal(-1, browser.CommunityCategory);
+        browser.Update(Right);   // card 1, still the top row
+        browser.Update(Up);
+        Assert.True(browser.CommunityChipFocused);
+        Assert.Equal(1, browser.CommunitySelected);     // the card is remembered
+        Assert.Equal(0, browser.CommunityChip);         // the cursor starts on "All", the chosen chip
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+        browser.Update(Up);                              // nothing above the chips
+        Assert.True(browser.CommunityChipFocused);
+        browser.Update(Down);
+        Assert.False(browser.CommunityChipFocused);
+        Assert.Equal(1, browser.CommunitySelected);
+        browser.Update(X);                               // and the cards answer again
+        Assert.Equal(ThemeAction.CommunityDownload, browser.TakeAction());
+    }
+
+    [Fact]
+    public void Up_from_a_lower_row_moves_in_the_grid_first()
+    {
+        var browser = OnCommunity(10);
+        browser.Update(Down);
+        browser.Update(Right);
+        Assert.Equal(5, browser.CommunitySelected);
+        browser.Update(Up);
+        Assert.False(browser.CommunityChipFocused);
+        Assert.Equal(1, browser.CommunitySelected);
+        browser.Update(Up);
+        Assert.True(browser.CommunityChipFocused);
+    }
+
+    [Fact]
+    public void Left_and_right_move_between_the_chips_and_stop_at_the_ends()
+    {
+        var browser = OnCommunity(4);
+        browser.Update(Up);
+        browser.Update(Left);
+        Assert.Equal(0, browser.CommunityChip);
+        Assert.Equal(13, ThemeBrowser.CommunityChipCount);   // All and the twelve categories
+        Press(browser, Right, 5);
+        Assert.Equal(5, browser.CommunityChip);
+        Press(browser, Right, 40);
+        Assert.Equal(12, browser.CommunityChip);
+        Press(browser, Left, 3);
+        Assert.Equal(9, browser.CommunityChip);
+        Assert.Equal(0, browser.CommunitySelected);          // the cards did not move
+        Assert.Equal(-1, browser.CommunityCategory);         // and nothing is chosen until X
+    }
+
+    [Fact]
+    public void X_on_a_chip_chooses_its_category_resets_the_card_and_asks_for_the_list()
+    {
+        var browser = OnCommunity(10);
+        Press(browser, Right, 3);
+        Assert.Equal(3, browser.CommunitySelected);
+        browser.Update(Up);
+        Press(browser, Right, 2);                            // Games
+        browser.Update(X);
+        Assert.Equal(1, browser.CommunityCategory);
+        Assert.Equal("games", ProsperoThemes.App.Library.CommunityCategories.IdAt(browser.CommunityCategory));
+        Assert.Equal(0, browser.CommunitySelected);
+        Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+        Assert.True(browser.CommunityChipFocused);           // the focus stays on the chips
+        // X on "All" takes the filter off again.
+        Press(browser, Left, 2);
+        browser.Update(X);
+        Assert.Equal(-1, browser.CommunityCategory);
+        Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
+        // Moving into the row again starts on the chosen chip.
+        Press(browser, Right, 7);
+        browser.Update(X);
+        Assert.Equal(6, browser.CommunityCategory);
+        browser.TakeAction();
+        browser.Update(Down);
+        browser.Update(Up);
+        Assert.Equal(7, browser.CommunityChip);
+    }
+
+    [Fact]
+    public void Triangle_does_not_like_while_the_chips_have_the_focus()
+    {
+        var browser = OnCommunity(4);
+        browser.Update(Up);
+        browser.Update(UiInput.None, triangle: true);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+        browser.Update(Down);
+        browser.Update(UiInput.None, triangle: true);
+        Assert.Equal(ThemeAction.CommunityLike, browser.TakeAction());
+    }
+
+    [Fact]
+    public void Square_cycles_the_sort_and_options_refresh_from_both_rows()
+    {
+        var browser = OnCommunity(10);
+        Press(browser, Right, 2);
+        browser.Update(UiInput.None, preview: true);
+        Assert.Equal(1, browser.CommunitySort);
+        Assert.Equal(0, browser.CommunitySelected);
+        Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
+
+        browser.Update(Up);
+        browser.Update(UiInput.None, preview: true);
+        Assert.Equal(2, browser.CommunitySort);
+        Assert.True(browser.CommunityChipFocused);           // sorting does not take the focus off the chips
+        Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
+        browser.Update(UiInput.None, preview: true);
+        Assert.Equal(0, browser.CommunitySort);
+        browser.TakeAction();
+
+        browser.Update(UiInput.None, options: true);
+        Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
+        Assert.Equal(-1, browser.CommunityCategory);         // a refresh keeps the filter as it is
+    }
+
+    [Fact]
+    public void An_empty_list_can_still_reach_the_chips_and_leave_them_again()
+    {
+        var browser = OnCommunity(0);
+        Assert.Equal(-1, browser.CommunitySelected);
+        browser.Update(Down);
+        Assert.False(browser.CommunityChipFocused);
+        browser.Update(Up);
+        Assert.True(browser.CommunityChipFocused);
+        browser.Update(Down);
+        Assert.False(browser.CommunityChipFocused);          // Up and Down toggle
+        browser.Update(Up);
+        Press(browser, Right, 4);
+        browser.Update(X);
+        Assert.Equal(3, browser.CommunityCategory);
+        Assert.Equal(-1, browser.CommunitySelected);         // there is still no card
+        Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
+        // The list that arrives takes the cards in, and the cursor goes to the first one.
+        browser.SetCommunityCount(3);
+        Assert.Equal(0, browser.CommunitySelected);
+        browser.Update(Down);
+        browser.Update(X);
+        Assert.Equal(ThemeAction.CommunityDownload, browser.TakeAction());
+    }
+
+    [Fact]
+    public void Leaving_the_store_tab_puts_the_focus_back_on_the_cards()
+    {
+        var browser = OnCommunity(4);
+        browser.Update(Up);
+        browser.Update(UiInput.None with { PageDown = true });
+        browser.Update(UiInput.None with { PageUp = true });
+        Assert.Equal(ThemeView.Community, browser.View);
+        Assert.False(browser.CommunityChipFocused);
+        browser.Update(Up);
+        browser.Update(O);
+        Assert.Equal(ThemeView.Library, browser.View);
+        Assert.False(browser.CommunityChipFocused);
+    }
+
     // ---- Dialogs: Apply -----------------------------------------------------------------------------
 
     private static ThemeBrowser OnDetail(int packs = 1)

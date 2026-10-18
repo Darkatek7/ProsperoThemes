@@ -1,3 +1,4 @@
+using ProsperoThemes.App.Library;
 using SharpProspero.Ui;
 using System;
 using System.Collections.Generic;
@@ -56,6 +57,17 @@ public sealed class ThemeBrowser
     public int CommunitySelected { get; private set; } = -1;
     /// <summary>The store's sort order shown on the Community tab (Top, Downloads, New).</summary>
     public int CommunitySort { get; private set; }
+    /// <summary>The category the Community tab filters by: an index into <see cref="CommunityCategories.List"/>, or -1 for all themes.</summary>
+    public int CommunityCategory { get; private set; } = -1;
+    /// <summary>Whether the filter chip row above the grid has the focus (and not a card).</summary>
+    public bool CommunityChipFocused { get; private set; }
+    /// <summary>
+    /// The chip the cursor is on while <see cref="CommunityChipFocused"/>: 0 is "All", 1 and up are the categories in order
+    /// (so the chip of <see cref="CommunityCategory"/> is that plus one). Moving into the row starts on the chosen chip.
+    /// </summary>
+    public int CommunityChip { get; private set; }
+    /// <summary>The chips of the filter row: "All" and every category.</summary>
+    public static int CommunityChipCount => CommunityCategories.Count + 1;
     /// <summary>The saved store address: shown on System and what the editor starts from. The app keeps it current.</summary>
     public string StoreUrl { get; set; } = "";
     /// <summary>The keyboard behind <see cref="ThemeView.StoreAddress"/>; keeps its text after the screen is left.</summary>
@@ -137,10 +149,13 @@ public sealed class ThemeBrowser
         if (input.Cancel || options && View == ThemeView.Detail)
         {
             View = ThemeView.Library;
+            CommunityChipFocused = false;
             return;
         }
         if (input.PageDown || input.PageUp)
         {
+            // The store tab is entered on its cards, whatever had the focus when it was left.
+            CommunityChipFocused = false;
             int tab = Math.Max(0, Array.IndexOf(Tabs, View));
             tab = (tab + (input.PageDown ? 1 : Tabs.Length - 1)) % Tabs.Length;
             View = Tabs[tab];
@@ -149,23 +164,7 @@ public sealed class ThemeBrowser
         }
         if (View == ThemeView.Community)
         {
-            const int columns = 4;
-            if (_communityCount > 0)
-            {
-                if (input.Right) CommunitySelected = Math.Min(_communityCount - 1, CommunitySelected + 1);
-                if (input.Left) CommunitySelected = Math.Max(0, CommunitySelected - 1);
-                if (input.Down) CommunitySelected = Math.Min(_communityCount - 1, CommunitySelected + columns);
-                if (input.Up) CommunitySelected = Math.Max(0, CommunitySelected - columns);
-                if (input.Confirm) _action = ThemeAction.CommunityDownload;
-                if (triangle) _action = ThemeAction.CommunityLike;
-            }
-            if (preview)
-            {
-                CommunitySort = (CommunitySort + 1) % 3;
-                CommunitySelected = _communityCount == 0 ? -1 : 0;
-                _action = ThemeAction.CommunityRefresh;
-            }
-            if (options) _action = ThemeAction.CommunityRefresh;
+            UpdateCommunity(input, preview, options, triangle);
             return;
         }
         if (View == ThemeView.System)
@@ -200,6 +199,49 @@ public sealed class ThemeBrowser
         }
         else if (View == ThemeView.Import && input.Confirm) _action = ThemeAction.ImportUsb;
         if (options && View == ThemeView.Library) _action = ThemeAction.Reload;
+    }
+
+    // The store tab has two rows to be in: the filter chips above the grid and the cards. Up from the cards' top row goes to
+    // the chips, Down comes back; with no cards (an empty filter, a failed load) Up and Down toggle between the two, so the
+    // chips can always be reached to pick another category. Square (sort) and Options (refresh) work from either row.
+    private void UpdateCommunity(UiInput input, bool preview, bool options, bool triangle)
+    {
+        const int columns = 4;
+        if (CommunityChipFocused)
+        {
+            int step = (input.Right ? 1 : 0) - (input.Left ? 1 : 0);
+            if (step != 0) CommunityChip = Math.Clamp(CommunityChip + step, 0, CommunityChipCount - 1);
+            if (input.Down) CommunityChipFocused = false;
+            else if (input.Confirm)
+            {
+                // The list on screen stays until the filtered one arrives, like a new sort.
+                CommunityCategory = CommunityChip - 1;
+                CommunitySelected = _communityCount == 0 ? -1 : 0;
+                _action = ThemeAction.CommunityRefresh;
+            }
+            // Triangle (like) does nothing here: the cards do not have the focus, so there is no card to like.
+        }
+        else if (input.Up && (_communityCount == 0 || CommunitySelected < columns))
+        {
+            CommunityChipFocused = true;
+            CommunityChip = CommunityCategory + 1;
+        }
+        else if (_communityCount > 0)
+        {
+            if (input.Right) CommunitySelected = Math.Min(_communityCount - 1, CommunitySelected + 1);
+            if (input.Left) CommunitySelected = Math.Max(0, CommunitySelected - 1);
+            if (input.Down) CommunitySelected = Math.Min(_communityCount - 1, CommunitySelected + columns);
+            if (input.Up) CommunitySelected = Math.Max(0, CommunitySelected - columns);
+            if (input.Confirm) _action = ThemeAction.CommunityDownload;
+            if (triangle) _action = ThemeAction.CommunityLike;
+        }
+        if (preview)
+        {
+            CommunitySort = (CommunitySort + 1) % 3;
+            CommunitySelected = _communityCount == 0 ? -1 : 0;
+            _action = ThemeAction.CommunityRefresh;
+        }
+        if (options) _action = ThemeAction.CommunityRefresh;
     }
 
     private void UpdateSystem(UiInput input, bool busy)

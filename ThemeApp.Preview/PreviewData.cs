@@ -55,6 +55,12 @@ internal static class PreviewData
     {
         int[] likes = [482, 311, 227, 164, 96, 58];
         int[] downloads = [6120, 3875, 2410, 1204, 644, 213];
+        // Category ids of each card: none to three. Card 5 has three long labels, which do not all fit on a card ("+1").
+        string[][] categories =
+        [
+            ["anime", "games"], ["nature"], ["sci-fi", "space", "pixel-art"], ["games"], ["movies-tv", "fantasy"],
+            ["movies-tv", "pixel-art", "seasonal"],
+        ];
         var store = new List<CommunityTheme>();
         for (int i = 0; i < Math.Min(entries.Count, likes.Length); i++)
         {
@@ -78,9 +84,24 @@ internal static class PreviewData
                 AllApps: summary.AllApps,
                 PerApp: summary.PerApp,
                 Icons: summary.Icons,
-                Tiles: summary.Tiles));
+                Tiles: summary.Tiles) { Categories = categories[i] });
         }
         return store;
+    }
+
+    /// <summary>
+    /// What the store answers for a list request: the cards of <paramref name="store"/> (oldest first, as built above) in
+    /// category <paramref name="categoryId"/> (all of them when null), in the order of <paramref name="sort"/>.
+    /// </summary>
+    public static List<CommunityTheme> Listing(IReadOnlyList<CommunityTheme> store, CommunitySort sort, string? categoryId)
+    {
+        IEnumerable<CommunityTheme> cards = categoryId is null ? store : store.Where(t => t.Categories.Contains(categoryId));
+        return (sort switch
+        {
+            CommunitySort.Downloads => cards.OrderByDescending(t => t.Downloads),
+            CommunitySort.New => cards.Reverse(),
+            _ => cards.OrderByDescending(t => t.Likes),
+        }).ToList();
     }
 
     /// <summary>The id of the card at <paramref name="index"/> as a set, or an empty set when the store has no such card.</summary>

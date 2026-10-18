@@ -21,6 +21,31 @@ renderer.Status = "PC preview";
 renderer.LibraryStatus = "This preview uses the same renderer as the native PS5 app.";
 var gate = new object();
 
+// The Community tab: a store list from the loaded packs, card 2 already in the library, card 3 with an update.
+List<CommunityTheme> store = PreviewData.Store(entries);
+renderer.Community = store;
+for (int i = 0; i < store.Count; i++)
+    if (entries[i].Preview is { } cover) renderer.CommunityPreviews[store[i].Id] = cover;
+renderer.CommunityInLibrary = PreviewData.Card(store, 1);
+renderer.CommunityUpdates = PreviewData.Card(store, 2);
+renderer.CommunityLiked = PreviewData.Card(store, 3);
+renderer.CommunityListSort = (int)CommunitySort.Top;
+renderer.SelectedCommunityId = store.Count > 0 ? store[0].Id : null;
+browser.SetCommunityCount(store.Count);
+
+// What the app does when a list arrives for the browser's sort and category: the store's answer replaces the list, the sort
+// and category it was loaded with, and the card count.
+void ReloadStore()
+{
+    List<CommunityTheme> shown = PreviewData.Listing(store, (CommunitySort)browser.CommunitySort, CommunityCategories.IdAt(browser.CommunityCategory));
+    renderer.Community = shown;
+    renderer.CommunityListSort = browser.CommunitySort;
+    renderer.CommunityListCategory = browser.CommunityCategory;
+    renderer.CommunityStatus = shown.Count == 0 ? "No themes in this category yet." : "";
+    renderer.SelectedCommunityId = shown.Count > 0 ? shown[0].Id : null;
+    browser.SetCommunityCount(shown.Count);
+}
+
 if (args.Contains("--bench"))
 {
     // Frame cost of the shared renderer per view; the console's budget at 60 Hz is 16.7 ms. Each step is one frame of
@@ -39,6 +64,9 @@ if (args.Contains("--bench"))
         ("system-restore", () => { for (int i = 0; i < 3; i++) browser.Update(down); }),
         ("dialog-restore", () => browser.Update(press)),
         ("toast", () => { browser.Update(cancel); renderer.Notify("Applied and verified 27 target(s).", NoticeLevel.Success); }),
+        ("community", () => { browser.Update(UiInput.None with { PageUp = true }); browser.Update(UiInput.None with { PageUp = true }); renderer.ClearNotice(); }),
+        ("community-chips", () => browser.Update(UiInput.None with { Up = true })),   // the first chip focused: its ring instead of the card's
+        ("community-chips-end", () => { for (int i = 0; i < ThemeBrowser.CommunityChipCount; i++) browser.Update(UiInput.None with { Right = true }); }),   // the row scrolled to its last chip
     };
     foreach (var (name, setup) in steps)
     {
@@ -59,18 +87,6 @@ if (args.Contains("--screenshots"))
     foreach (string old in Directory.GetFiles(output))
         if (Path.GetExtension(old).ToLowerInvariant() is ".bmp" or ".png") File.Delete(old);
 
-    // The Community tab: a store list from the loaded packs, card 2 already in the library, card 3 with an update.
-    List<CommunityTheme> store = PreviewData.Store(entries);
-    renderer.Community = store;
-    for (int i = 0; i < store.Count; i++)
-        if (entries[i].Preview is { } cover) renderer.CommunityPreviews[store[i].Id] = cover;
-    renderer.CommunityInLibrary = PreviewData.Card(store, 1);
-    renderer.CommunityUpdates = PreviewData.Card(store, 2);
-    renderer.CommunityLiked = PreviewData.Card(store, 3);
-    renderer.CommunityListSort = (int)CommunitySort.Top;
-    renderer.SelectedCommunityId = store.Count > 0 ? store[0].Id : null;
-    browser.SetCommunityCount(store.Count);
-
     // The theme the console shows: the second pack, so its library card and its detail cover carry the Applied badge.
     renderer.AppliedId = entries[Math.Min(1, entries.Count - 1)].Manifest.Id;
 
@@ -85,6 +101,8 @@ if (args.Contains("--screenshots"))
         File.WriteAllBytes(Path.Combine(output, name + ".png"), PngWriter.Encode(canvas.AsSurface()));
         Console.WriteLine("saved " + name + ".png");
     }
+    // Frames of a screen as the app shows them while the pad is left alone (the eased scrolls settle).
+    void Settle() { for (int i = 0; i <= 60; i++) renderer.Draw(canvas.AsSurface(), browser, entries, 3 + i / 60.0, 1 / 60.0); }
     Save("library", ThemeView.Library);
     browser.Update(UiInput.None with { Right = true }); Save("library-second", ThemeView.Library);   // Selected moved right by one: the applied pack
     browser.Update(UiInput.None with { Right = true }); Save("library-applied", ThemeView.Library);   // the badge on a card that is not focused
@@ -104,6 +122,41 @@ if (args.Contains("--screenshots"))
     browser.Update(press); Save("artwork", ThemeView.Preview);
     browser.Update(back); browser.Update(back);   // preview -> detail -> library
     browser.Update(UiInput.None with { PageDown = true }); Save("community", ThemeView.Community);
+
+    // The category filter. What the app does for a chip: X asks for the list of that category, and when it arrives the
+    // list, the category it was loaded with and the card count are replaced (the store answers with the cards in it).
+    var right = UiInput.None with { Right = true };
+    var left = UiInput.None with { Left = true };
+    void PickCategory()
+    {
+        browser.Update(press);
+        if (browser.TakeAction() != ThemeAction.CommunityRefresh) throw new InvalidOperationException("X on a chip did not ask for a refresh");
+        ReloadStore();
+    }
+    // Up from the first card focuses the chips; pick Games, then move on to Space: the shot shows the chosen chip (white)
+    // next to the focused one (ring).
+    browser.Update(up);
+    if (!browser.CommunityChipFocused) throw new InvalidOperationException("Up from the first card did not focus the chips");
+    browser.Update(right); browser.Update(right); PickCategory();
+    for (int i = 0; i < 4; i++) browser.Update(right);   // Space
+    Save("community-chips", ThemeView.Community);
+    // The row scrolled to its last chip.
+    for (int i = 0; i < ThemeBrowser.CommunityChipCount; i++) browser.Update(right);
+    Save("community-chips-end", ThemeView.Community);
+    // Back on the cards, the list is the filtered one and the count line says so.
+    for (int i = 0; i < ThemeBrowser.CommunityChipCount; i++) browser.Update(left);
+    Settle();
+    browser.Update(down); Save("community-category", ThemeView.Community);
+    // A category without themes: the chips stay focused so another one can be picked.
+    browser.Update(up);
+    for (int i = 0; i < 2; i++) browser.Update(right);   // Cartoon
+    browser.StoreUrl = "http://192.168.0.5:8080";
+    PickCategory(); Save("community-empty-category", ThemeView.Community);
+    // Back to all themes, then the empty store of the next shot.
+    for (int i = 0; i < ThemeBrowser.CommunityChipCount; i++) browser.Update(left);
+    PickCategory();
+    browser.Update(down);
+    browser.StoreUrl = "";
     // An empty store on the same tab, with the app's own message for a store that is not set up.
     renderer.ResetCommunity();
     renderer.Community = Array.Empty<CommunityTheme>();
@@ -141,6 +194,9 @@ if (args.Contains("--screenshots"))
     return;
 }
 
+// The interactive preview lists the built-in store, so the Community tab's empty states describe a filter that matches
+// nothing, not a missing store address (the address is only a placeholder; the preview never connects to it).
+browser.StoreUrl = "http://store.preview.test";
 app.MapGet("/", () => Results.Content(PreviewPage.Html, "text/html; charset=utf-8"));
 var clock = System.Diagnostics.Stopwatch.StartNew();
 bool allAppsScope = false;
@@ -163,6 +219,8 @@ app.MapPost("/input/{key}", (string key) =>
             asksScope: asksScope, allAppsScope: allAppsScope, busy: false);
         var action = browser.TakeAction();
         const string pcOnly = "This PC preview doesn’t write to a console; the PS5 app does.";
+        // The preview's built-in store answers sort and category like the real one (Options reloads the same list).
+        if (action == ThemeAction.CommunityRefresh) ReloadStore();
         if (action == ThemeAction.ImportUsb) renderer.LibraryStatus = "USB import is available in the PS5 app. This PC preview doesn’t read console files.";
         if (action == ThemeAction.Apply)
         {

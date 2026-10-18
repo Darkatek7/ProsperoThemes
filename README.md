@@ -42,7 +42,7 @@ Your library, backups and settings live in `/data/prospero-themes/`, so updating
 | Details | X applies the theme (it asks first). Square opens the preview. Circle goes back. |
 | Apply dialog | D-pad chooses, X confirms, Circle cancels. |
 | Preview | X shows or hides the home overlay. Square or Circle goes back. |
-| Community | X downloads (or updates). Triangle likes, or removes your like. Square changes the sort. Options refreshes the list. |
+| Community | X downloads (or updates). Triangle likes, or removes your like. Square changes the sort. Options refreshes the list. D-pad up from the first row reaches the category chips: Left and Right move, X filters, Down goes back to the themes. |
 | USB Import | X imports from USB. |
 | System | D-pad picks a row, X acts on it. |
 

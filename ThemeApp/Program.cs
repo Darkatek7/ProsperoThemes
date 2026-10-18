@@ -43,8 +43,9 @@ internal sealed class ThemeApp : ProsperoApp
     // Store ids this console has liked (CommunityList.LikesPath), for the hearts and for choosing like or unlike.
     // Changed on the frame thread only; the renderer reads the same set.
     private readonly HashSet<string> _liked = new(StringComparer.Ordinal);
-    // The sort the last list load was started with, to notice a sort pressed while the app was busy (see StartCommunityWork).
-    private int _listSort;
+    // The sort and the category (an index into CommunityCategories.List, -1 for all) the last list load was started with,
+    // to notice a sort or a chip pressed while the app was busy (see StartCommunityWork).
+    private int _listSort, _listCategory = -1;
 
     protected override void OnLoad()
     {
@@ -342,6 +343,7 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.CommunityStatus = "";
         _renderer.CommunityError = false;
         _renderer.CommunityListSort = -1;
+        _renderer.CommunityListCategory = -1;
         try
         {
             WriteSettings();
@@ -417,9 +419,9 @@ internal sealed class ThemeApp : ProsperoApp
                 else _renderer.ClearNotice();
                 _renderer.Busy = false;
                 _busy = false;
-                // A sort pressed while this job ran was refused ("Please wait"), so the pills moved but the list did
-                // not; load it now, in the sort the pills show.
-                if (_browser.CommunitySort != _listSort) StartCommunityList();
+                // A sort or a category chip pressed while this job ran was refused ("Please wait"), so the pills and
+                // chips moved but the list did not; load it now, with the sort and category they show.
+                if (_browser.CommunitySort != _listSort || _browser.CommunityCategory != _listCategory) StartCommunityList();
             });
         }) { IsBackground = true, Name = "Community" };
         _worker.Start();
@@ -430,9 +432,15 @@ internal sealed class ThemeApp : ProsperoApp
     {
         string baseUrl = _settings.StoreUrl;
         var sort = (CommunitySort)_browser.CommunitySort;
-        bool started = StartCommunityWork($"Loading themes · {CommunityList.Label(sort)}…", http =>
+        int category = _browser.CommunityCategory;
+        string? categoryId = CommunityCategories.IdAt(category);
+        // "Loading themes · Anime · Top rated…", or without the category for all themes.
+        string busyText = categoryId is null
+            ? $"Loading themes · {CommunityList.Label(sort)}…"
+            : $"Loading themes · {CommunityCategories.LabelAt(category)} · {CommunityList.Label(sort)}…";
+        bool started = StartCommunityWork(busyText, http =>
         {
-            HttpResponse answer = http.Get(CommunityList.ListUrl(baseUrl, sort));
+            HttpResponse answer = http.Get(CommunityList.ListUrl(baseUrl, sort, categoryId));
             if (!answer.IsSuccess) return new StoreResult("Store responded with status " + answer.StatusCode + ".", NoticeLevel.Error);
             List<CommunityTheme> list = CommunityList.Parse(System.Text.Encoding.UTF8.GetString(answer.Body), baseUrl);
             _results.Post(() =>
@@ -440,8 +448,9 @@ internal sealed class ThemeApp : ProsperoApp
                 _renderer.ResetCommunity();
                 _community = list;
                 _renderer.Community = list;
-                // The header names the sort this list came with, not the one the pills show now.
+                // The header names the sort and category this list came with, not the ones the pills and chips show now.
                 _renderer.CommunityListSort = (int)sort;
+                _renderer.CommunityListCategory = category;
                 _browser.SetCommunityCount(list.Count);
                 RefreshCommunityBadges();
             });
@@ -459,12 +468,16 @@ internal sealed class ThemeApp : ProsperoApp
                 }
                 catch { /* a missing preview leaves the placeholder */ }
             }
-            // A loaded list needs no toast: the screen shows the count and the sort.
+            // A loaded list needs no toast: the screen shows the count, the category and the sort.
             return list.Count == 0
-                ? new StoreResult("No themes in the store yet.", NoticeLevel.Info)
+                ? new StoreResult(categoryId is null ? "No themes in the store yet." : "No themes in this category yet.", NoticeLevel.Info)
                 : new StoreResult("", NoticeLevel.Success);
         }, loadsList: true);
-        if (started) _listSort = (int)sort;
+        if (started)
+        {
+            _listSort = (int)sort;
+            _listCategory = category;
+        }
     }
 
     private void StartCommunityDownload(CommunityTheme theme)

@@ -77,6 +77,73 @@ public class CommunityListTests
         Assert.Equal(-1, CommunityList.ParseLikes("nope"));
     }
 
+    // ---- Categories -------------------------------------------------------------------------------------------------
+
+    private static string ItemWith(string id, string categoriesField) =>
+        "{\"id\":\"" + id + "\",\"name\":\"" + id + "\",\"author\":\"A\",\"version\":\"1\",\"description\":\"\",\"size\":1,\"likes\":0,\"downloads\":0," +
+        "\"summary\":{},\"previewUrl\":null,\"downloadUrl\":\"/api/themes/" + id + "/download\"" + categoriesField + "}";
+
+    [Fact]
+    public void Parses_the_categories_of_each_theme_keeping_known_ids_in_the_stores_order()
+    {
+        string json = "{\"items\":[" + string.Join(",",
+            ItemWith("a", ",\"categories\":[\"anime\",\"games\"]"),
+            ItemWith("b", ",\"categories\":[\"sci-fi\",\"made-up\",7,null,\"sci-fi\",\"space\",\"pixel-art\"]"),
+            ItemWith("c", ""),
+            ItemWith("d", ",\"categories\":[]"),
+            ItemWith("e", ",\"categories\":\"anime\""),
+            ItemWith("f", ",\"categories\":null")) + "]}";
+        var list = CommunityList.Parse(json, "https://t.example");
+        Assert.Equal(6, list.Count);
+        Assert.Equal(["anime", "games"], list[0].Categories);
+        Assert.Equal(["sci-fi", "space", "pixel-art"], list[1].Categories);   // unknown, non-string and repeated ids dropped
+        Assert.Empty(list[2].Categories);                                      // a store that predates categories
+        Assert.Empty(list[3].Categories);
+        Assert.Empty(list[4].Categories);                                      // not an array
+        Assert.Empty(list[5].Categories);
+    }
+
+    [Fact]
+    public void A_theme_made_by_the_positional_constructor_has_no_categories_and_a_copy_keeps_them()
+    {
+        var plain = new CommunityTheme("a", "A", "", "1", "", 1, 0, 0, null, "u", false, false, 0, 0, 0);
+        Assert.Empty(plain.Categories);
+        var tagged = plain with { Categories = ["games"] };
+        Assert.Equal(["games"], (tagged with { Likes = 5 }).Categories);   // a like coming in replaces the theme, not its categories
+    }
+
+    [Fact]
+    public void The_list_url_names_the_category_only_when_one_is_chosen_and_escapes_it()
+    {
+        const string all = "https://t.example/api/themes?sort=top&page=1&pageSize=24";
+        Assert.Equal(all, CommunityList.ListUrl("https://t.example", CommunitySort.Top));
+        Assert.Equal(all, CommunityList.ListUrl("https://t.example", CommunitySort.Top, null));
+        Assert.Equal(all, CommunityList.ListUrl("https://t.example", CommunitySort.Top, ""));
+        Assert.Equal(all + "&category=anime", CommunityList.ListUrl("https://t.example/", CommunitySort.Top, "anime"));
+        Assert.Equal("https://t.example/api/themes?sort=new&page=2&pageSize=12&category=movies-tv",
+            CommunityList.ListUrl("https://t.example", CommunitySort.New, "movies-tv", page: 2, pageSize: 12));
+        Assert.EndsWith("&category=a%20b%26c%3Dd", CommunityList.ListUrl("https://t.example", CommunitySort.Top, "a b&c=d"));
+    }
+
+    [Fact]
+    public void The_category_list_is_the_stores_twelve_in_its_order_with_their_labels()
+    {
+        // Mirrors web/shared/src/categories.ts: the store answers 400 for an id that is not in its list.
+        string[] ids = ["anime", "games", "movies-tv", "cartoon", "nature", "space", "fantasy", "sci-fi", "pixel-art", "minimal", "abstract", "seasonal"];
+        string[] labels = ["Anime", "Games", "Movies & TV", "Cartoon", "Nature", "Space", "Fantasy", "Sci-Fi", "Pixel art", "Minimal", "Abstract", "Seasonal"];
+        Assert.Equal(ids, CommunityCategories.List.Select(c => c.Id));
+        Assert.Equal(labels, CommunityCategories.List.Select(c => c.Label));
+        Assert.Equal(12, CommunityCategories.Count);
+        Assert.Equal(2, CommunityCategories.IndexOf("movies-tv"));
+        Assert.Equal(-1, CommunityCategories.IndexOf("Movies-TV"));   // ids are exact
+        Assert.Equal(-1, CommunityCategories.IndexOf(""));
+        Assert.Equal("sci-fi", CommunityCategories.IdAt(7));
+        Assert.Null(CommunityCategories.IdAt(-1));
+        Assert.Null(CommunityCategories.IdAt(12));
+        Assert.Equal("Pixel art", CommunityCategories.LabelAt(8));
+        Assert.Equal("All", CommunityCategories.LabelAt(-1));
+    }
+
     [Fact]
     public void Settings_round_trip_tolerate_bad_files_and_create_a_device_id()
     {
