@@ -46,6 +46,14 @@ internal sealed class ThemeApp : ProsperoApp
     // The sort and the category (an index into CommunityCategories.List, -1 for all) the last list load was started with,
     // to notice a sort or a chip pressed while the app was busy (see StartCommunityWork).
     private int _listSort, _listCategory = -1;
+    // A list load (or a load of the pictures it still lacks) is running (frame thread only). Another sort or chip, a
+    // download or a like asks it to stop (_stopList, read by the worker between pictures); the worker sets _listStopped
+    // when it did, and _listPosted once the list it loads is on screen. What comes next: the queued download or like,
+    // then the list the pills and chips show (_reloadList when the stopped list never arrived), then the pictures the
+    // cards still lack (_previewsMissing).
+    private bool _listLoading, _reloadList, _previewsMissing;
+    private volatile bool _stopList, _listStopped, _listPosted;
+    private Action? _queuedJob;
 
     protected override void OnLoad()
     {
@@ -383,12 +391,24 @@ internal sealed class ThemeApp : ProsperoApp
     /// <summary>
     /// Runs a store job on the worker with the shared HTTP client and shows the text it returns as a notice.
     /// A job that loads the list (<paramref name="loadsList"/>) also keeps its text as the Community tab's empty or
-    /// error state. A result without text posts no notice (and takes the progress notice down). Without a store address
-    /// nothing is sent. Returns whether the job started.
+    /// error state. A result without text posts no notice (and takes the progress notice down, unless the job had no
+    /// progress text either). Without a store address nothing is sent. Returns whether the job started now.
+    /// While list pictures load, the job is queued instead: the pictures stop after the one on its way, the job runs, and
+    /// the rest of the pictures follow.
     /// </summary>
     private bool StartCommunityWork(string busyText, Func<StoreHttpClient, StoreResult> work, bool loadsList = false)
     {
-        if (_busy) { Wait(); return false; }
+        if (_busy)
+        {
+            if (_listLoading && _queuedJob is null)
+            {
+                _queuedJob = () => StartCommunityWork(busyText, work, loadsList);
+                _stopList = true;
+                if (busyText.Length > 0) _renderer.Notify(busyText, NoticeLevel.Info);
+            }
+            else Wait();
+            return false;
+        }
         if (_settings.StoreUrl.Length == 0)
         {
             _renderer.CommunityStatus = "No store set. On the System tab, choose Store address and enter the address.";
@@ -397,7 +417,7 @@ internal sealed class ThemeApp : ProsperoApp
         _busy = true;
         _renderer.Busy = true;
         if (loadsList) _renderer.CommunityStatus = busyText;
-        _renderer.Notify(busyText, NoticeLevel.Info);
+        if (busyText.Length > 0) _renderer.Notify(busyText, NoticeLevel.Info);
         _worker = new Thread(() =>
         {
             StoreResult result;
@@ -416,12 +436,28 @@ internal sealed class ThemeApp : ProsperoApp
                     _renderer.CommunityError = result.Level == NoticeLevel.Error;
                 }
                 if (result.Message.Length > 0) _renderer.Notify(result.Message, result.Level);
-                else _renderer.ClearNotice();
+                else if (busyText.Length > 0) _renderer.ClearNotice();
                 _renderer.Busy = false;
                 _busy = false;
-                // A sort or a category chip pressed while this job ran was refused ("Please wait"), so the pills and
-                // chips moved but the list did not; load it now, with the sort and category they show.
-                if (_browser.CommunitySort != _listSort || _browser.CommunityCategory != _listCategory) StartCommunityList();
+                _listLoading = false;
+                if (_listStopped)
+                {
+                    if (_listPosted) _previewsMissing = true;
+                    else _reloadList = true;
+                    _listStopped = false;
+                }
+                // A download or a like pressed while the pictures loaded goes first.
+                if (_queuedJob is { } next)
+                {
+                    _queuedJob = null;
+                    next();
+                    return;
+                }
+                // A sort or a category chip pressed while this job ran moved the pills and chips but not the list (another
+                // job refused it with "Please wait"; a list load stopped early for it). Load it now, with the sort and
+                // category they show. A list stopped before it arrived is loaded again even when the pills went back to it.
+                if (_browser.CommunitySort != _listSort || _browser.CommunityCategory != _listCategory || _reloadList) StartCommunityList();
+                else if (_previewsMissing) StartCommunityPreviews();
             });
         }) { IsBackground = true, Name = "Community" };
         _worker.Start();
@@ -438,11 +474,35 @@ internal sealed class ThemeApp : ProsperoApp
         string busyText = categoryId is null
             ? $"Loading themes · {CommunityList.Label(sort)}…"
             : $"Loading themes · {CommunityCategories.LabelAt(category)} · {CommunityList.Label(sort)}…";
+        // A list or its pictures are loading already: the pills or chips moved on, so it stops after the picture it is
+        // fetching, and its end starts this one (StartCommunityWork). Back on the list that is loading, it simply goes on
+        // (unless a queued download or like is waiting for it to stop).
+        if (_busy && _listLoading)
+        {
+            bool moved = (int)sort != _listSort || category != _listCategory;
+            _stopList = moved || _queuedJob is not null;
+            if (moved)
+            {
+                _renderer.Notify(busyText, NoticeLevel.Info);
+                if (_community.Count == 0) _renderer.CommunityStatus = busyText;
+            }
+            return;
+        }
+        _stopList = false;
+        _listStopped = false;
+        _listPosted = false;
         bool started = StartCommunityWork(busyText, http =>
         {
             HttpResponse answer = http.Get(CommunityList.ListUrl(baseUrl, sort, categoryId));
             if (!answer.IsSuccess) return new StoreResult("Store responded with status " + answer.StatusCode + ".", NoticeLevel.Error);
             List<CommunityTheme> list = CommunityList.Parse(System.Text.Encoding.UTF8.GetString(answer.Body), baseUrl);
+            // Asked to stop while the list was on its way: the old list stays on screen until the new one is here.
+            if (_stopList)
+            {
+                _listStopped = true;
+                return new StoreResult("", NoticeLevel.Success);
+            }
+            _listPosted = true;
             _results.Post(() =>
             {
                 _renderer.ResetCommunity();
@@ -454,20 +514,7 @@ internal sealed class ThemeApp : ProsperoApp
                 _browser.SetCommunityCount(list.Count);
                 RefreshCommunityBadges();
             });
-            // Previews follow one by one; each card shows its picture as soon as it is here.
-            foreach (CommunityTheme theme in list)
-            {
-                if (theme.PreviewUrl is null) continue;
-                try
-                {
-                    HttpResponse png = http.Get(theme.PreviewUrl);
-                    if (!png.IsSuccess || png.Body.Length == 0) continue;
-                    string id = theme.Id;
-                    byte[] body = png.Body;
-                    _results.Post(() => _renderer.CommunityPreviews[id] = body);
-                }
-                catch { /* a missing preview leaves the placeholder */ }
-            }
+            if (!LoadPreviews(http, list)) return new StoreResult("", NoticeLevel.Success);
             // A loaded list needs no toast: the screen shows the count, the category and the sort.
             return list.Count == 0
                 ? new StoreResult(categoryId is null ? "No themes in the store yet." : "No themes in this category yet.", NoticeLevel.Info)
@@ -477,7 +524,59 @@ internal sealed class ThemeApp : ProsperoApp
         {
             _listSort = (int)sort;
             _listCategory = category;
+            _listLoading = true;
+            _reloadList = false;
+            _previewsMissing = false;
         }
+    }
+
+    /// <summary>
+    /// Fetches the pictures of <paramref name="themes"/> one by one on the worker; each card shows its picture as soon as
+    /// it is here. Returns false when it was asked to stop (and stopped) before the last one.
+    /// </summary>
+    private bool LoadPreviews(StoreHttpClient http, List<CommunityTheme> themes)
+    {
+        foreach (CommunityTheme theme in themes)
+        {
+            if (_stopList)
+            {
+                _listStopped = true;
+                return false;
+            }
+            if (theme.PreviewUrl is null) continue;
+            try
+            {
+                HttpResponse png = http.Get(theme.PreviewUrl);
+                if (!png.IsSuccess || png.Body.Length == 0) continue;
+                string id = theme.Id;
+                byte[] body = png.Body;
+                _results.Post(() => _renderer.CommunityPreviews[id] = body);
+            }
+            catch { /* a missing preview leaves the placeholder */ }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Fetches the pictures the cards on screen still lack, after a download or a like stopped the list's pictures. It
+    /// shows no notice and stops for the next sort, chip, download or like just like a list load.
+    /// </summary>
+    private void StartCommunityPreviews()
+    {
+        _previewsMissing = false;
+        var missing = new List<CommunityTheme>();
+        foreach (CommunityTheme theme in _community)
+            if (theme.PreviewUrl is not null && !_renderer.CommunityPreviews.ContainsKey(theme.Id)) missing.Add(theme);
+        if (missing.Count == 0) return;
+        _stopList = false;
+        _listStopped = false;
+        _listPosted = true;
+        bool started = StartCommunityWork("", http =>
+        {
+            LoadPreviews(http, missing);
+            return new StoreResult("", NoticeLevel.Success);
+        });
+        if (started) _listLoading = true;
     }
 
     private void StartCommunityDownload(CommunityTheme theme)
