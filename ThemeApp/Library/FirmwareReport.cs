@@ -10,7 +10,7 @@ using SharpProspero.Storage;
 namespace ProsperoThemes.App.Library;
 
 /// <summary>
-/// The firmware report (System tab, Options): what this console has where a theme writes, so a firmware other than
+/// The firmware report (System tab, Firmware report): what this console has where a theme writes, so a firmware other than
 /// 13.00 can be measured without a developer at the console. For every file a theme can name it records whether it
 /// exists, its size, hash and format, and for the icon container the list of icons. The stock copy is described
 /// (the backup, when the app made one), so an applied theme does not change the report. Only reads.
@@ -51,10 +51,16 @@ public static class FirmwareReport
         return paths;
     }
 
-    /// <summary>Everything the report looks at: the catalog's files, the backgrounds the applier adds, tile icons, icons.</summary>
-    public static List<string> Paths(IEnumerable<string> catalogPaths) =>
-        catalogPaths.Concat([AssetRoots.HubBackground, .. AssetRoots.SystemTileBackgrounds, .. TileIcons, IconContainer])
+    /// <summary>
+    /// Everything the report looks at: the catalog's files, the backgrounds the applier adds, tile icons, icons, and
+    /// for each compressed texture its plain-DDS name (what firmware before 13.00 has, see <see cref="AssetRoots.Uncompressed"/>).
+    /// </summary>
+    public static List<string> Paths(IEnumerable<string> catalogPaths)
+    {
+        List<string> paths = catalogPaths.Concat([AssetRoots.HubBackground, .. AssetRoots.SystemTileBackgrounds, .. TileIcons, IconContainer])
             .Distinct(StringComparer.Ordinal).ToList();
+        return paths.Concat(paths.Select(AssetRoots.Uncompressed).OfType<string>()).Distinct(StringComparer.Ordinal).ToList();
+    }
 
     /// <summary>"firmware-13.000.000.json"; anything but digits, letters and dots becomes "_".</summary>
     public static string FileName(string? firmware)

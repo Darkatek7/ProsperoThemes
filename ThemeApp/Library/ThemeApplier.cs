@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -183,9 +184,9 @@ public sealed class ThemeApplier
                     foreach (Plan plan in file.Where(p => p.Target.Layer != ThemePack.SvgLayer))
                     {
                         current = plan;
-                        byte[] payload = pack.Payload(plan.Target);
+                        byte[] payload = PayloadFor(pack, plan);
                         touched.Add(plan);
-                        WriteVerified(plan.Device, payload, plan.Target.Sha256);
+                        WriteVerified(plan.Device, payload, plan.Unpack ? ThemePack.Hash(payload) : plan.Target.Sha256);
                     }
                     if (icons.Count == 0)
                         continue;
@@ -224,6 +225,10 @@ public sealed class ThemeApplier
         catch (Exception ex)
         {
             return Fail($"apply failed: {ex.Message}");
+        }
+        finally
+        {
+            _unpacked.Clear();
         }
     }
 
@@ -397,7 +402,17 @@ public sealed class ThemeApplier
             bool icons = false;
             foreach (Plan plan in file)
             {
-                byte[] payload = pack.Payload(plan.Target);
+                byte[] payload;
+                try
+                {
+                    payload = PayloadFor(pack, plan);
+                }
+                catch (InvalidDataException ex)
+                {
+                    Skipped.Add($"{plan.Logical}: the theme's file could not be unpacked ({ex.Message})");
+                    drop.Add(plan);
+                    continue;
+                }
                 if (plan.Target.Layer == ThemePack.SvgLayer)
                 {
                     icons = true;
@@ -488,15 +503,40 @@ public sealed class ThemeApplier
         return true;
     }
 
-    // Logical is the <root>/<relative> path the backup and the index use; it differs from Target.Path
-    // only for the all-apps background, which expands to one plan per title.
-    private sealed record Plan(ThemePackTarget Target, string Device, string Backup, string Logical);
+    // Logical is the <root>/<relative> path the backup and the index use; it differs from Target.Path for the
+    // all-apps background, which expands to one plan per title, for the system tiles that take the main background,
+    // and for a compressed texture this firmware keeps as plain DDS (Unpack: the payload is written decoded).
+    private sealed record Plan(ThemePackTarget Target, string Device, string Backup, string Logical, bool Unpack = false);
+
+    // Decoded payloads of the current operation, by target path: the main background goes to up to 14 files.
+    private readonly Dictionary<string, byte[]> _unpacked = new(StringComparer.Ordinal);
+
+    private byte[] PayloadFor(ThemePack pack, Plan plan)
+    {
+        if (!plan.Unpack) return pack.Payload(plan.Target);
+        if (!_unpacked.TryGetValue(plan.Target.Path, out byte[]? decoded))
+            _unpacked[plan.Target.Path] = decoded = Zstd.Decompress(pack.Payload(plan.Target));
+        return decoded;
+    }
+
+    /// <summary>
+    /// The plan for one logical file. When the console has no <c>X.dds.zst</c> but an <c>X.dds</c> (firmware before
+    /// 13.00), it targets that file and the payload is unpacked before it is checked and written.
+    /// </summary>
+    private Plan Locate(ThemePackTarget target, string logical, string device)
+    {
+        if (AssetRoots.Uncompressed(logical) is { } plain && !_files.Exists(device)
+            && AssetRoots.TryResolve(plain, out string plainDevice, out _) && _files.Exists(plainDevice))
+            return new Plan(target, plainDevice, $"{_dataRoot}/{BackupFolder}/{plain}", plain, Unpack: true);
+        return new Plan(target, device, $"{_dataRoot}/{BackupFolder}/{logical}", logical);
+    }
 
     private bool TryPlan(ThemePack pack, out List<Plan> plans, out string error)
     {
         plans = new List<Plan>();
         var perApp = new List<Plan>();
         Skipped.Clear();
+        _unpacked.Clear();
         foreach (ThemePackTarget target in pack.Manifest.Targets)
         {
             // An unknown layer is skipped, as ThemePack.Validate's warning promises.
@@ -534,7 +574,7 @@ public sealed class ThemeApplier
                 return false;
             }
 
-            plans.Add(new Plan(target, device, $"{_dataRoot}/{BackupFolder}/{target.Path}", target.Path));
+            plans.Add(Locate(target, target.Path, device));
         }
 
         // The system tiles (Media Gallery, All Apps, Game Library…) each show their own stock background, not
@@ -545,8 +585,9 @@ public sealed class ThemeApplier
             {
                 if (pack.Manifest.Targets.Any(t => t.Path == logical)) continue;
                 AssetRoots.TryResolve(logical, out string tile, out _);
-                if (_files.Exists(tile))
-                    plans.Add(new Plan(hub.Target, tile, $"{_dataRoot}/{BackupFolder}/{logical}", logical));
+                Plan plan = Locate(hub.Target, logical, tile);
+                if (_files.Exists(plan.Device))
+                    plans.Add(plan);
             }
         }
 

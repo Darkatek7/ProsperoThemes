@@ -52,7 +52,7 @@ public static class DeviceThemeLibrary
     {
         int imported = 0, existing = 0, rejected = 0, found = 0;
         string? lastError = null;
-        FileSystem.CreateDirectoryRecursive(Root);
+        Folders.Ensure(Root);
         for (int usb = 0; usb < 8; usb++)
         {
             foreach (string directory in new[] { $"/mnt/usb{usb}/prospero-themes", $"/mnt/usb{usb}" })
@@ -94,7 +94,7 @@ public static class DeviceThemeLibrary
         if (bytes.Length <= 0 || bytes.Length > ThemeArchive.MaxArchiveBytes)
             throw new ThemePackException("Pack too large (48 MiB at most).");
         ThemeLibraryEntry.Inspect(label, bytes);
-        FileSystem.CreateDirectoryRecursive(Root);
+        Folders.Ensure(Root);
         string digest = ThemePack.Hash(bytes);
         string destination = Root + "/" + digest + ".p5theme";
         if (FileSystem.Exists(destination))
@@ -104,10 +104,10 @@ public static class DeviceThemeLibrary
             throw new ThemePackException("Existing copy is damaged; import skipped.");
         }
         string temporary = destination + ".tmp";
-        FileSystem.WriteAllBytes(temporary, bytes);
+        Folders.Named(temporary, () => FileSystem.WriteAllBytes(temporary, bytes));
         if (FileSystem.GetFileSize(temporary) != bytes.Length || ThemePack.Hash(FileSystem.ReadAllBytes(temporary)) != digest)
             throw new ThemePackException("The copy failed the integrity check.");
-        FileSystem.Move(temporary, destination);
+        Folders.Named(destination, () => FileSystem.Move(temporary, destination));
         return true;
     }
 
@@ -122,10 +122,10 @@ public static class DeviceThemeLibrary
     {
         string source = Root + "/" + digest + ".p5theme";
         if (!FileSystem.Exists(source)) return false;
-        FileSystem.CreateDirectoryRecursive(Attic);
+        Folders.Ensure(Attic);
         string target = Attic + "/" + digest + ".p5theme";
         for (int n = 2; FileSystem.Exists(target); n++) target = Attic + "/" + digest + "-" + n + ".p5theme";
-        FileSystem.Move(source, target);
+        Folders.Named(target, () => FileSystem.Move(source, target));
         return true;
     }
 

@@ -62,7 +62,7 @@ public static class ThemeHelperClient
         }
         return "The theme helper was sent to the ELF loader on port " + LoaderPort + " but did not start. " +
             "Please report your jailbreak and loader at github.com/Darkatek7/ProsperoThemes/issues " +
-            "with a firmware report (System tab, Options).";
+            "with a firmware report (System tab, Firmware report).";
     }
 
     private static string? CheckTag(string reply) =>

@@ -277,7 +277,7 @@ internal sealed class ThemeApp : ProsperoApp
                 ("helper_reads", files.HelperReads.ToString()),
             ]);
         string name = FirmwareReport.FileName(_firmware);
-        FileSystem.CreateDirectoryRecursive(FirmwareReport.Folder);
+        Folders.Ensure(FirmwareReport.Folder);
         FileSystem.WriteAllBytes(FirmwareReport.Folder + "/" + name, report);
         string where = FirmwareReport.Folder + "/" + name;
         try
@@ -368,7 +368,7 @@ internal sealed class ThemeApp : ProsperoApp
 
     private void WriteSettings()
     {
-        FileSystem.CreateDirectoryRecursive("/data/prospero-themes");
+        Folders.Ensure("/data/prospero-themes");
         FileSystem.WriteAllText(AppSettings.Path, _settings.Serialize());
     }
 
@@ -655,7 +655,7 @@ internal sealed class ThemeApp : ProsperoApp
                 if (liked) _liked.Add(theme.Id); else _liked.Remove(theme.Id);
                 try
                 {
-                    FileSystem.CreateDirectoryRecursive("/data/prospero-themes");
+                    Folders.Ensure("/data/prospero-themes");
                     FileSystem.WriteAllText(CommunityList.LikesPath, CommunityList.FormatLikedIds(_liked));
                 }
                 catch { /* the heart lasts until the app quits */ }

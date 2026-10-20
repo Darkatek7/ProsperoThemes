@@ -1,0 +1,46 @@
+{
+  "empty": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "one-byte": {
+    "bytes": 1,
+    "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+  },
+  "rle": {
+    "bytes": 100000,
+    "sha256": "6d1cf22d7cc09b085dfc25ee1a1f3ae0265804c607bc2074ad253bcc82fd81ee"
+  },
+  "text-l3": {
+    "bytes": 267646,
+    "sha256": "41d75b3ca8719282775d3fd37e93c463dc6c111eb848222812e5008684eef625"
+  },
+  "text-l19": {
+    "bytes": 267646,
+    "sha256": "41d75b3ca8719282775d3fd37e93c463dc6c111eb848222812e5008684eef625"
+  },
+  "random-l1": {
+    "bytes": 12000,
+    "sha256": "8c2d3aaaa3cdfe4ccb9c238f78c6267ce366ac89e8da0d30564d60c06f3d300b"
+  },
+  "repeat-l22": {
+    "bytes": 978000,
+    "sha256": "c941a19b2ba8925a2d29c5643951a344173daacd2d49f4470a36f9e211a67272"
+  },
+  "bc7-l19": {
+    "bytes": 320000,
+    "sha256": "74cf27dee11b4f83236f19517a7c48db9c4dededa0f490b33ca3e743b1d0359a"
+  },
+  "skew-l9": {
+    "bytes": 150000,
+    "sha256": "ff9ab4ff2882806474b6299036acdcd8545c6b521795fcc389f301aecebf0d63"
+  },
+  "stream-no-size": {
+    "bytes": 60000,
+    "sha256": "7371f17c02c77b82b0f65abd0fcb4c1a59442c732b56a7e35ab39da2cfa62568"
+  },
+  "multi-frame": {
+    "bytes": 8000,
+    "sha256": "b966414339c834c8983799da7e4783e29c59c0037c0c115907d37936fbf50e4f"
+  }
+}

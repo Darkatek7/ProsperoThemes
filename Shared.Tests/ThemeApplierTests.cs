@@ -386,6 +386,67 @@ public class ThemeApplierTests
         Assert.Equal(Frame(4_147_328, "stock"), fake.Files[Dev1]);
     }
 
+    /// <summary>A small DX10 DDS: header for <paramref name="width"/>x<paramref name="height"/> BC7, then a tag.</summary>
+    private static byte[] Dds(int width, int height, string tag)
+    {
+        var data = new byte[148 + 64];
+        "DDS "u8.CopyTo(data);
+        BitConverter.GetBytes(height).CopyTo(data, 12);
+        BitConverter.GetBytes(width).CopyTo(data, 16);
+        "DX10"u8.CopyTo(data.AsSpan(84));
+        BitConverter.GetBytes(98u).CopyTo(data, 128);
+        Encoding.ASCII.GetBytes(tag).CopyTo(data, 148);
+        return data;
+    }
+
+    /// <summary>A real Zstandard frame holding <paramref name="content"/> in one raw block.</summary>
+    private static byte[] RawFrame(byte[] content)
+    {
+        var frame = new List<byte> { 0x28, 0xB5, 0x2F, 0xFD, 0xA0 };   // single segment, 4-byte content size
+        frame.AddRange(BitConverter.GetBytes((uint)content.Length));
+        int header = 1 | content.Length << 3;                           // last block, raw
+        frame.AddRange([(byte)header, (byte)(header >> 8), (byte)(header >> 16)]);
+        frame.AddRange(content);
+        return frame.ToArray();
+    }
+
+    [Fact]
+    public void A_console_with_plain_dds_backgrounds_gets_the_payload_unpacked()
+    {
+        // Firmware before 13.00: bg_hub_default.dds and the tiles' bg_*.dds, no .dds.zst at all.
+        const string hub = "/system_ex/vsh_asset/bg_hub_default.dds", gallery = "/system_ex/vsh_asset/bg_NPXS40056.dds";
+        var fake = DeviceWithLive((hub, Dds(64, 32, "stock")), (gallery, Dds(64, 32, "gallery")));
+        ThemeApplier applier = Applier(fake);
+        ThemePack pack = MakePack(null, (Path1, RawFrame(Dds(64, 32, "theme"))));
+
+        ApplyResult result = applier.Apply(pack);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(Dds(64, 32, "theme"), fake.Files[hub]);
+        Assert.Equal(Dds(64, 32, "theme"), fake.Files[gallery]);
+        Assert.Equal(Dds(64, 32, "stock"), fake.Files["/data/prospero-themes/backup/original/vsh_asset/bg_hub_default.dds"]);
+        Assert.False(fake.Files.ContainsKey(Dev1));
+        Assert.Equal(1, fake.Remounts);
+
+        Assert.True(applier.Restore(pack).Success);
+        Assert.Equal(Dds(64, 32, "stock"), fake.Files[hub]);
+        Assert.Equal(Dds(64, 32, "gallery"), fake.Files[gallery]);
+    }
+
+    [Fact]
+    public void A_plain_dds_in_another_size_is_skipped()
+    {
+        const string hub = "/system_ex/vsh_asset/bg_hub_default.dds";
+        var fake = DeviceWithLive((hub, Dds(128, 64, "stock")));
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, RawFrame(Dds(64, 32, "theme")))));
+
+        Assert.False(result.Success);
+        Assert.Contains("vsh_asset/bg_hub_default.dds: the console's file is dds 128x64", result.Message);
+        Assert.Equal(Dds(128, 64, "stock"), fake.Files[hub]);
+        Assert.Equal(0, fake.Remounts);
+    }
+
     [Fact]
     public void State_records_the_firmware()
     {

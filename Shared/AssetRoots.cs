@@ -69,6 +69,16 @@ public static class AssetRoots
     }.Select(id => $"{VshAsset}/bg_{id}.dds.zst").ToArray();
 
     /// <summary>
+    /// The name a <c>vsh_asset/*.dds.zst</c> texture has on firmware before 13.00, which keeps the home backgrounds
+    /// as plain DDS: <c>vsh_asset/bg_hub_default.dds</c> (firmware reports from 9.60, 11.60 and 12.40 have none of the
+    /// <c>.dds.zst</c> files). Null for any other path. The applier writes the unpacked payload there.
+    /// </summary>
+    public static string? Uncompressed(string logical) =>
+        logical.StartsWith(VshAsset + "/", StringComparison.Ordinal) && logical.EndsWith(".dds.zst", StringComparison.Ordinal)
+            ? logical[..^4]
+            : null;
+
+    /// <summary>
     /// Virtual target "this one title's own entry background": <c>apps/&lt;TID&gt;/pic0.dds</c>. Resolved at apply
     /// time like <see cref="AllAppsBackground"/>, but for one title, always (it does not depend on the all-apps
     /// setting), and it wins over the all-apps background for that title. A title without its own
