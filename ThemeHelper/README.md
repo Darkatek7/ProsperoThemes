@@ -13,12 +13,15 @@ research payload (not part of the public repository), with the same low-level id
   mounts) and must not contain `..`, `//` or a backslash. Over-long paths are refused, never truncated.
   Anything else gets `ERR badpath`.
 - **Commands:**
-  - `PING` returns `OK PONG 9071 v1`.
+  - `PING` returns `OK PONG 9071 v<tag>`, the build tag (`BuildTag` in `Program.cs`, `ExpectedTag` in the app).
   - `REMOUNT` remounts `/system_ex` read-write (exfatfs, same options as DevProbe). `EBUSY` counts as success.
   - `STAT <path>` returns `OK size=<n>`.
   - `READ <path>` returns `OK <size>` then the raw bytes, streamed in 32 KiB chunks.
-  - `WRITE <path>.tmp <len>` followed by `<len>` raw bytes (at most 64 MiB). Only `.tmp` paths are
-    accepted. Streamed in 32 KiB chunks. Replies `WRITE wrote=<n>`.
+  - `WRITE <path>.tmp <len>` followed by `<len>` raw bytes (at most 160 MiB: the icon container is about
+    100 MB before firmware 13.00). Only `.tmp` paths are accepted. Streamed in 32 KiB chunks. Replies
+    `WRITE wrote=<n>`, or `WRITE rc=<error>` when the file cannot be opened. A refused header (`ERR badpath`)
+    or an incomplete write closes the connection, so the body is never read as commands; after an open or
+    write failure the rest of the body is read and dropped first, so the client still gets the answer.
   - `RENAME <path>.tmp <path>`: only this exact shape, so the helper can replace an asset atomically
     and nothing else.
   - `LIST /user/app/` or `LIST /user/appmeta/` (no other folder) returns `OK`, one `D <name>` per sub-folder, then `END`.
@@ -36,4 +39,3 @@ research payload (not part of the public repository), with the same low-level id
 - The app starts it on its own (`ThemeApp/Library/ThemeHelperClient.cs`): it pings `127.0.0.1:9071`,
   and only if nothing listens there sends the bundled `sce_sys/prospero-themes/ThemeHelper.elf` to the
   ELF loader on `127.0.0.1:9021`. `ThemeApp/build.ps1` builds and bundles it.
-- Built; not yet run on hardware.

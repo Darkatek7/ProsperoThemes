@@ -138,6 +138,181 @@ public class RcoSvgTests
         Assert.Equal(Container(), files.Files[RcoDevice]);
     }
 
+    private const string BgPath = "vsh_asset/bg_hub_default.dds.zst";
+    private const string BgDevice = "/system_ex/vsh_asset/bg_hub_default.dds.zst";
+    private static readonly byte[] LiveBackground = Encoding.ASCII.GetBytes("live-bg");
+
+    /// <summary>One icon plus the home background.</summary>
+    private static ThemePack IconAndBackgroundPack(byte[] background)
+    {
+        var zip = new ZipBuilder();
+        zip.Add("icons/gear.svg", Star);
+        zip.Add("bg/hub.dds.zst", background);
+        zip.AddText("theme.json", $$"""
+            {"format":2,"id":"mixed","name":"Mixed","author":"tests","version":"1.0","description":"svg and bg","unmapped":"keep",
+             "targets":[
+              {"path":"{{RcoPath}}","layer":"svg","resource":"iconid_settings","file":"icons/gear.svg",
+               "bytes":{{Star.Length}},"sha256":"{{ThemePack.Hash(Star)}}"},
+              {"path":"{{BgPath}}","layer":"background","file":"bg/hub.dds.zst",
+               "bytes":{{background.Length}},"sha256":"{{ThemePack.Hash(background)}}"}]}
+            """);
+        return ThemePack.Open(zip.ToArray());
+    }
+
+    private static byte[] Background(string tag)
+    {
+        byte[] data = Encoding.ASCII.GetBytes("....payload-" + tag + new string('.', 256));
+        new byte[] { 0x28, 0xB5, 0x2F, 0xFD }.CopyTo(data, 0);
+        return data;
+    }
+
+    [Fact]
+    public void An_icon_container_too_large_for_the_helper_is_left_alone_and_the_rest_is_applied()
+    {
+        // Firmware before 13.00 has a container of about 100 MB: holding copies of it ran the app out of memory,
+        // and the helper refuses to write it. It is skipped without being read or backed up.
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+        files.Files[BgDevice] = LiveBackground;
+        byte[] background = Background("a");
+
+        ApplyResult result = new ThemeApplier(files, () => 0) { MaxFileBytes = Container().Length - 1 }
+            .Apply(IconAndBackgroundPack(background));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("too large", result.Message);
+        Assert.Equal(background, files.Files[BgDevice]);
+        Assert.Equal(Container(), files.Files[RcoDevice]);
+        Assert.DoesNotContain(RcoDevice, files.Reads);
+        Assert.False(files.Files.ContainsKey(RcoBackup));
+        Assert.DoesNotContain(files.Writes, w => w.StartsWith(RcoDevice, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_backed_up_file_too_large_for_the_helper_is_never_read_by_the_clean_start_or_restore()
+    {
+        // A backup of the large container from an earlier build: reading it and the live file (two copies of
+        // 100 MB) would run out of memory, and the app cannot have changed the live file.
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+        files.Files[BgDevice] = LiveBackground;
+        Assert.True(new ThemeApplier(files, () => 0).Apply(SvgPack("a", ("iconid_settings", Star))).Success);
+        files.Files[RcoDevice] = Container();   // that write never landed
+        files.Reads.Clear();
+
+        var applier = new ThemeApplier(files, () => 0) { MaxFileBytes = Container().Length - 1 };
+        ApplyResult apply = applier.Apply(IconAndBackgroundPack(Background("b")));
+        ApplyResult restore = applier.RestoreOriginals();
+
+        Assert.True(apply.Success, apply.Message);
+        Assert.True(restore.Success, restore.Message);
+        Assert.DoesNotContain(RcoDevice, files.Reads);
+        Assert.DoesNotContain(RcoBackup, files.Reads);
+        Assert.Equal(Container(), files.Files[RcoDevice]);
+        Assert.Equal(LiveBackground, files.Files[BgDevice]);
+    }
+
+    // The container is about 100 MB before firmware 13.00: the applier holds one whole copy of it at a time, and
+    // compares and verifies it by streamed hashes (Hashes), never by a second whole read (Reads).
+
+    [Fact]
+    public void A_first_icon_apply_reads_the_container_whole_once_and_verifies_by_streamed_hashes()
+    {
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+
+        Assert.True(new ThemeApplier(files, () => 0).Apply(SvgPack("a", ("iconid_settings", Star))).Success);
+
+        Assert.Equal(1, files.Reads.Count(r => r == RcoDevice));
+        Assert.DoesNotContain(RcoBackup, files.Reads);
+        Assert.Contains(RcoBackup, files.Hashes);   // the backup's read-back
+        Assert.Contains(RcoDevice, files.Hashes);   // the written container's read-back
+        Assert.Equal(Container(), files.Files[RcoBackup]);
+    }
+
+    [Fact]
+    public void A_later_icon_apply_reads_only_the_stock_copy_whole()
+    {
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+        var applier = new ThemeApplier(files, () => 0);
+        Assert.True(applier.Apply(SvgPack("a", ("iconid_settings", Star))).Success);
+        files.Reads.Clear();
+
+        Assert.True(applier.Apply(SvgPack("b", ("iconid_notification", Star))).Success);
+
+        Assert.DoesNotContain(RcoDevice, files.Reads);
+        Assert.Equal(1, files.Reads.Count(r => r == RcoBackup));
+        (int o, int n) = RcoSvg.Find(Container(), "iconid_notification");
+        Assert.Contains("#f00", Encoding.UTF8.GetString(files.Files[RcoDevice], o, n));
+    }
+
+    [Fact]
+    public void The_clean_start_reads_an_unchanged_container_not_at_all_and_a_themed_one_only_from_its_backup()
+    {
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+        files.Files[BgDevice] = LiveBackground;
+        var applier = new ThemeApplier(files, () => 0);
+        Assert.True(applier.Apply(SvgPack("a", ("iconid_settings", Star))).Success);
+        files.Reads.Clear();
+
+        // A theme without icons puts the themed container back to stock first.
+        Assert.True(applier.Apply(BackgroundPack(Background("a"))).Success);
+        Assert.Equal(Container(), files.Files[RcoDevice]);
+        Assert.DoesNotContain(RcoDevice, files.Reads);
+        Assert.Equal(1, files.Reads.Count(r => r == RcoBackup));
+
+        files.Reads.Clear();
+        Assert.True(applier.Apply(BackgroundPack(Background("b"))).Success);
+        Assert.DoesNotContain(RcoDevice, files.Reads);
+        Assert.DoesNotContain(RcoBackup, files.Reads);
+    }
+
+    [Fact]
+    public void Restore_reads_the_container_backup_whole_once_and_the_live_one_not_at_all()
+    {
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+        var applier = new ThemeApplier(files, () => 0);
+        Assert.True(applier.Apply(SvgPack("a", ("iconid_settings", Star))).Success);
+        files.Reads.Clear();
+
+        ApplyResult restore = applier.RestoreOriginals();
+
+        Assert.True(restore.Success, restore.Message);
+        Assert.Equal(Container(), files.Files[RcoDevice]);
+        Assert.DoesNotContain(RcoDevice, files.Reads);
+        Assert.Equal(1, files.Reads.Count(r => r == RcoBackup));
+    }
+
+    [Fact]
+    public void A_failed_write_after_the_container_rolls_the_container_back_to_stock()
+    {
+        var files = new MemoryDeviceFiles { CorruptMoveTo = BgDevice };
+        files.Files[RcoDevice] = Container();
+        files.Files[BgDevice] = LiveBackground;
+
+        ApplyResult result = new ThemeApplier(files, () => 0).Apply(IconAndBackgroundPack(Background("a")));
+
+        Assert.False(result.Success);
+        Assert.Contains("Rolled back 2 target(s)", result.Message);
+        Assert.Equal(Container(), files.Files[RcoDevice]);
+        Assert.Equal(LiveBackground, files.Files[BgDevice]);
+    }
+
+    private static ThemePack BackgroundPack(byte[] background)
+    {
+        var zip = new ZipBuilder();
+        zip.Add("bg/hub.dds.zst", background);
+        zip.AddText("theme.json", $$"""
+            {"format":2,"id":"bg","name":"Bg","author":"tests","version":"1.0","description":"bg","unmapped":"keep",
+             "targets":[{"path":"{{BgPath}}","layer":"background","file":"bg/hub.dds.zst",
+                         "bytes":{{background.Length}},"sha256":"{{ThemePack.Hash(background)}}"}]}
+            """);
+        return ThemePack.Open(zip.ToArray());
+    }
+
     [Fact]
     public void Svg_target_without_resource_is_an_error()
     {
@@ -162,10 +337,29 @@ public class RcoSvgTests
     {
         public Dictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
         public List<string> Writes { get; } = new();
+        public List<string> Reads { get; } = new();
         public bool Exists(string path) => Files.ContainsKey(path);
-        public byte[] ReadAllBytes(string path) => (byte[])Files[path].Clone();
+        public long Length(string path) => Files.TryGetValue(path, out byte[]? bytes) ? bytes.Length : -1;
+        public byte[] ReadAllBytes(string path) { Reads.Add(path); return (byte[])Files[path].Clone(); }
+
+        /// <summary>Paths hashed with Hash (streamed on the console, never held whole), in order.</summary>
+        public List<string> Hashes { get; } = new();
+        public string Hash(string path) { Hashes.Add(path); return ThemePack.Hash(Files[path]); }
         public void WriteAllBytes(string path, byte[] data) { Writes.Add(path); Files[path] = (byte[])data.Clone(); }
-        public void Move(string from, string to) { Files[to] = Files[from]; Files.Remove(from); }
+        /// <summary>The next Move onto this path stores corrupted bytes, so read-back verification fails once.</summary>
+        public string? CorruptMoveTo { get; set; }
+
+        public void Move(string from, string to)
+        {
+            byte[] bytes = Files[from];
+            Files.Remove(from);
+            if (CorruptMoveTo == to)
+            {
+                CorruptMoveTo = null;
+                bytes = bytes.Select(b => (byte)(b ^ 0xFF)).ToArray();
+            }
+            Files[to] = bytes;
+        }
         public void DeleteFile(string path) => Files.Remove(path);
         public void CreateDirectoryRecursive(string path) { }
         public void RemountSystemExRw() { }

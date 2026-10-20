@@ -5,6 +5,7 @@ using System.Threading;
 using SharpProspero.Interop.Kernel;
 using SharpProspero.Interop.Net;
 using SharpProspero.Platform;
+using SharpProspero.Security;
 using SharpProspero.Storage;
 
 namespace ProsperoThemes.App.Library;
@@ -20,7 +21,7 @@ public static class ThemeHelperClient
     public const int Port = 9071;
     public const int LoaderPort = 9021;
     /// <summary>The build tag this app expects; ThemeHelper/Program.cs BuildTag.</summary>
-    public const int ExpectedTag = 4;
+    public const int ExpectedTag = 5;
     public const string ElfPath = DeviceThemeLibrary.AssetRoot + "/ThemeHelper.elf";
 
     private const uint ReplyTimeoutMicroseconds = 15_000_000;
@@ -109,12 +110,47 @@ public static class ThemeHelperClient
         throw new InvalidOperationException($"stat {path} failed: {(reply.Length == 0 ? "no answer" : reply)}");
     }
 
+    /// <summary>The file's size from STAT, -1 for a failed stat; any other answer throws, as in <see cref="Exists"/>.</summary>
+    public static long Size(string path)
+    {
+        string reply = Request("STAT " + path, null, out _);
+        if (reply.StartsWith("OK size=", StringComparison.Ordinal) && long.TryParse(reply.AsSpan(8), out long size)) return size;
+        if (reply.StartsWith("STAT rc=", StringComparison.Ordinal)) return -1;
+        throw new InvalidOperationException($"stat {path} failed: {(reply.Length == 0 ? "no answer" : reply)}");
+    }
+
     public static byte[] Read(string path)
     {
         byte[]? data = null;
         string reply = Request("READ " + path, null, out data);
         if (data is null) throw new InvalidOperationException($"read {path} failed: {reply}");
         return data;
+    }
+
+    /// <summary>
+    /// Lower-case hex SHA-256 of a file, streamed through READ, so a large file is never held whole (the icon
+    /// container is about 100 MB before firmware 13.00).
+    /// </summary>
+    public static string Hash(string path)
+    {
+        using var connection = TcpConnection.Connect(SocketAddress.Loopback(Port));
+        connection.SetReceiveTimeout(ReplyTimeoutMicroseconds);
+        connection.SendAll(Encoding.ASCII.GetBytes("READ " + path + "\n"));
+        string reply = ReadLine(connection);
+        if (!reply.StartsWith("OK ", StringComparison.Ordinal) || !long.TryParse(reply.AsSpan(3), out long size))
+            throw new InvalidOperationException($"read {path} failed: {reply}");
+        var digest = new Sha256();
+        byte[] buffer = new byte[64 * 1024];
+        long done = 0;
+        while (done < size)
+        {
+            int got = connection.Receive(buffer.AsSpan(0, (int)Math.Min(buffer.Length, size - done)));
+            if (got <= 0) throw new InvalidOperationException($"read {path} ended after {done} of {size} bytes");
+            digest.Update(buffer.AsSpan(0, got));
+            done += got;
+        }
+        connection.SendAll("QUIT\n"u8);
+        return digest.FinishHex();
     }
 
     public static void Write(string path, byte[] data)
@@ -151,7 +187,19 @@ public static class ThemeHelperClient
         using var connection = TcpConnection.Connect(SocketAddress.Loopback(Port));
         connection.SetReceiveTimeout(ReplyTimeoutMicroseconds);
         connection.SendAll(Encoding.ASCII.GetBytes(command + "\n"));
-        if (body is not null) connection.SendAll(body);
+        if (body is not null)
+        {
+            try { connection.SendAll(body); }
+            catch (Exception ex)
+            {
+                // The helper ends a refused write early; its answer, when it sent one, says why.
+                string answer;
+                try { answer = ReadLine(connection); }
+                catch (Exception) { answer = ""; }
+                throw new InvalidOperationException(
+                    $"{command}: the helper closed the connection ({(answer.Length > 0 ? answer : ex.Message)})");
+            }
+        }
         string reply = ReadLine(connection);
         if (command.StartsWith("READ ", StringComparison.Ordinal) && reply.StartsWith("OK ", StringComparison.Ordinal))
         {
@@ -166,7 +214,9 @@ public static class ThemeHelperClient
             }
             readData = data;
         }
-        connection.SendAll("QUIT\n"u8);
+        // A WRITE that did not complete ends the connection on the helper's side: nothing more to send.
+        if (body is null || reply == "WRITE wrote=" + body.Length)
+            connection.SendAll("QUIT\n"u8);
         return reply;
     }
 
@@ -207,7 +257,11 @@ public sealed class HelperDeviceFiles : IDeviceFiles
 
     public bool Exists(string path) => IsThemeRoot(path) ? ThemeHelperClient.Exists(path) : _local.Exists(path);
 
+    public long Length(string path) => IsThemeRoot(path) ? ThemeHelperClient.Size(path) : _local.Length(path);
+
     public byte[] ReadAllBytes(string path) => IsThemeRoot(path) ? ThemeHelperClient.Read(path) : _local.ReadAllBytes(path);
+
+    public string Hash(string path) => IsThemeRoot(path) ? ThemeHelperClient.Hash(path) : _local.Hash(path);
 
     public void WriteAllBytes(string path, byte[] data)
     {
@@ -284,6 +338,23 @@ public sealed class ReportDeviceFiles : IDeviceFiles
         }
     }
 
+    public string Hash(string path)
+    {
+        try
+        {
+            string digest = _local.Hash(path);
+            AppReads++;
+            return digest;
+        }
+        catch when (_helper)
+        {
+            string digest = ThemeHelperClient.Hash(path);
+            HelperReads++;
+            return digest;
+        }
+    }
+
+    public long Length(string path) => throw new InvalidOperationException("the report reads whole files");
     public void WriteAllBytes(string path, byte[] data) => throw new InvalidOperationException("the report only reads");
     public void Move(string from, string to) => throw new InvalidOperationException("the report only reads");
     public void DeleteFile(string path) => throw new InvalidOperationException("the report only reads");

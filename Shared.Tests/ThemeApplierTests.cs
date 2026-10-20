@@ -491,6 +491,23 @@ public class ThemeApplierTests
     }
 
     [Fact]
+    public void A_write_refused_before_the_rename_is_not_rolled_back()
+    {
+        byte[] live1 = Live("one"), live2 = Live("two");
+        var fake = DeviceWithLive((Dev1, live1), (Dev2, live2));
+        fake.RefusedWrites.Add(Dev2 + ".tmp");
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, Zst("one")), (Path2, Zst("two"))));
+
+        Assert.False(result.Success);
+        Assert.Contains("Rolled back 1 target(s)", result.Message);
+        Assert.DoesNotContain("FAILED", result.Message);
+        Assert.Empty(result.Written);
+        Assert.Equal(live1, fake.Files[Dev1]);
+        Assert.Equal(live2, fake.Files[Dev2]);
+    }
+
+    [Fact]
     public void Restore_puts_the_backup_bytes_back()
     {
         byte[] live = Live("one");
@@ -535,11 +552,37 @@ public class ThemeApplierTests
 
         public bool Exists(string path) => Files.ContainsKey(path) || Directories.Contains(path);
 
-        public byte[] ReadAllBytes(string path) =>
-            Files.TryGetValue(path, out byte[]? bytes) ? (byte[])bytes.Clone() : throw new FileNotFoundException(path);
+        /// <summary>Paths whose reported size is this instead of their real one (a file too large for the helper).</summary>
+        public Dictionary<string, long> Sizes { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Paths read with ReadAllBytes, in order.</summary>
+        public List<string> Reads { get; } = new();
+
+        public long Length(string path) =>
+            Sizes.TryGetValue(path, out long size) ? size : Files.TryGetValue(path, out byte[]? bytes) ? bytes.Length : -1;
+
+        public byte[] ReadAllBytes(string path)
+        {
+            Reads.Add(path);
+            return Files.TryGetValue(path, out byte[]? bytes) ? (byte[])bytes.Clone() : throw new FileNotFoundException(path);
+        }
+
+        /// <summary>Paths hashed with Hash (streamed on the console, never held whole), in order.</summary>
+        public List<string> Hashes { get; } = new();
+
+        public string Hash(string path)
+        {
+            Hashes.Add(path);
+            return Files.TryGetValue(path, out byte[]? bytes) ? Sha(bytes) : throw new FileNotFoundException(path);
+        }
+
+        /// <summary>Writes to these paths throw, as the helper's refusal of a file over its write limit does.</summary>
+        public HashSet<string> RefusedWrites { get; } = new(StringComparer.Ordinal);
 
         public void WriteAllBytes(string path, byte[] data)
         {
+            if (RefusedWrites.Contains(path))
+                throw new InvalidOperationException($"write {path} failed: refused");
             Writes.Add(path);
             Files[path] = (byte[])data.Clone();
         }

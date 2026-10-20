@@ -48,8 +48,10 @@ internal static unsafe class Program
     private const string AppMetaPrefix = "/user/appmeta/";
     private const string RnpsPrefix = "/mnt/rnps/apps/";
     private const string UserAppPrefix = "/user/app/";
-    // The largest file the helper writes: the 39 MB icon container (Sce.PlayStation.PUI_UI3.rco) with room.
-    private const int MaxWrite = 64 * 1024 * 1024;
+    // The largest file the helper writes: the icon container (Sce.PlayStation.PUI_UI3.rco), 39 MB on 13.00 and
+    // about 100 MB before it, with room. WRITE streams through one chunk, so this is not a memory limit. The
+    // app's ThemeApplier.MaxFileBytes is the same number.
+    private const int MaxWrite = 160 * 1024 * 1024;
 
     // open(2) flags, as the unjail sample uses them on this platform.
     private const int OpenReadOnly = 0x0000;
@@ -62,7 +64,7 @@ internal static unsafe class Program
     private const int SysNmount = 378;
 
     // Build tag announced on PING, so a client can tell which helper revision it is talking to.
-    private const int BuildTag = 4;
+    private const int BuildTag = 5;
 
     // /system_ex is remounted once per boot. A second MNT_UPDATE on the already writable mount was the
     // last thing before a console hang (2026-10-13), so it is not repeated: not within this helper's
@@ -186,21 +188,24 @@ internal static unsafe class Program
                 continue;
             }
 
+            // A WRITE that is refused or does not complete ends the connection: its binary body follows the
+            // header and must never be parsed as command lines.
             if (StartsWith(line, "WRITE "))
             {
                 // header is "WRITE <path> <len>"
                 byte* cursor = line + 6;
                 while (*cursor != 0 && *cursor != (byte)' ') cursor++;
-                if (*cursor != (byte)' ') { Send(client, "ERR badpath\n"u8); continue; }
+                if (*cursor != (byte)' ') { Send(client, "ERR badpath\n"u8); return; }
                 *cursor = 0;
                 int wanted = ParseInt(cursor + 1);
                 byte* path = ConfinedPathFrom(line + 6, scratch);
                 if (path == null || !EndsWithTmp(path) || wanted < 0 || wanted > MaxWrite)
                 {
                     Send(client, "ERR badpath\n"u8);
-                    continue;
+                    return;
                 }
-                ServeWrite(client, path, wanted, scratch);
+                if (!ServeWrite(client, path, wanted, scratch))
+                    return;
                 continue;
             }
 
@@ -268,7 +273,12 @@ internal static unsafe class Program
         KernelFile.sceKernelClose(fd);
     }
 
-    private static void ServeWrite(int client, byte* path, int wanted, byte* scratch)
+    /// <summary>
+    /// Streams the body into the file; true when all of it was written. When the open or a write fails, the
+    /// rest of the body (its length is checked against MaxWrite) is read and dropped, so the client can finish
+    /// sending and still gets its answer. On false the caller ends the connection.
+    /// </summary>
+    private static bool ServeWrite(int client, byte* path, int wanted, byte* scratch)
     {
         int flags = OpenReadWrite | OpenCreate;
         if (wanted > 0) flags |= OpenTruncate;
@@ -276,15 +286,21 @@ internal static unsafe class Program
         int fd = KernelFile.sceKernelOpen(path, flags, Mode666);
         if (fd < 0)
             fd = (int)PayloadCrt.Syscall(PayloadCrt.SYS_open, (long)(nint)path, flags, Mode666);
-        if (fd < 0) { SendResult(client, "WRITE", "rc="u8, fd); return; }
+        if (fd < 0)
+        {
+            Drain(client, wanted, scratch);
+            SendResult(client, "WRITE", "rc="u8, fd);
+            return false;
+        }
 
         // The path lives in scratch, but open has already consumed it, so scratch can now carry data.
-        int done = 0;
+        int done = 0, received = 0;
         while (done < wanted)
         {
             int want = wanted - done > StreamChunk ? StreamChunk : wanted - done;
             int got = ReadExact(client, scratch, want);
             if (got <= 0) break;
+            received += got;
 
             long wrote = KernelFile.sceKernelWrite(fd, scratch, (nuint)got);
             if (wrote < 0)
@@ -295,7 +311,21 @@ internal static unsafe class Program
         }
 
         KernelFile.sceKernelClose(fd);
+        if (received < wanted)
+            Drain(client, wanted - received, scratch);
         SendResult(client, "WRITE", "wrote="u8, done);
+        return done == wanted;
+    }
+
+    /// <summary>Reads and drops up to <paramref name="length"/> bytes, stopping early when the client does.</summary>
+    private static void Drain(int client, int length, byte* scratch)
+    {
+        while (length > 0)
+        {
+            int got = ReadExact(client, scratch, length > StreamChunk ? StreamChunk : length);
+            if (got <= 0) return;
+            length -= got;
+        }
     }
 
     // MNT_RDONLY in statfs.f_flags.
@@ -560,6 +590,7 @@ internal static unsafe class Program
         bool any = false;
         while (*text >= (byte)'0' && *text <= (byte)'9')
         {
+            if (value > (int.MaxValue - 9) / 10) return -1;   // too large: refuse rather than wrap
             value = value * 10 + (*text - (byte)'0');
             text++;
             any = true;

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using SharpProspero.Interop;
+using SharpProspero.Security;
 using SharpProspero.Storage;
 
 namespace ProsperoThemes.App.Library;
@@ -11,7 +12,11 @@ public sealed class DeviceFiles : IDeviceFiles
 {
     public bool Exists(string path) => FileSystem.Exists(path);
 
+    public long Length(string path) => FileSystem.Exists(path) ? Folders.Named(path, () => FileSystem.GetFileSize(path)) : -1;
+
     public byte[] ReadAllBytes(string path) => Folders.Named(path, () => FileSystem.ReadAllBytes(path));
+
+    public string Hash(string path) => Folders.Named(path, () => Sha256.HashFileHex(path));
 
     public void WriteAllBytes(string path, byte[] data) => Folders.Named(path, () => FileSystem.WriteAllBytes(path, data));
 
