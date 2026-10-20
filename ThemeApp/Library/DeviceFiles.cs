@@ -36,34 +36,34 @@ public sealed class DeviceFiles : IDeviceFiles
 /// <summary>Folder creation and error messages that name the file.</summary>
 public static class Folders
 {
+    private const int AlreadyExists = unchecked((int)0x80020011), NoSuchEntry = unchecked((int)0x80020002);
+
     /// <summary>
-    /// Creates <paramref name="path"/> and the folders above it that are missing. Starts below the deepest folder
-    /// that exists, so /data itself is never touched: some firmware answers mkdir on /data with "permission denied"
-    /// (0x8002000D) inside the app's sandbox, where the SDK's walk from the top would stop.
+    /// Creates <paramref name="path"/> and the folders above it that are missing. It asks mkdir itself instead of
+    /// checking first: FileSystem.Exists (sceKernelCheckReachability) does not reliably report a folder as there,
+    /// and the SDK's walk from the top then calls mkdir on /data, which the app's sandbox refuses with "permission
+    /// denied" (0x8002000D, seen on 12.20 and on 13.00 after the app was suspended). "Already exists" counts as done,
+    /// and only "no such entry" goes one folder up, so a folder that exists is never asked for its parents.
     /// </summary>
     public static void Ensure(string path)
     {
-        string trimmed = path.TrimEnd('/');
-        if (trimmed.Length == 0 || FileSystem.Exists(trimmed)) return;
-        var missing = new Stack<string>();
-        for (string current = trimmed; current.Length > 0 && !FileSystem.Exists(current); current = Parent(current))
-            missing.Push(current);
-        while (missing.Count > 0)
+        string folder = path.TrimEnd('/');
+        if (folder.Length == 0) return;
+        int code = Mkdir(folder);
+        if (code == NoSuchEntry && Parent(folder) is { Length: > 0 } parent)
         {
-            string folder = missing.Pop();
-            try
-            {
-                FileSystem.CreateDirectory(folder);
-            }
-            catch (ProsperoException ex) when (!FileSystem.Exists(folder))
-            {
-                throw new IOException($"{Short(ex)} for {folder}", ex);
-            }
-            catch (ProsperoException)
-            {
-                // Made meanwhile, or the answer was not "created" although the folder is there: fine either way.
-            }
+            Ensure(parent);
+            code = Mkdir(folder);
         }
+        if (code < 0 && code != AlreadyExists)
+            throw new IOException($"sceKernelMkdir failed (0x{unchecked((uint)code):X8}) for {folder}");
+    }
+
+    private static unsafe int Mkdir(string folder)
+    {
+        byte[] name = System.Text.Encoding.UTF8.GetBytes(folder + "\0");
+        fixed (byte* p = name)
+            return SharpProspero.Interop.Kernel.KernelFile.sceKernelMkdir(p, 0x1FF);
     }
 
     /// <summary>Runs <paramref name="action"/>; an SDK error names <paramref name="path"/>.</summary>

@@ -106,6 +106,26 @@ public sealed unsafe class StoreHttpClient : IDisposable
 
     public HttpResponse Get(string url) => Send(HttpMethod.Get, url);
 
+    /// <summary>
+    /// A GET that is sent again, up to <paramref name="attempts"/> times in all, when the connection fails while the
+    /// request goes out or the answer comes in. On 9.60 a pack download stopped with "sceHttpReadData failed
+    /// (0x80431064)" now and then, and the same download worked when it was tried again.
+    /// </summary>
+    public HttpResponse GetWithRetry(string url, int attempts = 3)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return Get(url);
+            }
+            catch (ProsperoException ex) when (attempt < attempts && ex.Operation is "sceHttpReadData" or "sceHttpSendRequest")
+            {
+                System.Threading.Thread.Sleep(500 * attempt);
+            }
+        }
+    }
+
     /// <summary>Sends one request and reads the whole answer.</summary>
     /// <param name="headers">Header lines such as <c>"X-Device-Id: abc"</c>.</param>
     /// <exception cref="ProsperoException">The request failed or the answer is larger than <see cref="MaxBodyBytes"/>.</exception>

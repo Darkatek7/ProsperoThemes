@@ -493,7 +493,7 @@ internal sealed class ThemeApp : ProsperoApp
         _listPosted = false;
         bool started = StartCommunityWork(busyText, http =>
         {
-            HttpResponse answer = http.Get(CommunityList.ListUrl(baseUrl, sort, categoryId));
+            HttpResponse answer = http.GetWithRetry(CommunityList.ListUrl(baseUrl, sort, categoryId));
             if (!answer.IsSuccess) return new StoreResult("Store responded with status " + answer.StatusCode + ".", NoticeLevel.Error);
             List<CommunityTheme> list = CommunityList.Parse(System.Text.Encoding.UTF8.GetString(answer.Body), baseUrl);
             // Asked to stop while the list was on its way: the old list stays on screen until the new one is here.
@@ -585,7 +585,7 @@ internal sealed class ThemeApp : ProsperoApp
         string? previous = _downloads.TryGetValue(theme.Id, out string? recorded) ? recorded : null;
         StartCommunityWork("Downloading “" + theme.Name + "”…", http =>
         {
-            HttpResponse answer = http.Get(theme.DownloadUrl);
+            HttpResponse answer = http.GetWithRetry(theme.DownloadUrl);
             if (!answer.IsSuccess) return new StoreResult("Download failed (" + answer.StatusCode + ").", NoticeLevel.Error);
             // Checked exactly like a USB import before it is stored.
             bool added = DeviceThemeLibrary.AddToLibrary(answer.Body, theme.Name);
