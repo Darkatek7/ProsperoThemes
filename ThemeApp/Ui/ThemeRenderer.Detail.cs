@@ -8,11 +8,13 @@ namespace ProsperoThemes.App.Ui;
 
 public sealed partial class ThemeRenderer
 {
-    // The screen shows Apply and Preview as buttons, so the footer only adds the way out.
-    private static readonly HintItem[] DetailHintItems = [new(PadButton.Circle, "Back")];
+    // The screen shows Apply and Preview as buttons, so the footer only adds removing and the way out. The theme that
+    // ships with the app cannot be removed.
+    private static readonly HintItem[] DetailHintItems = [new(PadButton.Triangle, "Remove"), new(PadButton.Circle, "Back")];
+    private static readonly HintItem[] BundledDetailHintItems = [new(PadButton.Circle, "Back")];
 
     /// <summary>The footer hints of the theme detail.</summary>
-    private HintItem[] DetailHints(ThemeBrowser browser) => DetailHintItems;
+    private HintItem[] DetailHints(ThemeBrowser browser) => _selected is { Bundled: false } ? DetailHintItems : BundledDetailHintItems;
 
     // ---- Layout -----------------------------------------------------------------------------------------------------
 

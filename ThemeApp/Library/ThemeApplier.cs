@@ -242,7 +242,8 @@ public sealed class ThemeApplier
 
             string skipped = Skipped.Count == 0 ? "" : $" Skipped: {string.Join("; ", Skipped)}.";
             string defaults = reset.Count == 0 ? "" : $"Put {reset.Count} earlier change(s) back to default. ";
-            return new ApplyResult(true, $"{RefreshedNote()}{defaults}Applied and verified {written.Count} target(s).{skipped}", written);
+            return new ApplyResult(true,
+                $"{RestartNote(written.Concat(reset))}{RefreshedNote()}{defaults}Applied and verified {written.Count} target(s).{skipped}", written);
         }
         catch (Exception ex)
         {
@@ -313,7 +314,7 @@ public sealed class ThemeApplier
                     restored);
             }
 
-            return new ApplyResult(true, $"{RefreshedNote()}Restored and verified {restored.Count} target(s).", restored);
+            return new ApplyResult(true, $"{RestartNote(restored)}{RefreshedNote()}Restored and verified {restored.Count} target(s).", restored);
         }
         catch (Exception ex)
         {
@@ -374,8 +375,9 @@ public sealed class ThemeApplier
 
             string gone = missing == 0 ? "" : $" {missing} file(s) no longer exist on the console and were left out.";
             return errors.Count == 0
-                ? new ApplyResult(true, $"{RefreshedNote()}Restored and verified {restored.Count} original(s).{gone}", restored)
-                : new ApplyResult(false, $"Restored {restored.Count} of {plans.Count} original(s); failed: {string.Join("; ", errors)}", restored);
+                ? new ApplyResult(true, $"{RestartNote(restored)}{RefreshedNote()}Restored and verified {restored.Count} original(s).{gone}", restored)
+                : new ApplyResult(false,
+                    $"{RestartNote(restored)}Restored {restored.Count} of {plans.Count} original(s); failed: {string.Join("; ", errors)}.", restored);
         }
         catch (Exception ex)
         {
@@ -512,6 +514,16 @@ public sealed class ThemeApplier
         WriteBackup(backup, live);
         Refreshed.Add(logical);
     }
+
+    /// <summary>
+    /// The home screen reads tile icons (app.db points at them with a cached <c>?ts=</c> stamp) and the system symbols
+    /// in the icon container when the console starts, so a change to them only shows after the next restart. Backgrounds
+    /// change right away. It leads the message, because the notice shows two lines at most.
+    /// </summary>
+    private static string RestartNote(IEnumerable<string> devices) =>
+        devices.Any(d => d.StartsWith("/mnt/rnps/", StringComparison.Ordinal) || d.EndsWith(".rco", StringComparison.Ordinal))
+            ? "Icons change after the next restart of the console. "
+            : "";
 
     private string RefreshedNote() => Refreshed.Count == 0 ? "" :
         $"{Refreshed.Count} file(s) had been replaced by a system update; that version is now their default " +

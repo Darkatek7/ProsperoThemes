@@ -138,6 +138,38 @@ public class RcoSvgTests
         Assert.Equal(Container(), files.Files[RcoDevice]);
     }
 
+    [Fact]
+    public void Icon_changes_say_they_show_after_a_restart_and_backgrounds_do_not()
+    {
+        // The home screen reads icons at start (app.db caches tile icons), so a restore that "did nothing" was only
+        // waiting for a restart; backgrounds change right away.
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+        files.Files[BgDevice] = LiveBackground;
+        var applier = new ThemeApplier(files, () => 0);
+
+        ApplyResult icons = applier.Apply(SvgPack("a", ("iconid_settings", Star)));
+        ApplyResult restore = applier.RestoreOriginals();
+        ApplyResult background = applier.Apply(ThemePack.Open(BackgroundOnly(Background("c"))));
+
+        Assert.Contains("after the next restart", icons.Message);
+        Assert.Contains("after the next restart", restore.Message);
+        Assert.True(background.Success, background.Message);
+        Assert.DoesNotContain("restart", background.Message);
+    }
+
+    private static byte[] BackgroundOnly(byte[] background)
+    {
+        var zip = new ZipBuilder();
+        zip.Add("bg/hub.dds.zst", background);
+        zip.AddText("theme.json", $$"""
+            {"format":2,"id":"bg","name":"Bg","author":"tests","version":"1.0","description":"bg","unmapped":"keep",
+             "targets":[{"path":"{{BgPath}}","layer":"background","file":"bg/hub.dds.zst",
+               "bytes":{{background.Length}},"sha256":"{{ThemePack.Hash(background)}}"}]}
+            """);
+        return zip.ToArray();
+    }
+
     private const string BgPath = "vsh_asset/bg_hub_default.dds.zst";
     private const string BgDevice = "/system_ex/vsh_asset/bg_hub_default.dds.zst";
     private static readonly byte[] LiveBackground = Encoding.ASCII.GetBytes("live-bg");

@@ -84,15 +84,21 @@ public sealed partial class ThemeRenderer
     // ---- Dialogs ----------------------------------------------------------------------------------------------------
 
     // The wrapped body text of each dialog; it does not depend on the pack, so it is wrapped once.
-    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[3];
+    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[4];
     private const int DialogWidth = 900, DialogPad = 48, DialogRow = 72, DialogGap = 16;
 
-    private static string DialogTitle(DialogKind kind) => kind == DialogKind.Restore ? "Restore defaults?" : "Apply this theme?";
+    private static string DialogTitle(DialogKind kind) => kind switch
+    {
+        DialogKind.Restore => "Restore defaults?",
+        DialogKind.Remove => "Remove this theme?",
+        _ => "Apply this theme?",
+    };
 
     private static string DialogText(DialogKind kind) => kind switch
     {
         DialogKind.Restore => "Puts the original backgrounds, icons and sounds back on this console. Your theme library stays as it is.",
         DialogKind.ApplyScope => "This theme has a background for apps. Choose where it goes: only apps without their own image, or all apps.",
+        DialogKind.Remove => "Takes it out of your library; the file is kept in /data/prospero-themes/attic. If it is applied, it stays on the console until you apply another theme or restore the defaults.",
         _ => "This changes the backgrounds, icons and sounds on this console. Restore defaults on the System tab puts the originals back.",
     };
 
@@ -161,7 +167,7 @@ public sealed partial class ThemeRenderer
         {
             bool focus = i == browser.DialogFocus;
             bool cancel = i == options.Count - 1;
-            bool destructive = kind == DialogKind.Restore && i == 0;
+            bool destructive = kind is DialogKind.Restore or DialogKind.Remove && i == 0;
             Paint.FillRoundedRect(s, tx, ty, bodyWidth, DialogRow, Theme.RadiusKey, focus ? White : KeyFill);
             if (focus) Paint.FocusRing(s, tx, ty, bodyWidth, DialogRow, Theme.RadiusKey, Accent);
             Color ink = focus ? PillInk : cancel ? Muted : destructive ? Theme.Danger : White;

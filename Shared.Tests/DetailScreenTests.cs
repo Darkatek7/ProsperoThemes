@@ -363,14 +363,15 @@ public class DetailScreenTests
     }
 
     [Fact]
-    public void The_footer_only_offers_the_way_back()
+    public void The_footer_only_offers_removing_and_the_way_back()
     {
         using var scene = new Scene(Entry("Footer", "A description.", StoreTargets()));
         scene.Settle();
-        // The hint bar is right-aligned: with one hint (about 100 px) nothing of it is left of x = 1700. The glyph discs and
-        // the labels are Muted, so no Muted pixel may be in the band to its left (the old bar had Apply and Preview there).
-        Assert.Equal(0, CountPixels(scene.Canvas, 1000, Theme.FooterY, 700, Theme.FooterHeight, Theme.Muted));
-        Assert.True(CountPixels(scene.Canvas, 1700, Theme.FooterY, Theme.ContentRight - 1700, Theme.FooterHeight, Theme.Muted) > 300);
+        // The hint bar is right-aligned: with two hints (Remove, Back; about 300 px) nothing of it is left of x = 1450. The
+        // glyph discs and the labels are Muted, so no Muted pixel may be in the band to its left (the old bar had Apply and
+        // Preview there).
+        Assert.Equal(0, CountPixels(scene.Canvas, 1000, Theme.FooterY, 450, Theme.FooterHeight, Theme.Muted));
+        Assert.True(CountPixels(scene.Canvas, 1450, Theme.FooterY, Theme.ContentRight - 1450, Theme.FooterHeight, Theme.Muted) > 300);
     }
 
     [Fact]

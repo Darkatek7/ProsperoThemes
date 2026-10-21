@@ -129,6 +129,23 @@ public static class DeviceThemeLibrary
         return true;
     }
 
+    /// <summary>
+    /// Takes a pack out of the library: it is moved into <see cref="Attic"/> under its own file name, not deleted.
+    /// Only files directly in the library qualify, never the theme that ships with the app.
+    /// </summary>
+    public static LibrarySnapshot Remove(string path, string name)
+    {
+        string file = path[(path.LastIndexOf('/') + 1)..];
+        if (path != Root + "/" + file || !IsPack(file))
+            throw new InvalidOperationException("Only themes in the library can be removed.");
+        Folders.Ensure(Attic);
+        string stem = file[..file.LastIndexOf('.')], extension = file[file.LastIndexOf('.')..];
+        string target = Attic + "/" + file;
+        for (int n = 2; FileSystem.Exists(target); n++) target = Attic + "/" + stem + "-" + n + extension;
+        Folders.Named(target, () => FileSystem.Move(path, target));
+        return Scan() with { Message = "Removed “" + name + "” from your library." };
+    }
+
     private static bool IsPack(string name) => name.EndsWith(".p5theme", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".tar", StringComparison.OrdinalIgnoreCase);
 }

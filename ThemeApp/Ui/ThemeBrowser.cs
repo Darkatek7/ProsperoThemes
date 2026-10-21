@@ -9,16 +9,17 @@ namespace ProsperoThemes.App.Ui;
 public enum ThemeView { Library, Detail, Preview, Community, Import, System, StoreAddress }
 /// <summary>
 /// SaveStoreUrl: Options in the store-address editor; the app reads <see cref="ThemeBrowser.StoreEditor"/>'s text.
-/// ToggleBackgroundScope: the System row for app backgrounds. Busy: a press that needed the app to be idle (the app
+/// ToggleBackgroundScope: the System row for app backgrounds. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
 /// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
 /// </summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, Busy }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, RemoveTheme, Busy }
 
 /// <summary>
 /// The modal question over Detail or System. Apply asks to apply; ApplyScope is the same for a pack with an all-apps
-/// background and asks where that background goes; Restore asks before the defaults are put back.
+/// background and asks where that background goes; Restore asks before the defaults are put back; Remove asks before
+/// the selected pack leaves the library.
 /// </summary>
-public enum DialogKind { None, Apply, ApplyScope, Restore }
+public enum DialogKind { None, Apply, ApplyScope, Restore, Remove }
 
 /// <summary>The focusable rows of the System screen, top to bottom.</summary>
 public enum SystemRow { Backgrounds, StoreAddress, FirmwareReport, Restore }
@@ -28,6 +29,7 @@ public sealed class ThemeBrowser
     private static readonly string[] ApplyOptions = ["Apply theme", "Cancel"];
     private static readonly string[] ScopeOptions = ["Apps without their own image", "All apps", "Cancel"];
     private static readonly string[] RestoreOptions = ["Restore defaults", "Cancel"];
+    private static readonly string[] RemoveOptions = ["Remove from library", "Cancel"];
 
     /// <summary>Number of focusable rows on the System screen.</summary>
     public const int SystemRowCount = 4;
@@ -45,6 +47,7 @@ public sealed class ThemeBrowser
         DialogKind.Apply => ApplyOptions,
         DialogKind.ApplyScope => ScopeOptions,
         DialogKind.Restore => RestoreOptions,
+        DialogKind.Remove => RemoveOptions,
         _ => Array.Empty<string>(),
     };
     /// <summary>The apply that was just confirmed came from the scope question (see <see cref="ApplyAllApps"/>).</summary>
@@ -115,10 +118,11 @@ public sealed class ThemeBrowser
     /// <paramref name="triangle"/> Triangle. <paramref name="asksScope"/> says the selected pack has an all-apps
     /// background (its apply asks where that goes), <paramref name="allAppsScope"/> is the saved answer, and
     /// <paramref name="busy"/> that a worker job is running: then nothing that changes the console or the settings
-    /// is started (the press becomes <see cref="ThemeAction.Busy"/> instead).
+    /// is started (the press becomes <see cref="ThemeAction.Busy"/> instead). <paramref name="removable"/> says the
+    /// selected pack can leave the library (the theme that ships with the app cannot).
     /// </summary>
     public void Update(UiInput input, bool preview = false, bool options = false, bool triangle = false,
-        bool asksScope = false, bool allAppsScope = false, bool busy = false)
+        bool asksScope = false, bool allAppsScope = false, bool busy = false, bool removable = false)
     {
         // One Update is one frame, and an open dialog answers first. The X that opens a dialog (below) returns
         // right after opening it, so the same X cannot also confirm it.
@@ -195,6 +199,11 @@ public sealed class ThemeBrowser
                 if (busy) _action = ThemeAction.Busy;
                 else if (asksScope) OpenDialog(DialogKind.ApplyScope, allAppsScope ? 1 : 0);
                 else OpenDialog(DialogKind.Apply, 0);
+            }
+            else if (triangle && removable)
+            {
+                if (busy) _action = ThemeAction.Busy;
+                else OpenDialog(DialogKind.Remove, RemoveOptions.Length - 1);   // starts on Cancel
             }
         }
         else if (View == ThemeView.Import && input.Confirm) _action = ThemeAction.ImportUsb;
@@ -300,6 +309,11 @@ public sealed class ThemeBrowser
                     break;
                 case DialogKind.Restore:
                     _action = ThemeAction.RestoreOriginals;
+                    break;
+                case DialogKind.Remove:
+                    // The pack is gone once the library is read again, so its detail is left right away.
+                    _action = ThemeAction.RemoveTheme;
+                    View = ThemeView.Library;
                     break;
             }
             return;

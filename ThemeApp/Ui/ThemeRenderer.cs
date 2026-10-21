@@ -272,12 +272,16 @@ public sealed partial class ThemeRenderer : IDisposable
     // The frame time of the current Draw, for the screens that ease without being handed it.
     private double _frameDelta = 1.0 / 60;
 
+    // The selected library entry of the current Draw, for the footer hints.
+    private ThemeLibraryEntry? _selected;
+
     public void Draw(Surface surface, ThemeBrowser browser, IReadOnlyList<ThemeLibraryEntry> entries, double seconds, double delta = 1.0 / 60)
     {
         _frameDelta = delta;
         if (_noticeFresh) { _noticeAt = seconds; _noticeFresh = false; }
         if (browser.View != _previousView) { _previousView = browser.View; _viewStart = seconds; }
         var selected = browser.Selected >= 0 && browser.Selected < entries.Count ? entries[browser.Selected] : null;
+        _selected = selected;
         bool dialog = browser.Dialog != DialogKind.None;
         if (dialog && _dialogBase is not null && _dialogKey == DialogBaseKey(browser, selected, entries.Count))
         {

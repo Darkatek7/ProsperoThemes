@@ -455,6 +455,58 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeAction.None, browser.TakeAction());
     }
 
+    // ---- Dialogs: Remove ------------------------------------------------------------------------------
+
+    private static ThemeBrowser OnDetail()
+    {
+        var browser = new ThemeBrowser();
+        browser.SetCount(2);
+        browser.Update(X);
+        Assert.Equal(ThemeView.Detail, browser.View);
+        return browser;
+    }
+
+    [Fact]
+    public void Triangle_on_a_detail_asks_before_removing_and_starts_on_cancel()
+    {
+        var browser = OnDetail();
+
+        browser.Update(UiInput.None, triangle: true, removable: true);
+        Assert.Equal(DialogKind.Remove, browser.Dialog);
+        Assert.Equal(new[] { "Remove from library", "Cancel" }, browser.DialogOptions);
+        Assert.Equal(1, browser.DialogFocus);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+
+        browser.Update(X);                                          // Cancel
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        Assert.Equal(ThemeView.Detail, browser.View);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+
+        browser.Update(UiInput.None, triangle: true, removable: true);
+        browser.Update(Up);                                         // "Remove from library"
+        browser.Update(X);
+        Assert.Equal(ThemeAction.RemoveTheme, browser.TakeAction());
+        Assert.Equal(ThemeView.Library, browser.View);
+    }
+
+    [Fact]
+    public void The_bundled_theme_cannot_be_removed_and_nothing_is_removed_while_busy()
+    {
+        var browser = OnDetail();
+        browser.Update(UiInput.None, triangle: true, removable: false);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+
+        browser.Update(UiInput.None, triangle: true, removable: true, busy: true);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
+
+        browser.Update(UiInput.None, triangle: true, removable: true);
+        browser.Update(Up);
+        browser.Update(X, busy: true);                              // the job started while the question was open
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
+    }
+
     // ---- Dialogs: Restore, and the System list ------------------------------------------------------
 
     private static ThemeBrowser OnSystemTab(string storeUrl = "")

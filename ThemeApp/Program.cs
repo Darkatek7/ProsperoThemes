@@ -103,7 +103,7 @@ internal sealed class ThemeApp : ProsperoApp
     /// Scans (or imports into) the library on the worker. The scan's message stays on the USB Import screen; an
     /// import also shows it as a notice, and a failure always does.
     /// </summary>
-    private void StartWork(Func<LibrarySnapshot> work, bool announce = false)
+    private void StartWork(Func<LibrarySnapshot> work, bool announce = false, bool notify = false)
     {
         if (_busy) { Wait(); return; }
         _busy = true;
@@ -128,6 +128,7 @@ internal sealed class ThemeApp : ProsperoApp
                         _renderer.LibraryStatus = snapshot.Message;
                         _renderer.Notify(snapshot.Message, NoticeLevel.Info);
                     }
+                    else if (notify) _renderer.Notify(snapshot.Message, NoticeLevel.Success);
                     _renderer.Status = ThemeRenderer.Plural(_entries.Count, "theme");
                     _renderer.Busy = false;
                     _busy = false;
@@ -224,7 +225,8 @@ internal sealed class ThemeApp : ProsperoApp
         _browser.Update(UiInput.From(context.Input, context.PreviousInput),
             preview: context.Pressed(ScePadButton.Square), options: context.Pressed(ScePadButton.Options),
             triangle: context.Pressed(ScePadButton.Triangle), asksScope: SelectedHasAllAppsBackground(),
-            allAppsScope: _allAppsBackgrounds, busy: _busy);
+            allAppsScope: _allAppsBackgrounds, busy: _busy,
+            removable: _browser.Selected >= 0 && _browser.Selected < _entries.Count && !_entries[_browser.Selected].Bundled);
         switch (_browser.TakeAction())
         {
             case ThemeAction.Busy: Wait(); break;
@@ -240,6 +242,10 @@ internal sealed class ThemeApp : ProsperoApp
                 break;
             case ThemeAction.RestoreOriginals:
                 StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals());
+                break;
+            case ThemeAction.RemoveTheme when _browser.Selected >= 0 && !_entries[_browser.Selected].Bundled:
+                ThemeLibraryEntry removed = _entries[_browser.Selected];
+                StartWork(() => DeviceThemeLibrary.Remove(removed.Path, removed.Manifest.Name), notify: true);
                 break;
             case ThemeAction.SaveStoreUrl: SaveStoreAddress(); break;
             case ThemeAction.FirmwareReport: StartHelperWork("Saving firmware report…", needsHelper: false, SaveFirmwareReport); break;
