@@ -203,10 +203,12 @@ public class SoundThemeTests
             .Validate().HasErrors);
     }
 
-    [Fact]
-    public void A_ui_sound_pack_from_the_python_writer_validates_and_fits_a_clip()
+    [Theory]
+    [InlineData("ui-sound.p5theme")]       // Python writer (theme_pack.py)
+    [InlineData("web-ui-sound.p5theme")]   // TypeScript writer (web creator)
+    public void A_ui_sound_pack_from_the_other_writers_validates_and_fits_a_clip(string fixture)
     {
-        ThemePack pack = ThemePack.OpenFile(System.IO.Path.Combine(AppContext.BaseDirectory, "fixtures", "ui-sound.p5theme"));
+        ThemePack pack = ThemePack.OpenFile(System.IO.Path.Combine(AppContext.BaseDirectory, "fixtures", fixture));
         Assert.False(pack.Validate().HasErrors, string.Join("; ", pack.Validate().Errors.Select(e => e.Message)));
         ThemePackTarget target = Assert.Single(pack.Manifest.Targets);
         Assert.Equal((RcoPath, "vag", "psfx_focus_move"), (target.Path, target.Layer, target.Resource));

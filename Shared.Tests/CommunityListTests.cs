@@ -73,6 +73,27 @@ public class CommunityListTests
     }
 
     [Fact]
+    public void Contents_counts_the_music_among_the_sounds()
+    {
+        const string json = """
+            {"items":[
+              {"id":"s1","name":"Fein Oof","downloadUrl":"/d1","summary":{"fallback":true,"music":true,"sounds":2}},
+              {"id":"s2","name":"Oof","downloadUrl":"/d2","summary":{"music":false,"sounds":1}},
+              {"id":"s3","name":"Music only","downloadUrl":"/d3","summary":{"music":true,"sounds":0}},
+              {"id":"s4","name":"Old store","downloadUrl":"/d4","summary":{"fallback":true}}
+            ]}
+            """;
+        var list = CommunityList.Parse(json, "https://t.example");
+        Assert.Equal("Background · 3 sounds", list[0].Contents);
+        Assert.Equal("1 sound", list[1].Contents);
+        Assert.Equal("1 sound", list[2].Contents);
+        Assert.Equal((true, 2), (list[0].Music, list[0].Sounds));
+        // A store from before the count: no sounds, and the copy of a card keeps them.
+        Assert.Equal("Background", list[3].Contents);
+        Assert.Equal(2, (list[0] with { Likes = 5 }).Sounds);
+    }
+
+    [Fact]
     public void Builds_list_and_like_urls_and_reads_like_counts()
     {
         Assert.Equal("https://t.example/api/themes?sort=downloads&page=1&pageSize=24", CommunityList.ListUrl("https://t.example/", CommunitySort.Downloads));

@@ -13,9 +13,9 @@ namespace ProsperoThemes.App.Library;
 /// The counting rules are the store's (<c>summarize</c> in web/server/src/pack-info.ts): the home background is
 /// <c>vsh_asset/bg_hub_default.dds.zst</c>, the all-apps background is <c>allapps/pic0.dds</c>, per-app backgrounds
 /// match <c>apps/&lt;TID&gt;/pic0.dds</c>, system icons are the targets of the <c>svg</c> layer and tile icons the
-/// targets under <c>rnps/</c>. Sounds count the targets of the sound and vag layers, video those of its layer; the store does not list them
-/// yet, so a store card shows neither. Every target counts in each group it matches; a target that matches none is
-/// <see cref="Other"/>.
+/// targets under <c>rnps/</c>. Sounds count the targets of the sound and vag layers (the store lists the music apart and
+/// a card adds it back), video those of its layer, which the store does not list, so a store card never shows it.
+/// Every target counts in each group it matches; a target that matches none is <see cref="Other"/>.
 /// </remarks>
 public sealed class PackSummary
 {
@@ -100,7 +100,7 @@ public sealed class PackSummary
         return new PackSummary(home, allApps, perApp, icons, tiles, sounds, video, other);
     }
 
-    /// <summary>A summary from counts, the way the store lists them (it has no sound or video counts).</summary>
+    /// <summary>A summary from counts, the way the store lists them (it has no video count).</summary>
     public static PackSummary FromCounts(bool homeBackground, bool allApps, int perApp, int icons, int tiles, int sounds = 0, int video = 0)
         => new(homeBackground, allApps, perApp, icons, tiles, sounds, video, other: 0);
 

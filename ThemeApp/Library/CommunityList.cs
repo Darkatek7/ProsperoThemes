@@ -16,9 +16,16 @@ public sealed record CommunityTheme(
 {
     /// <summary>
     /// What the pack changes, in one short line for the card. Written by <see cref="PackSummary"/>, like the
-    /// library's own line for the same pack; the store's summary has no sound or video counts, so those are absent.
+    /// library's own line for the same pack: the music counts as one of its sounds. The store's summary has no video
+    /// count, so that is absent.
     /// </summary>
-    public string Contents => PackSummary.Format(Fallback, AllApps, PerApp, Icons, Tiles);
+    public string Contents => PackSummary.Format(Fallback, AllApps, PerApp, Icons, Tiles, Sounds + (Music ? 1 : 0));
+
+    /// <summary>Background music (bgm_*.at9) is in the pack; false from a store that predates the music count.</summary>
+    public bool Music { get; init; }
+
+    /// <summary>UI sounds and other system sound files besides the music; 0 from a store that predates the count.</summary>
+    public int Sounds { get; init; }
 
     /// <summary>
     /// The store's small JPEG of the preview (about an eighth of the PNG), or null from a store that has none.
@@ -129,7 +136,12 @@ public static class CommunityList
                 Absolute(baseUrl, e.GetString("previewUrl")), Absolute(baseUrl, download)!,
                 s.GetBool("fallback"), s.GetBool("allApps"), s.GetInt("perApp"), s.GetInt("icons"), s.GetInt("tiles"),
                 IsDigest(e.GetString("sha256")) ? e.GetString("sha256").ToLowerInvariant() : null)
-            { Categories = ParseCategories(e["categories"]), ThumbUrl = Absolute(baseUrl, e.GetString("thumbUrl")) });
+            {
+                Categories = ParseCategories(e["categories"]),
+                ThumbUrl = Absolute(baseUrl, e.GetString("thumbUrl")),
+                Music = s.GetBool("music"),
+                Sounds = s.GetInt("sounds"),
+            });
         }
         return list;
     }

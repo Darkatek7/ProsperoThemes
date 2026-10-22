@@ -162,19 +162,20 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-# UI sounds: named clips inside the icon container (see vag.py). The common ones; any clip name works.
+# UI sounds: named clips inside the icon container (see vag.py). The common ones; any clip name works whose first 16
+# characters are unique in the container (psfx_open_control_center and psfx_take_screenshot are not).
 UI_CONTAINER = "Sce.PlayStation.PUI_UI3.rco"
 UI_SOUNDS = [
     ("psfx_focus_move", "Moving the focus (tiles, menus)"),
     ("psfx_enter", "Confirm (X)"),
     ("psfx_cancel", "Back (O)"),
     ("psfx_open_home", "Opening the home screen"),
-    ("psfx_open_control_center", "Opening the control center"),
     ("psfx_open_option_menu", "Opening the options menu"),
+    ("psfx_close_option_menu", "Closing the options menu"),
+    ("psfx_cannot_move", "End of a list"),
     ("psfx_error", "Error"),
     ("psfx_trophy_toast", "Trophy"),
     ("psfx_platinum_trophy_toast", "Platinum trophy"),
-    ("psfx_take_screenshot", "Screenshot"),
     ("psfx_switch_on", "Switch on"),
     ("psfx_switch_off", "Switch off"),
 ]
