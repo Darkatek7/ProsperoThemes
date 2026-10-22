@@ -21,6 +21,14 @@ public sealed record CommunityTheme(
     public string Contents => PackSummary.Format(Fallback, AllApps, PerApp, Icons, Tiles);
 
     /// <summary>
+    /// The store's small JPEG of the preview (about an eighth of the PNG), or null from a store that has none.
+    /// </summary>
+    public string? ThumbUrl { get; init; }
+
+    /// <summary>The picture a card loads: the small JPEG when the store has one, else the preview PNG.</summary>
+    public string? PictureUrl => ThumbUrl ?? PreviewUrl;
+
+    /// <summary>
     /// The category ids the store lists the theme under (0 to 3, from <see cref="CommunityCategories"/>); empty for a
     /// theme without any and for a store that predates categories. An init property, so the positional constructor
     /// stays as it was and a <c>with</c> copy (a like or download count coming in) keeps it.
@@ -121,7 +129,7 @@ public static class CommunityList
                 Absolute(baseUrl, e.GetString("previewUrl")), Absolute(baseUrl, download)!,
                 s.GetBool("fallback"), s.GetBool("allApps"), s.GetInt("perApp"), s.GetInt("icons"), s.GetInt("tiles"),
                 IsDigest(e.GetString("sha256")) ? e.GetString("sha256").ToLowerInvariant() : null)
-            { Categories = ParseCategories(e["categories"]) });
+            { Categories = ParseCategories(e["categories"]), ThumbUrl = Absolute(baseUrl, e.GetString("thumbUrl")) });
         }
         return list;
     }

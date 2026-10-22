@@ -1,15 +1,16 @@
 {
   "items": [
     {
-      "id": "SLGdNPjA623-",
+      "id": "BJnANt-h0Nr1",
       "name": "Blue Hour",
       "author": "Prospero Studio",
       "version": "1.0.0",
-      "description": "Ein stiller Ozean. Eine andere Welt.",
-      "size": 5715939,
+      "description": "A still ocean. A different world.",
+      "size": 5715938,
       "likes": 0,
       "downloads": 0,
-      "createdAt": "2026-10-13T15:12:02.951Z",
+      "createdAt": "2026-10-22T07:11:47.785Z",
+      "updatedAt": null,
       "status": "approved",
       "summary": {
         "fallback": true,
@@ -18,8 +19,11 @@
         "icons": 0,
         "tiles": 0
       },
-      "previewUrl": "/api/themes/SLGdNPjA623-/preview.png",
-      "downloadUrl": "/api/themes/SLGdNPjA623-/download"
+      "previewUrl": "/api/themes/BJnANt-h0Nr1/preview.png",
+      "thumbUrl": "/api/themes/BJnANt-h0Nr1/thumb.jpg?v=0",
+      "downloadUrl": "/api/themes/BJnANt-h0Nr1/download",
+      "sha256": "2fe760beb1d92eb93cb6b585cccbfc6d8999239ff383c61dbaa761a75596ca7c",
+      "categories": []
     }
   ],
   "page": 1,

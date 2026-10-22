@@ -23,7 +23,7 @@ internal sealed class ThemeApp : ProsperoApp
     private IReadOnlyList<ThemeLibraryEntry> _entries = Array.Empty<ThemeLibraryEntry>();
     private ThemeRenderer _renderer = null!;
     private Thread? _worker;
-    private bool _busy, _pngAvailable;
+    private bool _busy, _pngAvailable, _jpegAvailable;
     // Frame timing readout, toggled with R3, for checking the pace on the device.
     private readonly FrameStats _stats = new();
     private bool _showStats;
@@ -59,6 +59,9 @@ internal sealed class ThemeApp : ProsperoApp
     {
         try { SystemModule.Load(SystemModuleId.PngDec); _pngAvailable = true; }
         catch { _pngAvailable = false; }
+        // The store's card pictures are JPEGs.
+        try { SystemModule.Load(SystemModuleId.JpegDec); _jpegAvailable = true; }
+        catch { _jpegAvailable = false; }
         _renderer = new ThemeRenderer(name => FileSystem.ReadAllBytes(DeviceThemeLibrary.AssetRoot + "/" + name), DecodeCover);
         string? json = null;
         try { if (FileSystem.Exists(AppSettings.Path)) json = FileSystem.ReadAllText(AppSettings.Path); }
@@ -93,6 +96,14 @@ internal sealed class ThemeApp : ProsperoApp
 
     private PixelBuffer DecodeCover(byte[] bytes)
     {
+        if (bytes.Length > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8)
+        {
+            if (!_jpegAvailable) throw new InvalidOperationException("JPEG decoder unavailable.");
+            using var jpeg = JpegImage.Decode(bytes);
+            var picture = new PixelBuffer(jpeg.Width, jpeg.Height);
+            picture.AsSurface().Blit(jpeg.AsSurface(), 0, 0);
+            return picture;
+        }
         if (!_pngAvailable) throw new InvalidOperationException("PNG decoder unavailable.");
         using var image = PngImage.Decode(bytes);
         var result = new PixelBuffer(image.Width, image.Height);
@@ -568,13 +579,13 @@ internal sealed class ThemeApp : ProsperoApp
                 _listStopped = true;
                 return false;
             }
-            if (theme.PreviewUrl is null) continue;
+            if (theme.PictureUrl is null) continue;
             try
             {
-                HttpResponse png = http.Get(theme.PreviewUrl);
-                if (!png.IsSuccess || png.Body.Length == 0) continue;
+                HttpResponse picture = http.Get(theme.PictureUrl);
+                if (!picture.IsSuccess || picture.Body.Length == 0) continue;
                 string id = theme.Id;
-                byte[] body = png.Body;
+                byte[] body = picture.Body;
                 _results.Post(() => _renderer.CommunityPreviews[id] = body);
             }
             catch { /* a missing preview leaves the placeholder */ }
@@ -591,7 +602,7 @@ internal sealed class ThemeApp : ProsperoApp
         _previewsMissing = false;
         var missing = new List<CommunityTheme>();
         foreach (CommunityTheme theme in _community)
-            if (theme.PreviewUrl is not null && !_renderer.CommunityPreviews.ContainsKey(theme.Id)) missing.Add(theme);
+            if (theme.PictureUrl is not null && !_renderer.CommunityPreviews.ContainsKey(theme.Id)) missing.Add(theme);
         if (missing.Count == 0) return;
         _stopList = false;
         _listStopped = false;

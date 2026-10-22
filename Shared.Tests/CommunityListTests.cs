@@ -11,7 +11,8 @@ public class CommunityListTests
           {"id":"abc123def456","name":"Night Drive","author":"Mia","version":"1.0","description":"Neon",
            "size":14009587,"likes":12,"downloads":340,"createdAt":"2026-10-13T12:00:00Z","status":"approved",
            "summary":{"fallback":true,"allApps":true,"perApp":2,"icons":3,"tiles":0},
-           "previewUrl":"/api/themes/abc123def456/preview.png","downloadUrl":"/api/themes/abc123def456/download"},
+           "previewUrl":"/api/themes/abc123def456/preview.png","thumbUrl":"/api/themes/abc123def456/thumb.jpg?v=0",
+           "downloadUrl":"/api/themes/abc123def456/download"},
           {"id":"","name":"broken"},
           {"id":"zz","name":"No preview","author":"A","version":"2","description":"","size":1,"likes":0,"downloads":0,
            "summary":{},"previewUrl":null,"downloadUrl":"https://cdn.example/zz.p5theme"}
@@ -28,9 +29,11 @@ public class CommunityListTests
         Assert.Equal(12, a.Likes);
         Assert.Equal(340, a.Downloads);
         Assert.Equal("https://themes.example/api/themes/abc123def456/preview.png", a.PreviewUrl);
+        Assert.Equal("https://themes.example/api/themes/abc123def456/thumb.jpg?v=0", a.PictureUrl);   // the small JPEG
         Assert.Equal("https://themes.example/api/themes/abc123def456/download", a.DownloadUrl);
         Assert.Equal("Background · App background · 2 app images · 3 icons", a.Contents);
         Assert.Null(list[1].PreviewUrl);
+        Assert.Null(list[1].PictureUrl);
         Assert.Equal("https://cdn.example/zz.p5theme", list[1].DownloadUrl);
     }
 
@@ -47,6 +50,7 @@ public class CommunityListTests
         Assert.True(t.Size > 0);
         Assert.Equal("http://10.0.0.22:8080/api/themes/" + t.Id + "/download", t.DownloadUrl);
         Assert.Equal("http://10.0.0.22:8080/api/themes/" + t.Id + "/preview.png", t.PreviewUrl);
+        Assert.Equal("http://10.0.0.22:8080/api/themes/" + t.Id + "/thumb.jpg?v=0", t.PictureUrl);
         Assert.Equal("Background", t.Contents);
     }
 
