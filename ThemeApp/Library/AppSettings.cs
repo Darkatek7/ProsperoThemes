@@ -18,6 +18,12 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     public bool ReplaceEarlierThemes { get; init; }
 
     /// <summary>
+    /// Whether an apply takes a theme's music and sounds. On by default; "sounds": "off" in settings.json turns it off,
+    /// and then the apply question starts with them left out.
+    /// </summary>
+    public bool Sounds { get; init; } = true;
+
+    /// <summary>
     /// The public community store, used when settings.json has no "store_url" (a first start writes it there).
     /// An empty "store_url" means the user removed the store on purpose.
     /// </summary>
@@ -26,7 +32,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     /// <summary>Reads settings, tolerating a missing or broken file; a missing device id is created.</summary>
     public static AppSettings Parse(string? json, Func<string> newDeviceId)
     {
-        bool all = false, replace = false;
+        bool all = false, replace = false, sounds = true;
         string url = DefaultStoreUrl, device = "";
         // The SDK's parser, not System.Text.Json: JsonDocument seeds its hashing from the BCL's crypto
         // random source, which pulls OpenSSL imports the console cannot link (see ThemePack.Hash).
@@ -34,11 +40,12 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
         {
             all = root.GetString("background_scope") == "all";
             replace = root.GetString("earlier_themes") == "replace";
+            sounds = root.GetString("sounds") != "off";
             url = root.GetString("store_url", url).Trim();
             device = root.GetString("device_id");
         }
         if (!IsDeviceId(device)) device = newDeviceId();
-        return new AppSettings(all, url, device) { ReplaceEarlierThemes = replace };
+        return new AppSettings(all, url, device) { ReplaceEarlierThemes = replace, Sounds = sounds };
     }
 
     public string Serialize()
@@ -46,6 +53,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
         var o = JsonValue.NewObject();
         o["background_scope"] = AllAppsBackgrounds ? "all" : "default";
         o["earlier_themes"] = ReplaceEarlierThemes ? "replace" : "keep";
+        o["sounds"] = Sounds ? "on" : "off";
         o["store_url"] = StoreUrl;
         o["device_id"] = DeviceId;
         return o.Write(indented: true) + "\n";

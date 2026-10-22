@@ -65,6 +65,12 @@ public sealed class ThemePack
     /// <summary>Layer whose targets are named SVG icons patched into a container, not whole files.</summary>
     public const string SvgLayer = "svg";
 
+    /// <summary>Layer whose targets are named UI sounds (mono VAG) patched into a container, not whole files.</summary>
+    public const string VagLayer = "vag";
+
+    /// <summary>Whether a layer's targets are named resources patched into a container (several may share a path).</summary>
+    public static bool IsPatchLayer(string layer) => layer is SvgLayer or VagLayer;
+
     public byte[] Payload(ThemePackTarget target)
     {
         if (!_files.TryGetValue(NormaliseName(target.File), out byte[]? bytes))
@@ -116,12 +122,12 @@ public sealed class ThemePack
             if (!AssetRoots.IsVirtual(t.Path) && !AssetRoots.TryResolve(t.Path, out _, out string reason))
                 report.Error("path", $"{label}: {reason}");
 
-            // An svg target edits one named icon inside a container, so several may share a path.
-            bool isSvg = t.Layer == SvgLayer;
-            if (isSvg && string.IsNullOrWhiteSpace(t.Resource))
-                report.Error("resource", $"{label}: an svg target needs the icon name in 'resource'");
-            if (!seen.Add(isSvg ? t.Path + "#" + t.Resource : t.Path))
-                report.Error("duplicate", $"{label}{(isSvg ? "#" + t.Resource : "")}: target appears more than once");
+            // An svg or vag target edits one named icon or sound inside a container, so several may share a path.
+            bool isPatch = IsPatchLayer(t.Layer);
+            if (isPatch && string.IsNullOrWhiteSpace(t.Resource))
+                report.Error("resource", $"{label}: an {t.Layer} target needs the {(t.Layer == SvgLayer ? "icon" : "sound")} name in 'resource'");
+            if (!seen.Add(isPatch ? t.Path + "#" + t.Resource : t.Path))
+                report.Error("duplicate", $"{label}{(isPatch ? "#" + t.Resource : "")}: target appears more than once");
 
             if (!ThemePackManifest.KnownLayers.Contains(t.Layer))
                 report.Warn("layer", $"{label}: unknown layer '{t.Layer}' -- the applier will skip this entry");
@@ -162,7 +168,12 @@ public sealed class ThemePack
             // Last, because it is the least specific check: the bytes are present, the declared length and
             // the declared hash all have to be right before it matters whether they are the right *kind* of
             // bytes. An unknown suffix is not an error - see PayloadFormat.
-            if (isSvg)
+            if (t.Layer == VagLayer)
+            {
+                try { RcoVag.Check(payload); }
+                catch (ThemePackException ex) { report.Error("format", $"{label}#{t.Resource}: {ex.Message}"); }
+            }
+            else if (t.Layer == SvgLayer)
             {
                 string head = System.Text.Encoding.UTF8.GetString(payload, 0, Math.Min(payload.Length, 64)).TrimStart();
                 if (!head.StartsWith("<svg", StringComparison.Ordinal))

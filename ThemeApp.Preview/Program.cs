@@ -59,9 +59,10 @@ if (args.Contains("--bench"))
         ("detail", () => browser.Update(press)),
         ("dialog-apply-scope", () => browser.Update(press, asksScope: true)),
         ("dialog-apply", () => { browser.Update(cancel); browser.Update(press); }),
+        ("dialog-apply-parts", () => { browser.Update(cancel); browser.Update(press, parts: ThemePart.All, sounds: false); }),
         ("detail again", () => browser.Update(cancel)),
         ("system", () => { browser.Update(cancel); browser.Update(UiInput.None with { PageUp = true }); }),
-        ("system-restore", () => { for (int i = 0; i < 3; i++) browser.Update(down); }),
+        ("system-restore", () => { for (int i = 0; i < ThemeBrowser.SystemRowCount - 1; i++) browser.Update(down); }),
         ("dialog-restore", () => browser.Update(press)),
         ("toast", () => { browser.Update(cancel); renderer.Notify("Applied and verified 27 target(s).", NoticeLevel.Success); }),
         ("community", () => { browser.Update(UiInput.None with { PageUp = true }); browser.Update(UiInput.None with { PageUp = true }); renderer.ClearNotice(); }),
@@ -117,6 +118,10 @@ if (args.Contains("--screenshots"))
     browser.Update(press, asksScope: true); Save("dialog-apply-scope", ThemeView.Detail, DialogKind.ApplyScope);
     browser.Update(back);
     browser.Update(press); Save("dialog-apply", ThemeView.Detail, DialogKind.Apply);
+    browser.Update(back);
+    // A pack with every part, sounds turned off: they start unticked; the focus is on Apply theme.
+    browser.Update(press, parts: ThemePart.All, sounds: false); Save("dialog-apply-parts", ThemeView.Detail, DialogKind.ApplyParts);
+    browser.Update(up); Save("dialog-apply-parts-focus", ThemeView.Detail, DialogKind.ApplyParts);
     browser.Update(back);
     browser.Update(UiInput.None, preview: true); Save("preview", ThemeView.Preview);
     browser.Update(press); Save("artwork", ThemeView.Preview);
@@ -215,8 +220,9 @@ app.MapPost("/input/{key}", (string key) =>
         var input = new UiInput(key == "up", key == "down", key == "left", key == "right", key == "confirm", key == "back")
         { PageUp = key == "l1", PageDown = key == "r1", Home = key == "home", End = key == "end" };
         bool asksScope = browser.Selected >= 0 && entries[browser.Selected].Manifest.Targets.Any(t => t.Path == AssetRoots.AllAppsBackground);
+        ThemePart parts = browser.Selected >= 0 ? ThemeParts.In(entries[browser.Selected].Manifest) : ThemePart.None;
         browser.Update(input, preview: key == "preview", options: key == "options", triangle: key == "triangle",
-            asksScope: asksScope, allAppsScope: allAppsScope, busy: false);
+            asksScope: asksScope, allAppsScope: allAppsScope, busy: false, parts: parts, sounds: renderer.Sounds);
         var action = browser.TakeAction();
         const string pcOnly = "This PC preview doesn’t write to a console; the PS5 app does.";
         // The preview's built-in store answers sort and category like the real one (Options reloads the same list).
@@ -233,6 +239,11 @@ app.MapPost("/input/{key}", (string key) =>
         {
             allAppsScope = !allAppsScope;
             renderer.AllAppsBackgrounds = allAppsScope;
+            renderer.Notify("Takes effect on the next apply (PC preview only).", NoticeLevel.Success);
+        }
+        if (action == ThemeAction.ToggleSounds)
+        {
+            renderer.Sounds = !renderer.Sounds;
             renderer.Notify("Takes effect on the next apply (PC preview only).", NoticeLevel.Success);
         }
         if (action == ThemeAction.FirmwareReport) renderer.Notify("The firmware report is written by the PS5 app. " + pcOnly, NoticeLevel.Info);

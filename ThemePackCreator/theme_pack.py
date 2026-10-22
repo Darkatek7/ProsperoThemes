@@ -27,7 +27,10 @@ verification rather than a renderer.
     python theme_pack.py verify  <pack> [--stock <dir>]
 
 `TARGET` is an asset stem (`bg_hub_default`, `function_button_circle`), a title id (`NPXS40047`), a screen
-label (`hub_default`), or a full file name.
+label (`hub_default`), or a full file name. A UI sound is `ui:<clip>` (`ui:psfx_focus_move`), with any audio file
+ffmpeg reads: it becomes a mono VAG that the app writes into that clip of the icon container. With the container
+under `--stock` (`rco/Sce.PlayStation.PUI_UI3.rco`), the sound is cut to the clip's length with a short fade, and
+the clip name is checked; `list` shows the clips then.
 
 Stock layout expected under `--stock`: `*.dds.zst` for backgrounds, and `png/` for the PNG assets. Copy them off
 the console (for example over FTP from the paths in docs/13.00-screen-assets.md) into `backups/`.
@@ -38,6 +41,7 @@ import hashlib
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -158,6 +162,47 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+# UI sounds: named clips inside the icon container (see vag.py). The common ones; any clip name works.
+UI_CONTAINER = "Sce.PlayStation.PUI_UI3.rco"
+UI_SOUNDS = [
+    ("psfx_focus_move", "Moving the focus (tiles, menus)"),
+    ("psfx_enter", "Confirm (X)"),
+    ("psfx_cancel", "Back (O)"),
+    ("psfx_open_home", "Opening the home screen"),
+    ("psfx_open_control_center", "Opening the control center"),
+    ("psfx_open_option_menu", "Opening the options menu"),
+    ("psfx_error", "Error"),
+    ("psfx_trophy_toast", "Trophy"),
+    ("psfx_platinum_trophy_toast", "Platinum trophy"),
+    ("psfx_take_screenshot", "Screenshot"),
+    ("psfx_switch_on", "Switch on"),
+    ("psfx_switch_off", "Switch off"),
+]
+
+
+def ui_sound_entry(target: str) -> dict | None:
+    """Builds an entry for `ui:<clip>`, or None if that is not the shape."""
+    if not target.startswith("ui:") or len(target) <= 3:
+        return None
+    clip = target[3:]
+    return {
+        "target": UI_CONTAINER,
+        "asset": clip,
+        "kind": "vag",
+        "layer": "vag",
+        "screen": f"ui sound {clip}",
+        "name": dict(UI_SOUNDS).get(clip, f"UI sound {clip}"),
+        "resource": clip,
+    }
+
+
+def ui_container(stock_dir: Path) -> Path | None:
+    for candidate in (stock_dir / "rco" / UI_CONTAINER, stock_dir / UI_CONTAINER):
+        if candidate.exists():
+            return candidate
+    return None
+
+
 # Stock lives in a subdirectory per kind, as in backups/.
 SUBDIR = {"png": "png", "video": "mp4", "audio": "at9"}
 
@@ -205,10 +250,13 @@ def stock_path(stock_dir: Path, entry: dict) -> Path:
 
 
 def resolve(name: str) -> dict:
-    """Accepts an asset stem, a full file name, a title id, a screen label, or appmeta/<TID>/pic0.dds."""
+    """Accepts an asset stem, a full file name, a title id, a screen label, appmeta/<TID>/pic0.dds, or ui:<clip>."""
     app = app_background_entry(name)
     if app is not None:
         return app
+    ui = ui_sound_entry(name)
+    if ui is not None:
+        return ui
     if name in BY_TARGET:
         return BY_TARGET[name]
     for entry in ASSETS:
@@ -468,6 +516,48 @@ def build_audio(entry: dict, source: Path, stock_dir: Path, work: Path) -> tuple
     return payload, _entry(entry, payload, stock_bytes, extra={"audio": detail})
 
 
+def build_ui_sound(entry: dict, source: Path, stock_dir: Path, work: Path) -> tuple[bytes, dict]:
+    """A mono VAG at the clip's rate, cut to the clip's length when the stock container is there."""
+    import vag
+
+    container_path = ui_container(stock_dir)
+    rate, cap = 48000, None
+    if container_path is not None:
+        try:
+            _, length, rate = vag.find_clip(container_path.read_bytes(), entry["resource"])
+        except ValueError as e:
+            raise SystemExit(f"ui:{entry['resource']}: {e}. 'theme_pack.py list --stock <dir>' shows the clips.")
+        cap = vag.clip_samples(length)
+    decoded = subprocess.run(
+        # A UI sound has to start on the button press: silence at the start is taken off.
+        ["ffmpeg", "-v", "error", "-i", str(source), "-af", "silenceremove=start_periods=1:start_threshold=-50dB",
+         "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"],
+        capture_output=True,
+    )
+    if decoded.returncode != 0:
+        raise SystemExit(f"ffmpeg could not read {source}:\n{decoded.stderr.decode(errors='replace')[-2000:]}")
+    samples = list(struct.unpack(f"<{len(decoded.stdout) // 2}h", decoded.stdout[:len(decoded.stdout) // 2 * 2]))
+    cut = ""
+    if cap is not None and len(samples) > cap:
+        cut = f", cut from {len(samples) / rate:.2f}s"
+        samples = samples[:cap]
+        fade = min(len(samples), rate // 50)
+        for i in range(fade):
+            samples[-1 - i] = samples[-1 - i] * i // fade
+    payload = vag.make_vag(samples, rate, entry["resource"])
+    record = {
+        "path": f"{ROOT}/{entry['target']}",
+        "layer": "vag",
+        "resource": entry["resource"],
+        "file": f"assets/sounds/{entry['resource']}.vag",
+        "bytes": len(payload),
+        "sha256": sha256_hex(payload),
+        "screen": entry["screen"],
+        "audio": f"vag {rate}Hz mono {len(samples) / rate:.2f}s{cut}",
+    }
+    return payload, record
+
+
 def _entry(entry: dict, payload: bytes, stock_bytes: bytes, extra: dict | None = None) -> dict:
     record = {
         "path": f"{entry.get('root', ROOT)}/{entry['target']}",
@@ -495,6 +585,21 @@ def cmd_list(args: argparse.Namespace) -> int:
             flag = " *" if a.get("confirmed") else ""
             print(f"  {a['target']:<40} {a['layer']:<11} {a['screen']:<20} {a['name']}{flag}")
     print("\n  * = screen label confirmed by observation on 13.00")
+
+    container = ui_container(Path(args.stock)) if args.stock else None
+    if container is None:
+        print(f"\nui sounds (ui:<clip>; the common ones, pass --stock with rco/{UI_CONTAINER} for every clip):")
+        for clip, name in UI_SOUNDS:
+            print(f"  ui:{clip:<37} {name}")
+    else:
+        import vag
+        clips = vag.list_clips(container.read_bytes())
+        names = [c[0] for c in clips]
+        print(f"\nui sounds in {container.name} ({len(clips)}; a name the container cuts to 16 characters must be unique):")
+        for clip, length, rate in clips:
+            note = dict(UI_SOUNDS).get(clip, "")
+            dup = "  (not unique)" if names.count(clip) > 1 else ""
+            print(f"  ui:{clip:<20} {vag.clip_samples(length) / rate:5.2f}s  {note}{dup}")
     return 0
 
 
@@ -679,6 +784,8 @@ def cmd_create(args: argparse.Namespace) -> int:
                 payload, record = build_png(entry, image, stock_dir, work)
             elif entry["kind"] == "video":
                 payload, record = build_video(entry, image, stock_dir, work)
+            elif entry["kind"] == "vag":
+                payload, record = build_ui_sound(entry, image, stock_dir, work)
             else:
                 payload, record = build_audio(entry, image, stock_dir, work)
 
@@ -782,6 +889,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_list = sub.add_parser("list", help="show every themable target")
+    p_list.add_argument("--stock", default=None, help="stock folder: lists every UI sound of its icon container")
     p_list.set_defaults(func=cmd_list)
 
     p_cat = sub.add_parser("catalog", help="write the measured asset catalog")
@@ -827,6 +935,8 @@ def main() -> int:
             raise SystemExit(f"texconv not found at {TEXCONV} - see ZstdWrap/README.md")
         if "video" in kinds and shutil.which("ffmpeg") is None:
             raise SystemExit("ffmpeg is required for video targets - install it (e.g. 'scoop install ffmpeg')")
+        if "vag" in kinds and shutil.which("ffmpeg") is None:
+            raise SystemExit("ffmpeg is required to read the audio of UI sounds")
         if "audio" in kinds:
             if not AT9TOOL.exists():
                 raise SystemExit(f"at9tool not found at {AT9TOOL} - see ZstdWrap/README.md")

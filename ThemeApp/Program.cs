@@ -72,6 +72,7 @@ internal sealed class ThemeApp : ProsperoApp
         _allAppsBackgrounds = _settings.AllAppsBackgrounds;
         _renderer.AllAppsBackgrounds = _allAppsBackgrounds;
         _renderer.ReplaceEarlierThemes = _settings.ReplaceEarlierThemes;
+        _renderer.Sounds = _settings.Sounds;
         try { _firmware = SharpProspero.Platform.SystemInfo.SystemSoftwareVersion; }
         catch { _firmware = null; }
         _renderer.Firmware = _firmware ?? "";
@@ -176,9 +177,9 @@ internal sealed class ThemeApp : ProsperoApp
     /// Runs a system-changing job on the worker: starts ThemeHelper if it is not running yet, then hands the
     /// job an applier whose theme-root writes go through it. The result is shown as a notice.
     /// </summary>
-    private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work) =>
+    private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work, ThemePart parts = ThemePart.All) =>
         StartHelperWork(busyText, needsHelper: true, _ => work(new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
-            { IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware }));
+            { IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware, Parts = parts }));
 
     /// <summary>
     /// Starts the helper, then runs <paramref name="work"/> on the worker with the helper's problem (null when it
@@ -238,12 +239,14 @@ internal sealed class ThemeApp : ProsperoApp
             preview: context.Pressed(ScePadButton.Square), options: context.Pressed(ScePadButton.Options),
             triangle: context.Pressed(ScePadButton.Triangle), asksScope: SelectedHasAllAppsBackground(),
             allAppsScope: _allAppsBackgrounds, busy: _busy,
-            removable: _browser.Selected >= 0 && _browser.Selected < _entries.Count && !_entries[_browser.Selected].Bundled);
+            removable: _browser.Selected >= 0 && _browser.Selected < _entries.Count && !_entries[_browser.Selected].Bundled,
+            parts: SelectedParts(), sounds: _settings.Sounds);
         switch (_browser.TakeAction())
         {
             case ThemeAction.Busy: Wait(); break;
             case ThemeAction.ToggleBackgroundScope: ToggleBackgroundScope(); break;
             case ThemeAction.ToggleEarlierThemes: ToggleEarlierThemes(); break;
+            case ThemeAction.ToggleSounds: ToggleSounds(); break;
             case ThemeAction.ImportUsb: StartWork(DeviceThemeLibrary.ImportUsb, announce: true); break;
             case ThemeAction.Reload: StartWork(DeviceThemeLibrary.Scan); break;
             case ThemeAction.Apply when _browser.Selected >= 0:
@@ -251,7 +254,7 @@ internal sealed class ThemeApp : ProsperoApp
                 // uses it even when settings.json cannot be written; only the next start would not know it.
                 if (_browser.ApplyAsksScope) SetBackgroundScope(_browser.ApplyAllApps);
                 string path = _entries[_browser.Selected].Path;
-                StartSystemWork("Applying theme…", applier => applier.Apply(ThemeArchive.Open(FileSystem.ReadAllBytes(path))));
+                StartSystemWork("Applying theme…", applier => applier.Apply(ThemeArchive.Open(FileSystem.ReadAllBytes(path))), _browser.ApplyParts);
                 break;
             case ThemeAction.RestoreOriginals:
                 StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals());
@@ -322,6 +325,36 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.Notify(_allAppsBackgrounds
             ? "Takes effect on the next apply: backgrounds also replace the apps’ own images."
             : "Takes effect on the next apply: apps with their own image keep it.", NoticeLevel.Success);
+    }
+
+    /// <summary>The Music and sounds row on the System tab: whether an apply takes a theme's music and sounds.</summary>
+    private void ToggleSounds()
+    {
+        bool on = !_settings.Sounds;
+        _settings = _settings with { Sounds = on };
+        _renderer.Sounds = on;
+        try { WriteSettings(); }
+        catch (Exception ex)
+        {
+            _renderer.Notify("Setting not saved: " + ex.Message, NoticeLevel.Error);
+            return;
+        }
+        _renderer.Notify(on
+            ? "Takes effect on the next apply: themes may change the music and sounds."
+            : "Takes effect on the next apply: themes leave the music and sounds alone. Restore defaults puts back earlier ones.",
+            NoticeLevel.Success);
+    }
+
+    // The parts of the selected pack, worked out once per pack (an icon theme has hundreds of targets).
+    private string? _partsFor;
+    private ThemePart _parts;
+
+    private ThemePart SelectedParts()
+    {
+        if (_browser.Selected < 0 || _browser.Selected >= _entries.Count) return ThemePart.None;
+        ThemeLibraryEntry entry = _entries[_browser.Selected];
+        if (_partsFor != entry.Path) { _partsFor = entry.Path; _parts = ThemeParts.In(entry.Manifest); }
+        return _parts;
     }
 
     /// <summary>The Earlier themes row on the System tab: whether an apply keeps or replaces earlier themes.</summary>

@@ -11,6 +11,6 @@
     <ProjectReference Include="$(SharpProsperoRoot)\tools\SharpProspero.Texture\SharpProspero.Texture.csproj" />
     <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
     <Compile Include="..\ThemeApp\Ui\*.cs" LinkBase="Ui" />
-    <Compile Include="..\ThemeApp\Library\ThemeArchive.cs;..\ThemeApp\Library\ThemeLibraryEntry.cs;..\ThemeApp\Library\CommunityList.cs;..\ThemeApp\Library\AppSettings.cs;..\ThemeApp\Library\PackSummary.cs" LinkBase="Library" />
+    <Compile Include="..\ThemeApp\Library\ThemeArchive.cs;..\ThemeApp\Library\ThemeLibraryEntry.cs;..\ThemeApp\Library\CommunityList.cs;..\ThemeApp\Library\AppSettings.cs;..\ThemeApp\Library\PackSummary.cs;..\ThemeApp\Library\ThemeParts.cs" LinkBase="Library" />
   </ItemGroup>
 </Project>

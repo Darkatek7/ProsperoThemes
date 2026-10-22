@@ -559,6 +559,10 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeAction.Busy, browser.TakeAction());
 
         browser.Update(Down);
+        browser.Update(X);                                          // Music and sounds
+        Assert.Equal(ThemeAction.ToggleSounds, browser.TakeAction());
+
+        browser.Update(Down);
         browser.Update(X);                                          // Store address
         Assert.Equal(ThemeView.StoreAddress, browser.View);
         Assert.Equal("http://x", browser.StoreEditor.Text);         // the X only opened it: nothing typed yet
@@ -668,6 +672,9 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeAction.Busy, browser.TakeAction());
         browser.Update(Down);
         browser.Update(X, busy: true);                              // Earlier themes
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
+        browser.Update(Down);
+        browser.Update(X, busy: true);                              // Music and sounds
         Assert.Equal(ThemeAction.Busy, browser.TakeAction());
         browser.Update(Down);
         browser.Update(Down);

@@ -97,6 +97,12 @@ public sealed class ThemeApplier
     public bool KeepEarlierThemes { get; init; }
 
     /// <summary>
+    /// The parts of a theme an apply writes (<see cref="ThemeParts.Of"/>); targets of other parts are left out as if the
+    /// pack did not have them. The user picks them when applying; sounds are left out by default when they are turned off.
+    /// </summary>
+    public ThemePart Parts { get; init; } = ThemePart.All;
+
+    /// <summary>
     /// The console's system software version as it reports it (e.g. "13.000.000"), recorded in state.json.
     /// Null when not known (PC tests). It decides nothing: every check compares the console's own files.
     /// </summary>
@@ -124,8 +130,9 @@ public sealed class ThemeApplier
     public List<string> Refreshed { get; } = new();
 
     private Dictionary<string, string>? _written;
-    // Where each named icon of the current apply sits in its container, found in the stock copy by Prepare.
-    private readonly Dictionary<(string Device, string Resource), (int Offset, int Length)> _slots = new();
+    // Where each named icon or sound of the current apply sits in its container, found in the stock copy by Prepare.
+    // Rate is a sound's sample rate (0 for an icon).
+    private readonly Dictionary<(string Device, string Layer, string Resource), (int Offset, int Length, int Rate)> _slots = new();
 
     public ThemeApplier(IDeviceFiles files, Func<long> unixSecondsClock, string dataRoot = "/data/prospero-themes")
     {
@@ -209,30 +216,34 @@ public sealed class ThemeApplier
             {
                 foreach (IGrouping<string, Plan> file in plans.GroupBy(p => p.Device, StringComparer.Ordinal))
                 {
-                    var icons = file.Where(p => p.Target.Layer == ThemePack.SvgLayer).ToList();
-                    foreach (Plan plan in file.Where(p => p.Target.Layer != ThemePack.SvgLayer))
+                    var patches = file.Where(p => ThemePack.IsPatchLayer(p.Target.Layer)).ToList();
+                    foreach (Plan plan in file.Where(p => !ThemePack.IsPatchLayer(p.Target.Layer)))
                     {
                         current = plan;
                         byte[] payload = PayloadFor(pack, plan);
                         WriteVerified(plan.Device, payload, plan.Unpack ? ThemePack.Hash(payload) : plan.Target.Sha256,
                             () => touched.Add(plan));
                     }
-                    if (icons.Count == 0)
+                    if (patches.Count == 0)
                         continue;
 
-                    // Named icons inside one container: patched onto the stock copy from the backup, so a second
-                    // theme replaces the first one's icons, or with KeepEarlierThemes onto the copy the app last
-                    // wrote, so they combine. The slots were found in the stock copy; a patch keeps every slot
-                    // where it is. Taken out of the dictionary, so no copy of it outlives this write.
-                    current = icons[0];
-                    byte[]? container = containers[icons[0].Device];
-                    containers.Remove(icons[0].Device);
-                    foreach (Plan icon in icons)
+                    // Named icons and sounds inside one container: patched onto the stock copy from the backup, so a
+                    // second theme replaces the first one's, or with KeepEarlierThemes onto the copy the app last
+                    // wrote, so they combine. Icons and sounds of one container go in one write, so neither undoes
+                    // the other. The slots were found in the stock copy; a patch keeps every slot where it is. Taken
+                    // out of the dictionary, so no copy of it outlives this write.
+                    current = patches[0];
+                    byte[]? container = containers[patches[0].Device];
+                    containers.Remove(patches[0].Device);
+                    foreach (Plan patch in patches)
                     {
-                        (int offset, int length) = _slots[(icon.Device, icon.Target.Resource!)];
-                        RcoSvg.Fit(pack.Payload(icon.Target), length).CopyTo(container!, offset);
+                        (int offset, int length, int rate) = _slots[(patch.Device, patch.Target.Layer, patch.Target.Resource!)];
+                        byte[] fitted = patch.Target.Layer == ThemePack.VagLayer
+                            ? RcoVag.Fit(pack.Payload(patch.Target), container.AsSpan(offset, length), rate)
+                            : RcoSvg.Fit(pack.Payload(patch.Target), length);
+                        fitted.CopyTo(container!, offset);
                     }
-                    WriteVerified(icons[0].Device, container!, ThemePack.Hash(container!), () => touched.Add(icons[0]));
+                    WriteVerified(patches[0].Device, container!, ThemePack.Hash(container!), () => touched.Add(patches[0]));
                     container = null;
                 }
             }
@@ -258,7 +269,7 @@ public sealed class ThemeApplier
             string skipped = Skipped.Count == 0 ? "" : $" Skipped: {string.Join("; ", Skipped)}.";
             string defaults = reset.Count == 0 ? "" : $"Put {reset.Count} earlier change(s) back to default. ";
             return new ApplyResult(true,
-                $"{RestartNote(written.Concat(reset))}{RefreshedNote()}{defaults}Applied and verified {written.Count} target(s).{skipped}", written);
+                $"{ApplyRestartNote(plans, reset)}{RefreshedNote()}{defaults}Applied and verified {written.Count} target(s).{skipped}", written);
         }
         catch (Exception ex)
         {
@@ -421,8 +432,8 @@ public sealed class ThemeApplier
     /// <summary>
     /// Backs up every planned file and checks each payload against the console's own file (the backup: the live
     /// file may hold an earlier theme). Plans that do not fit are removed and listed in <see cref="Skipped"/>.
-    /// Writes only under the data root. Returns the stock copy of each icon container, which the icons are
-    /// patched onto.
+    /// Writes only under the data root. Returns the stock copy of each container with named icons or sounds, which
+    /// they are patched onto.
     /// </summary>
     private Dictionary<string, byte[]> Prepare(ThemePack pack, List<Plan> plans)
     {
@@ -445,7 +456,7 @@ public sealed class ThemeApplier
                 continue;
             }
             byte[] stock = PrepareBackup(first);
-            bool icons = false;
+            bool patched = false;
             foreach (Plan plan in file)
             {
                 byte[] payload;
@@ -459,14 +470,23 @@ public sealed class ThemeApplier
                     drop.Add(plan);
                     continue;
                 }
-                if (plan.Target.Layer == ThemePack.SvgLayer)
+                if (ThemePack.IsPatchLayer(plan.Target.Layer))
                 {
-                    icons = true;
+                    patched = true;
                     try
                     {
-                        (int offset, int length) = RcoSvg.Find(stock, plan.Target.Resource!);
-                        RcoSvg.Fit(payload, length);
-                        _slots[(plan.Device, plan.Target.Resource!)] = (offset, length);
+                        if (plan.Target.Layer == ThemePack.VagLayer)
+                        {
+                            (int offset, int length, int rate) = RcoVag.Find(stock, plan.Target.Resource!);
+                            RcoVag.Fit(payload, stock.AsSpan(offset, length), rate);
+                            _slots[(plan.Device, plan.Target.Layer, plan.Target.Resource!)] = (offset, length, rate);
+                        }
+                        else
+                        {
+                            (int offset, int length) = RcoSvg.Find(stock, plan.Target.Resource!);
+                            RcoSvg.Fit(payload, length);
+                            _slots[(plan.Device, plan.Target.Layer, plan.Target.Resource!)] = (offset, length, 0);
+                        }
                     }
                     catch (ThemePackException ex)
                     {
@@ -480,7 +500,7 @@ public sealed class ThemeApplier
                     drop.Add(plan);
                 }
             }
-            if (!icons)
+            if (!patched)
                 continue;
             if (KeepEarlierThemes && IsLastWritten(first.Device, stock))
             {
@@ -555,14 +575,37 @@ public sealed class ThemeApplier
     }
 
     /// <summary>
-    /// The home screen reads tile icons (app.db points at them with a cached <c>?ts=</c> stamp) and the system symbols
-    /// in the icon container when the console starts, so a change to them only shows after the next restart. Backgrounds
-    /// change right away. It leads the message, because the notice shows two lines at most.
+    /// The home screen reads tile icons (app.db points at them with a cached <c>?ts=</c> stamp), the system symbols and
+    /// UI sounds in the icon container, and the music when the console starts, so a change to them only shows after the
+    /// next restart. Backgrounds change right away. <paramref name="sounds"/> says UI sounds in the container changed. It
+    /// leads the message, because the notice shows two lines at most.
     /// </summary>
-    private static string RestartNote(IEnumerable<string> devices) =>
-        devices.Any(d => d.StartsWith("/mnt/rnps/", StringComparison.Ordinal) || d.EndsWith(".rco", StringComparison.Ordinal))
-            ? "Icons change after the next restart of the console. "
-            : "";
+    private static string RestartNote(IEnumerable<string> devices, bool sounds = false)
+    {
+        bool icons = false;
+        foreach (string d in devices)
+        {
+            if (d.StartsWith("/mnt/rnps/", StringComparison.Ordinal) || d.EndsWith(".rco", StringComparison.Ordinal)) icons = true;
+            if (d.EndsWith(".at9", StringComparison.OrdinalIgnoreCase)) sounds = true;
+        }
+        return (icons, sounds) switch
+        {
+            (true, true) => "Icons and sounds change after the next restart of the console. ",
+            (true, false) => "Icons change after the next restart of the console. ",
+            (false, true) => "Sounds change after the next restart of the console. ",
+            _ => "",
+        };
+    }
+
+    /// <summary>The restart note of an apply: a container that only got sounds does not claim its icons changed.</summary>
+    private static string ApplyRestartNote(List<Plan> plans, List<string> reset)
+    {
+        bool sounds = plans.Any(p => p.Target.Layer == ThemePack.VagLayer);
+        var devices = plans.Where(p => !(p.Device.EndsWith(".rco", StringComparison.Ordinal)
+                && plans.All(q => q.Device != p.Device || q.Target.Layer == ThemePack.VagLayer)))
+            .Select(p => p.Device).Concat(reset);
+        return RestartNote(devices, sounds);
+    }
 
     private string RefreshedNote() => Refreshed.Count == 0 ? "" :
         $"{Refreshed.Count} file(s) had been replaced by a system update; that version is now their default " +
@@ -627,6 +670,9 @@ public sealed class ThemeApplier
             // An unknown layer is skipped, as ThemePack.Validate's warning promises.
             if (!ThemePackManifest.KnownLayers.Contains(target.Layer))
                 continue;
+            // A part the user left out is treated as if the pack did not have it.
+            if ((ThemeParts.Of(target) & Parts) == 0)
+                continue;
 
             if (target.Path == AssetRoots.AllAppsBackground)
             {
@@ -685,7 +731,7 @@ public sealed class ThemeApplier
 
         if (plans.Count == 0)
         {
-            error = "pack has no applicable targets";
+            error = Parts == ThemePart.All ? "pack has no applicable targets" : "the chosen parts of this theme have no applicable targets";
             return false;
         }
 

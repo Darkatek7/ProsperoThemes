@@ -84,8 +84,10 @@ public sealed partial class ThemeRenderer
     // ---- Dialogs ----------------------------------------------------------------------------------------------------
 
     // The wrapped body text of each dialog; it does not depend on the pack, so it is wrapped once.
-    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[4];
+    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[5];
     private const int DialogWidth = 900, DialogPad = 48, DialogRow = 72, DialogGap = 16;
+    // The ticked parts of the ApplyParts dialog are lower rows, so six of them and the two buttons fit on the screen.
+    private const int DialogPartRow = 56, DialogPartGap = 8, DialogCheck = 30;
 
     private static string DialogTitle(DialogKind kind) => kind switch
     {
@@ -99,19 +101,20 @@ public sealed partial class ThemeRenderer
         DialogKind.Restore => "Puts the original backgrounds, icons and sounds back on this console. Your theme library stays as it is.",
         DialogKind.ApplyScope => "This theme has a background for apps. Choose where it goes: only apps without their own image, or all apps.",
         DialogKind.Remove => "Takes it out of your library; the file is kept in /data/prospero-themes/attic. If it is applied, it stays on the console until another theme replaces it or you restore the defaults.",
+        DialogKind.ApplyParts => "Tick the parts to apply. Icons and sounds change after the next restart.",
         _ => "This changes the backgrounds, icons and sounds on this console. Restore defaults on the System tab puts the originals back.",
     };
 
     // What is on screen under a dialog, as it looks once dimmed. The screen behind a dialog is still, so it is dimmed
     // once (a full-screen pass is several milliseconds) and copied on every later frame, until something it shows changes.
-    private readonly record struct DialogBase(ThemeView View, string? Path, bool Applied, bool Busy, bool AllApps, bool Replace, int Row,
-        string StoreUrl, string Firmware, int Count);
+    private readonly record struct DialogBase(ThemeView View, string? Path, bool Applied, bool Busy, bool AllApps, bool Replace, bool Sounds,
+        int Row, string StoreUrl, string Firmware, int Count);
     private PixelBuffer? _dialogBase;
     private DialogBase _dialogKey;
 
     private DialogBase DialogBaseKey(ThemeBrowser browser, ThemeLibraryEntry? selected, int count) =>
         new(browser.View, selected?.Path, selected is not null && IsApplied(selected), Busy, AllAppsBackgrounds, ReplaceEarlierThemes,
-            browser.SystemSelected, browser.StoreUrl, Firmware, count);
+            Sounds, browser.SystemSelected, browser.StoreUrl, Firmware, count);
 
     private void ReleaseDialogBase()
     {
@@ -135,6 +138,7 @@ public sealed partial class ThemeRenderer
     {
         DialogKind kind = browser.Dialog;
         IReadOnlyList<string> options = browser.DialogOptions;
+        IReadOnlyList<ThemePart> parts = browser.DialogParts;
         int bodyWidth = DialogWidth - 2 * DialogPad;
         IReadOnlyList<string> body = _dialogBody[(int)kind - 1] ??= _body.Wrap(DialogText(kind), bodyWidth, 5);
         bool named = kind != DialogKind.Restore && entry is not null;
@@ -142,7 +146,8 @@ public sealed partial class ThemeRenderer
         int height = DialogPad + _screenHeading.LineHeight + 16;
         if (named) height += _label.LineHeight + 8 + _small.LineHeight + 16;
         height += body.Count * _body.LineHeight + 32;
-        height += options.Count * DialogRow + (options.Count - 1) * DialogGap + DialogPad;
+        height += parts.Count * (DialogPartRow + DialogPartGap) + (parts.Count > 0 ? DialogGap : 0);
+        height += (options.Count - parts.Count) * DialogRow + (options.Count - parts.Count - 1) * DialogGap + DialogPad;
         int x = (Theme.ScreenWidth - DialogWidth) / 2, y = (Theme.ScreenHeight - height) / 2 - 24;
         Paint.FillRoundedRect(s, x, y, DialogWidth, height, Theme.RadiusPanel, Ink.WithAlpha(244));
         Paint.StrokeRoundedRect(s, x, y, DialogWidth, height, Theme.RadiusPanel, 1, Theme.PanelStroke);
@@ -163,14 +168,34 @@ public sealed partial class ThemeRenderer
             ty += _body.LineHeight;
         }
         ty += 32;
-        for (int i = 0; i < options.Count; i++)
+        for (int i = 0; i < parts.Count; i++)
+        {
+            // A part: a check box and its name, on a lower row; X ticks it.
+            bool focus = i == browser.DialogFocus, on = (browser.ApplyParts & parts[i]) != 0;
+            Paint.FillRoundedRect(s, tx, ty, bodyWidth, DialogPartRow, Theme.RadiusKey, focus ? SysRowFocusFill : KeyFill);
+            if (focus) Paint.FocusRing(s, tx, ty, bodyWidth, DialogPartRow, Theme.RadiusKey, Accent);
+            int bx = tx + 20, by = ty + (DialogPartRow - DialogCheck) / 2;
+            if (on)
+            {
+                Paint.FillRoundedRect(s, bx, by, DialogCheck, DialogCheck, 8, Accent);
+                Paint.Line(s, bx + 7f, by + 15.5f, bx + 13f, by + 21.5f, 3.5f, PillInk);
+                Paint.Line(s, bx + 13f, by + 21.5f, bx + 23.5f, by + 9f, 3.5f, PillInk);
+            }
+            else Paint.StrokeRoundedRect(s, bx, by, DialogCheck, DialogCheck, 8, 2, Muted);
+            DrawLeft(_label, s, options[i], bx + DialogCheck + 20, ty + (DialogPartRow - _label.LineHeight) / 2, on ? White : Muted);
+            ty += DialogPartRow + DialogPartGap;
+        }
+        if (parts.Count > 0) ty += DialogGap;
+        for (int i = parts.Count; i < options.Count; i++)
         {
             bool focus = i == browser.DialogFocus;
             bool cancel = i == options.Count - 1;
             bool destructive = kind is DialogKind.Restore or DialogKind.Remove && i == 0;
-            Paint.FillRoundedRect(s, tx, ty, bodyWidth, DialogRow, Theme.RadiusKey, focus ? White : KeyFill);
+            // Apply theme with nothing ticked does nothing, so it looks switched off.
+            bool off = kind == DialogKind.ApplyParts && !cancel && browser.ApplyParts == ThemePart.None;
+            Paint.FillRoundedRect(s, tx, ty, bodyWidth, DialogRow, Theme.RadiusKey, focus && !off ? White : KeyFill);
             if (focus) Paint.FocusRing(s, tx, ty, bodyWidth, DialogRow, Theme.RadiusKey, Accent);
-            Color ink = focus ? PillInk : cancel ? Muted : destructive ? Theme.Danger : White;
+            Color ink = off ? Muted : focus ? PillInk : cancel ? Muted : destructive ? Theme.Danger : White;
             DrawMid(_label, s, options[i], tx + bodyWidth / 2, ty + (DialogRow - _label.LineHeight) / 2, ink);
             ty += DialogRow + DialogGap;
         }

@@ -9,20 +9,21 @@ namespace ProsperoThemes.App.Ui;
 public enum ThemeView { Library, Detail, Preview, Community, Import, System, StoreAddress }
 /// <summary>
 /// SaveStoreUrl: Options in the store-address editor; the app reads <see cref="ThemeBrowser.StoreEditor"/>'s text.
-/// ToggleBackgroundScope: the System row for app backgrounds. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
+/// ToggleBackgroundScope: the System row for app backgrounds. ToggleSounds: the System row for music and sounds. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
 /// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
 /// </summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, RemoveTheme, Busy }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, Busy }
 
 /// <summary>
 /// The modal question over Detail or System. Apply asks to apply; ApplyScope is the same for a pack with an all-apps
 /// background and asks where that background goes; Restore asks before the defaults are put back; Remove asks before
-/// the selected pack leaves the library.
+/// the selected pack leaves the library; ApplyParts lets the user tick the parts of a theme to apply (its options are
+/// <see cref="ThemeBrowser.DialogParts"/>, then Apply and Cancel).
 /// </summary>
-public enum DialogKind { None, Apply, ApplyScope, Restore, Remove }
+public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts }
 
 /// <summary>The focusable rows of the System screen, top to bottom.</summary>
-public enum SystemRow { Backgrounds, EarlierThemes, StoreAddress, FirmwareReport, Restore }
+public enum SystemRow { Backgrounds, EarlierThemes, Sounds, StoreAddress, FirmwareReport, Restore }
 
 public sealed class ThemeBrowser
 {
@@ -32,7 +33,7 @@ public sealed class ThemeBrowser
     private static readonly string[] RemoveOptions = ["Remove from library", "Cancel"];
 
     /// <summary>Number of focusable rows on the System screen.</summary>
-    public const int SystemRowCount = 5;
+    public const int SystemRowCount = 6;
 
     public ThemeView View { get; private set; }
     public int Selected { get; private set; } = -1;
@@ -48,8 +49,18 @@ public sealed class ThemeBrowser
         DialogKind.ApplyScope => ScopeOptions,
         DialogKind.Restore => RestoreOptions,
         DialogKind.Remove => RemoveOptions,
+        DialogKind.ApplyParts => _partsOptions,
         _ => Array.Empty<string>(),
     };
+    /// <summary>The parts the open ApplyParts dialog lists, in order: its first options. Empty for every other dialog.</summary>
+    public IReadOnlyList<ThemePart> DialogParts => Dialog == DialogKind.ApplyParts ? _dialogParts : Array.Empty<ThemePart>();
+    /// <summary>
+    /// The parts the next apply writes: what the user ticked in the ApplyParts dialog, or every part when the apply
+    /// did not ask (a pack with one part).
+    /// </summary>
+    public ThemePart ApplyParts { get; private set; } = ThemePart.All;
+    private List<ThemePart> _dialogParts = new();
+    private string[] _partsOptions = Array.Empty<string>();
     /// <summary>The apply that was just confirmed came from the scope question (see <see cref="ApplyAllApps"/>).</summary>
     public bool ApplyAsksScope { get; private set; }
     /// <summary>The answer of the last apply that asked: true for "All apps", false for apps without their own image.</summary>
@@ -78,6 +89,9 @@ public sealed class ThemeBrowser
     private int _communityCount;
     private int _count;
     private ThemeView _previewOrigin = ThemeView.Library;
+    // The ApplyParts dialog asks where an app background goes next, when the pack has one and it stays ticked.
+    private bool _scopeAfterParts;
+    private int _scopeDefault;
     private ThemeAction _action;
 
     public void SetCount(int count)
@@ -119,10 +133,14 @@ public sealed class ThemeBrowser
     /// background (its apply asks where that goes), <paramref name="allAppsScope"/> is the saved answer, and
     /// <paramref name="busy"/> that a worker job is running: then nothing that changes the console or the settings
     /// is started (the press becomes <see cref="ThemeAction.Busy"/> instead). <paramref name="removable"/> says the
-    /// selected pack can leave the library (the theme that ships with the app cannot).
+    /// selected pack can leave the library (the theme that ships with the app cannot). <paramref name="parts"/> are the
+    /// parts the selected pack has (<see cref="ThemeParts.In"/>; None when not known), and <paramref name="sounds"/> the
+    /// sounds setting: the apply question lists the parts when there are several, or when sounds are off and the pack
+    /// has some, and then starts with every part ticked but the sounds when they are off.
     /// </summary>
     public void Update(UiInput input, bool preview = false, bool options = false, bool triangle = false,
-        bool asksScope = false, bool allAppsScope = false, bool busy = false, bool removable = false)
+        bool asksScope = false, bool allAppsScope = false, bool busy = false, bool removable = false,
+        ThemePart parts = ThemePart.None, bool sounds = true)
     {
         // One Update is one frame, and an open dialog answers first. The X that opens a dialog (below) returns
         // right after opening it, so the same X cannot also confirm it.
@@ -196,9 +214,23 @@ public sealed class ThemeBrowser
             // Writing to the console always goes through a question first.
             if (input.Confirm)
             {
+                List<ThemePart> list = ThemeParts.List(parts);
                 if (busy) _action = ThemeAction.Busy;
-                else if (asksScope) OpenDialog(DialogKind.ApplyScope, allAppsScope ? 1 : 0);
-                else OpenDialog(DialogKind.Apply, 0);
+                else if (list.Count > 1 || !sounds && (parts & ThemePart.Sounds) != 0)
+                {
+                    _dialogParts = list;
+                    _partsOptions = [.. list.ConvertAll(ThemeParts.Label), "Apply theme", "Cancel"];
+                    ApplyParts = sounds ? parts : parts & ~ThemePart.Sounds;
+                    _scopeAfterParts = asksScope;
+                    _scopeDefault = allAppsScope ? 1 : 0;
+                    OpenDialog(DialogKind.ApplyParts, list.Count);   // starts on Apply theme
+                }
+                else
+                {
+                    ApplyParts = ThemePart.All;
+                    if (asksScope) OpenDialog(DialogKind.ApplyScope, allAppsScope ? 1 : 0);
+                    else OpenDialog(DialogKind.Apply, 0);
+                }
             }
             else if (triangle && removable)
             {
@@ -266,6 +298,9 @@ public sealed class ThemeBrowser
             case SystemRow.EarlierThemes:
                 _action = busy ? ThemeAction.Busy : ThemeAction.ToggleEarlierThemes;
                 break;
+            case SystemRow.Sounds:
+                _action = busy ? ThemeAction.Busy : ThemeAction.ToggleSounds;
+                break;
             case SystemRow.StoreAddress:
                 // Typing starts on the next frame: this X only opens the keyboard.
                 OpenStoreAddress(StoreUrl);
@@ -291,6 +326,27 @@ public sealed class ThemeBrowser
     {
         int last = DialogOptions.Count - 1;   // Cancel is always the last option
         if (input.Cancel) { Dialog = DialogKind.None; return; }
+        if (input.Confirm && Dialog == DialogKind.ApplyParts && DialogFocus < _dialogParts.Count)
+        {
+            ApplyParts ^= _dialogParts[DialogFocus];   // a part is ticked or unticked; the dialog stays
+            return;
+        }
+        if (input.Confirm && Dialog == DialogKind.ApplyParts && DialogFocus < last)
+        {
+            // Apply theme: nothing happens with nothing ticked. An app background still ticked asks where it goes.
+            if (ApplyParts == ThemePart.None) return;
+            if (busy) { Dialog = DialogKind.None; _action = ThemeAction.Busy; return; }
+            if (_scopeAfterParts && (ApplyParts & ThemePart.AppBackgrounds) != 0)
+            {
+                OpenDialog(DialogKind.ApplyScope, _scopeDefault);
+                return;
+            }
+            Dialog = DialogKind.None;
+            ApplyAsksScope = false;
+            ApplyAllApps = false;
+            _action = ThemeAction.Apply;
+            return;
+        }
         if (input.Confirm)
         {
             DialogKind kind = Dialog;

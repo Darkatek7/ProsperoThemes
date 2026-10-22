@@ -19,7 +19,7 @@ public sealed class ThemePackException : Exception
 
 /// <summary>One file a pack wants to replace.</summary>
 /// <param name="Path">Logical <c>&lt;root&gt;/&lt;relative&gt;</c> path, e.g. <c>vsh_asset/bg_hub_default.dds.zst</c>.</param>
-/// <param name="Layer">Advisory grouping: background, icon, glyph, sound, video, model or ui.</param>
+/// <param name="Layer">Advisory grouping: background, icon, glyph, sound, video, model or ui; svg and vag are named icons and sounds inside a container.</param>
 /// <param name="File">Payload path inside the archive. The bytes are written verbatim.</param>
 /// <param name="Bytes">Exact payload length. <c>-1</c> means the manifest did not say.</param>
 /// <param name="Sha256">Lower-case hex SHA-256 of the payload.</param>
@@ -69,7 +69,7 @@ public sealed record ThemePackManifest(
     /// <summary>Layers this build knows. An unknown layer is skipped, not refused.</summary>
     public static readonly IReadOnlySet<string> KnownLayers = new HashSet<string>(StringComparer.Ordinal)
     {
-        "background", "icon", "glyph", "sound", "video", "model", "ui", "svg",
+        "background", "icon", "glyph", "sound", "video", "model", "ui", "svg", "vag",
     };
 
     /// <summary>Parses a manifest, raising <see cref="ThemePackException"/> when it is structurally unusable.</summary>

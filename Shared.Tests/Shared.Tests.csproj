@@ -37,7 +37,7 @@
     <Compile Include="..\ThemeApp\Library\CommunityList.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Library\FirmwareReport.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Library\AppSettings.cs" LinkBase="App" />
-    <Compile Include="..\ThemeApp\Library\PackSummary.cs;..\ThemeApp\Library\AppliedTheme.cs" LinkBase="App" />
+    <Compile Include="..\ThemeApp\Library\PackSummary.cs;..\ThemeApp\Library\AppliedTheme.cs;..\ThemeApp\Library\ThemeParts.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Ui\ThemeBrowser.cs;..\ThemeApp\Ui\StoreAddressEditor.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Ui\AtlasFont.cs;..\ThemeApp\Ui\ThemeRenderer*.cs;..\ThemeApp\Ui\ButtonGlyph.cs;..\ThemeApp\Ui\Theme.cs;..\ThemeApp\Ui\Paint.cs;..\ThemeApp\Ui\ImageCache.cs" LinkBase="App" />
   </ItemGroup>

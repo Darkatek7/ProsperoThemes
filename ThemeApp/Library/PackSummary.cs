@@ -13,7 +13,7 @@ namespace ProsperoThemes.App.Library;
 /// The counting rules are the store's (<c>summarize</c> in web/server/src/pack-info.ts): the home background is
 /// <c>vsh_asset/bg_hub_default.dds.zst</c>, the all-apps background is <c>allapps/pic0.dds</c>, per-app backgrounds
 /// match <c>apps/&lt;TID&gt;/pic0.dds</c>, system icons are the targets of the <c>svg</c> layer and tile icons the
-/// targets under <c>rnps/</c>. Sounds and video count the targets of those layers; the store does not list them
+/// targets under <c>rnps/</c>. Sounds count the targets of the sound and vag layers, video those of its layer; the store does not list them
 /// yet, so a store card shows neither. Every target counts in each group it matches; a target that matches none is
 /// <see cref="Other"/>.
 /// </remarks>
@@ -93,7 +93,7 @@ public sealed class PackSummary
             if (AssetRoots.IsAppBackground(t.Path, out _)) { perApp++; counted = true; }
             if (t.Layer == ThemePack.SvgLayer) { icons++; counted = true; }
             if (t.Path.StartsWith(AssetRoots.Rnps + "/", StringComparison.Ordinal)) { tiles++; counted = true; }
-            if (t.Layer == SoundLayer) { sounds++; counted = true; }
+            if (t.Layer == SoundLayer || t.Layer == ThemePack.VagLayer) { sounds++; counted = true; }
             if (t.Layer == VideoLayer) { video++; counted = true; }
             if (!counted) other++;
         }

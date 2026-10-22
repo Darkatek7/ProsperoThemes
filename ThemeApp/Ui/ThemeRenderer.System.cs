@@ -55,7 +55,8 @@ public sealed partial class ThemeRenderer
 
     /// <summary>The footer hints of the System list: a row that holds a value says "Change", the others "Choose".</summary>
     private HintItem[] SystemHints(ThemeBrowser browser) =>
-        (SystemRow)browser.SystemSelected is SystemRow.Backgrounds or SystemRow.EarlierThemes or SystemRow.StoreAddress ? SystemChangeHints : SystemChooseHints;
+        (SystemRow)browser.SystemSelected is SystemRow.Backgrounds or SystemRow.EarlierThemes or SystemRow.Sounds or SystemRow.StoreAddress
+            ? SystemChangeHints : SystemChooseHints;
 
     private HintItem[] ImportHints(ThemeBrowser browser) => ImportHintItems;
 
@@ -129,17 +130,18 @@ public sealed partial class ThemeRenderer
 
     // ---- System -----------------------------------------------------------------------------------------------------
 
-    private static readonly string[] SystemLabels = ["App backgrounds", "Earlier themes", "Store address", "Firmware report", "Restore defaults"];
+    private static readonly string[] SystemLabels = ["App backgrounds", "Earlier themes", "Music and sounds", "Store address", "Firmware report", "Restore defaults"];
     private static readonly string[] SystemDescriptions =
     [
         "Which apps show a theme’s background image",
         "Whether a new theme keeps what earlier themes changed",
+        "Whether themes may change the music and sounds",
         "Where the Community tab loads themes from",
         "Save a list of the console’s theme files",
         "Put every background, icon and sound back to the original",
     ];
 
-    internal const int SysRowsTop = SysBodyTop, SysRowH = 72, SysRowGap = 12;
+    internal const int SysRowsTop = SysBodyTop, SysRowH = 64, SysRowGap = 8;
     private const int SysRowPad = 32, SysLabelWidth = 288;
     // Equal rows, then the info panel below them.
     private const int SysInfoTop = SysRowsTop + ThemeBrowser.SystemRowCount * SysRowH + (ThemeBrowser.SystemRowCount - 1) * SysRowGap + 32, SysInfoPad = 28, SysInfoPitch = 40, SysInfoLabelWidth = 176;
@@ -152,8 +154,8 @@ public sealed partial class ThemeRenderer
     // The two states of the App backgrounds and Earlier themes rows, as segmented controls. Measured once, with the
     // font they are drawn in.
     private const string SysSegmentOwn = "Without own image", SysSegmentAll = "All apps";
-    private const string SysSegmentKeep = "Combine", SysSegmentReplace = "Replace";
-    private int _sysSegmentOwnWidth, _sysSegmentAllWidth, _sysSegmentKeepWidth, _sysSegmentReplaceWidth;
+    private const string SysSegmentKeep = "Combine", SysSegmentReplace = "Replace", SysSegmentOn = "On", SysSegmentOff = "Off";
+    private int _sysSegmentOwnWidth, _sysSegmentAllWidth, _sysSegmentKeepWidth, _sysSegmentReplaceWidth, _sysSegmentOnWidth, _sysSegmentOffWidth;
     // Texts of the info panel, rebuilt only when what they show changes.
     private string _sysCountText = "", _sysFirmwareText = "";
     private int _sysCountFor = -1;
@@ -173,6 +175,8 @@ public sealed partial class ThemeRenderer
             _sysSegmentAllWidth = _small.MeasureText(SysSegmentAll) + 2 * SysSegmentPad;
             _sysSegmentKeepWidth = _small.MeasureText(SysSegmentKeep) + 2 * SysSegmentPad;
             _sysSegmentReplaceWidth = _small.MeasureText(SysSegmentReplace) + 2 * SysSegmentPad;
+            // On and Off are as wide as each other, so the thumb does not change size.
+            _sysSegmentOnWidth = _sysSegmentOffWidth = Math.Max(_small.MeasureText(SysSegmentOn), _small.MeasureText(SysSegmentOff)) + 2 * SysSegmentPad + 16;
         }
 
         // Every row first, then the one focus ring: its glow reaches past the gap into the neighbours.
@@ -200,6 +204,10 @@ public sealed partial class ThemeRenderer
                 case SystemRow.EarlierThemes:
                     descriptionRight = DrawSysSegments(s, right, y, SysSegmentKeep, _sysSegmentKeepWidth,
                         SysSegmentReplace, _sysSegmentReplaceWidth, ReplaceEarlierThemes) - 24;
+                    break;
+                case SystemRow.Sounds:
+                    descriptionRight = DrawSysSegments(s, right, y, SysSegmentOn, _sysSegmentOnWidth,
+                        SysSegmentOff, _sysSegmentOffWidth, !Sounds) - 24;
                     break;
                 case SystemRow.StoreAddress:
                     descriptionRight = DrawSysUrl(s, browser.StoreUrl, right, y, textY, focus) - 24;

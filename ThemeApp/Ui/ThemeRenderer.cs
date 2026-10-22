@@ -56,6 +56,8 @@ public sealed partial class ThemeRenderer : IDisposable
     public bool AllAppsBackgrounds { get; set; }
     /// <summary>The earlier-themes setting shown on the System screen (see ThemeApplier.KeepEarlierThemes).</summary>
     public bool ReplaceEarlierThemes { get; set; }
+    /// <summary>The Music and sounds setting (System tab): whether themes may change them.</summary>
+    public bool Sounds { get; set; } = true;
     /// <summary>The system software version as the console reports it ("13.000.000"); empty when it could not be read.</summary>
     public string Firmware { get; set; } = "";
 
