@@ -23,9 +23,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Imported by builds that ran on hardware (libraries named by the SDK linker). libSceHttp and libSceSsl:
-# the Community tab, 2026-10-15.
-$Tested = @("libc", "libkernel", "libSceCommonDialog", "libSceHttp", "libSceNet", "libScePad", "libScePngDec",
-    "libSceSsl", "libSceSysmodule", "libSceSystemService", "libSceUserService", "libSceVideoOut")
+# the Community tab, 2026-10-15. libSceAudioOut and libSceAudiodec: the preview's sound, 01.000.018 on 13.00, 2026-10-22.
+$Tested = @("libc", "libkernel", "libSceAudioOut", "libSceAudiodec", "libSceCommonDialog", "libSceHttp", "libSceNet",
+    "libScePad", "libScePngDec", "libSceSsl", "libSceSysmodule", "libSceSystemService", "libSceUserService", "libSceVideoOut")
 
 # The modules the app carries must be in the PS5 container format (magic 54 14 F5 EE).
 $moduleDir = Join-Path (Split-Path -Parent $Module) "sce_module"

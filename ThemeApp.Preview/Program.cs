@@ -183,6 +183,8 @@ if (args.Contains("--screenshots"))
 
     // The theme the console shows: the second pack, so its library card and its detail cover carry the Applied badge.
     renderer.AppliedId = entries[Math.Min(1, entries.Count - 1)].Manifest.Id;
+    // The app's default store: its web creator is what the QR code on the USB Import card points to.
+    browser.StoreUrl = AppSettings.DefaultStoreUrl;
 
     // Draws the frame as the app would at 60 Hz: 61 frames over one second, so the focus underline and the view's
     // slide-in have settled, and the store keyboard's caret is on at the saved frame (a whole second, 4.0 s).
@@ -303,7 +305,15 @@ if (args.Contains("--screenshots"))
     renderer.CommunityStatus = "No store set. On the System tab, choose Store address and enter the address.";
     browser.SetCommunityCount(0);
     Save("community-empty", ThemeView.Community);
+    // USB Import: the card for the web creator (QR code) beside it; with no store set, the card alone; with a long address of
+    // a store of one's own, the code is bigger and its modules smaller.
+    browser.StoreUrl = AppSettings.DefaultStoreUrl;
     browser.Update(UiInput.None with { PageDown = true }); Save("import", ThemeView.Import);
+    browser.StoreUrl = "";
+    Save("import-nostore", ThemeView.Import);
+    browser.StoreUrl = "https://my-own-theme-store.example.org:8443/prospero/themes/community/store";
+    Save("import-long-store", ThemeView.Import);
+    browser.StoreUrl = AppSettings.DefaultStoreUrl;
     browser.Update(UiInput.None with { PageDown = true });
     browser.StoreUrl = "http://192.168.0.5:8080"; Save("system", ThemeView.System);
     // Each row focused in turn; the last one asks before restoring, with the focus on Cancel.
@@ -327,6 +337,15 @@ if (args.Contains("--screenshots"))
     renderer.Notify("Could not put /system_ex/vsh_asset/bg_hub_default.dds.zst back to its default (Operation not permitted), so the theme was not applied. " +
         "3 other file(s) were already back to default.", NoticeLevel.Error); Save("toast-error", ThemeView.Library);
     renderer.ClearNotice();
+    // An empty library names the web creator too (and says nothing of it when there is no store).
+    foreach (string address in new[] { AppSettings.DefaultStoreUrl, "" })
+    {
+        browser.StoreUrl = address;
+        browser.SetCount(0);
+        var none = Array.Empty<ThemeLibraryEntry>();
+        for (int i = 0; i <= 60; i++) renderer.Draw(canvas.AsSurface(), browser, none, 3 + i / 60.0, 1 / 60.0);
+        File.WriteAllBytes(Path.Combine(output, address.Length > 0 ? "library-empty.png" : "library-empty-nostore.png"), PngWriter.Encode(canvas.AsSurface()));
+    }
     Console.WriteLine("Native-renderer screenshots saved to " + output);
     return;
 }

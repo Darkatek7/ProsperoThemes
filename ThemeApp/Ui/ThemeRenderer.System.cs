@@ -65,7 +65,8 @@ public sealed partial class ThemeRenderer
     // ---- USB Import -------------------------------------------------------------------------------------------------
 
     // One centred glass card: the heading, one line of explanation, three numbered steps, the button and the last result.
-    internal const int ImportCardWidth = 1000, ImportCardPad = 56;
+    // Beside the web creator's card (ThemeRenderer.Creator.cs) it is ImportPairedWidth wide.
+    internal const int ImportCardWidth = 1000, ImportCardPad = 56, ImportPairedWidth = 960;
     private const int ImportBadge = 40, ImportStepGap = 24, ImportStatusLines = 2;
     private static readonly string[] ImportSteps =
     [
@@ -81,21 +82,25 @@ public sealed partial class ThemeRenderer
     /// <summary>
     /// Where the import card sits: centred on the screen, between the header rule and the footer (its top on the 8 px
     /// grid). Its height comes from the fonts it holds: padding, heading, explanation, steps, rule, button, result, padding.
+    /// With the store's web creator on offer (a store address is set, see <see cref="CreatorCard"/>) it is the left of two
+    /// cards that together fill the width between the safe margins; its X and width are as of the last <see cref="Draw"/>.
     /// </summary>
     internal (int X, int Y, int Width, int Height) ImportCard()
     {
         int height = 48 + _screenHeading.LineHeight + 8 + _body.LineHeight + 32 + 3 * ImportBadge + 2 * ImportStepGap + 32 + 1 + 32 + 64 + 24
             + ImportStatusLines * _small.LineHeight + 40;
-        return ((Theme.ScreenWidth - ImportCardWidth) / 2, Theme.ContentTop + (Theme.ContentBottom - Theme.ContentTop - height) / 16 * 8, ImportCardWidth, height);
+        int y = Theme.ContentTop + (Theme.ContentBottom - Theme.ContentTop - height) / 16 * 8;
+        if (_creatorPlate is not null) return (Theme.SafeX, y, ImportPairedWidth, height);
+        return ((Theme.ScreenWidth - ImportCardWidth) / 2, y, ImportCardWidth, height);
     }
 
     private void DrawImport(Surface s, int enter)
     {
-        var (x, cardY, _, cardHeight) = ImportCard();
+        var (x, cardY, cardWidth, cardHeight) = ImportCard();
         int y = cardY + enter;
-        SysGlass(s, x, y, ImportCardWidth, cardHeight);
+        SysGlass(s, x, y, cardWidth, cardHeight);
 
-        int left = x + ImportCardPad, inner = ImportCardWidth - 2 * ImportCardPad;
+        int left = x + ImportCardPad, inner = cardWidth - 2 * ImportCardPad;
         int top = y + 48;
         ClipLeft(_screenHeading, s, "Import from USB", left - SysHeadingOptical, top, White, inner);
         top += _screenHeading.LineHeight + 8;
@@ -125,6 +130,8 @@ public sealed partial class ThemeRenderer
         }
         for (int i = 0; i < _importStatusLines.Count; i++)
             DrawLeft(_small, s, _importStatusLines[i], left, top + i * _small.LineHeight, Muted);
+
+        if (_creatorPlate is not null) DrawCreatorCard(s, enter);
     }
 
     // ---- System -----------------------------------------------------------------------------------------------------

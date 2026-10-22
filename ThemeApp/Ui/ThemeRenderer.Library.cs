@@ -117,16 +117,16 @@ public sealed partial class ThemeRenderer
     // With no theme there is nothing to act on, so the message is centred and names the tabs that fill the library.
     private void DrawEmptyHero(Surface s, int enter)
     {
-        _emptyText ??= _body.Wrap("Copy theme packs from a USB drive on the USB Import tab, or pick some on the Community tab.", 760, 2);
+        IReadOnlyList<string> text = EmptyLibraryText();
         const int centre = Theme.ScreenWidth / 2;
         int top = 296 + enter;
         DrawMid(_small, s, "YOUR LIBRARY", centre, top, Accent);
         top += _small.LineHeight + 8;
         DrawMid(_screenHeading, s, "No themes yet", centre, top, White);
         top += _screenHeading.LineHeight + 12;
-        foreach (string line in _emptyText)
+        for (int i = 0; i < text.Count; i++)   // indexed: a foreach over the interface allocates every frame
         {
-            DrawMid(_body, s, line, centre, top, Muted);
+            DrawMid(_body, s, text[i], centre, top, Muted);
             top += _body.LineHeight;
         }
     }

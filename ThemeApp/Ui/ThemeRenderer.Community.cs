@@ -111,6 +111,7 @@ public sealed partial class ThemeRenderer
     private bool _communityChipReady;
     private double _communityChipViewStart = -1;
     private string _communityCountText = "";
+    private int _communityEyebrowWidth;
     private int _communityCountFor = -1, _communityCountSort = -1, _communityCountCategory = -2;
     private string? _communityStateHeading, _communityStateText;
     private IReadOnlyList<string> _communityStateBody = Array.Empty<string>();
@@ -131,7 +132,16 @@ public sealed partial class ThemeRenderer
     {
         int y = Theme.ContentTop + enter;
         DrawLeft(_small, s, "COMMUNITY STORE", Theme.SafeX, y, Accent);
-        if (count > 0) DrawRight(_small, s, CommunityCountText(count, browser), Theme.ContentRight, y, Muted);
+        int countLeft = Theme.ContentRight;
+        if (count > 0)
+        {
+            string countText = CommunityCountText(count, browser);
+            DrawRight(_small, s, countText, Theme.ContentRight, y, Muted);
+            countLeft -= _small.MeasureText(countText);
+        }
+        // A muted pointer to the web creator between the two, when the store has one (it is not a control).
+        _communityEyebrowWidth = _communityEyebrowWidth > 0 ? _communityEyebrowWidth : _small.MeasureText("COMMUNITY STORE");
+        DrawCommunityCreator(s, Theme.SafeX + _communityEyebrowWidth, y, countLeft);
 
         // The three sorts as a row of capsules: the active one white, the others glass. The Square hint follows on the same line.
         if (_communitySortWidth is null) LayoutCommunityRow();

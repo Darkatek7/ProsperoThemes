@@ -67,6 +67,9 @@ ROOT = "vsh_asset"
 # The roots a pack may name. Mirrors Shared/AssetRoots.cs, which is the canonical list - change one and the
 # other, or Shared.Tests' pin (The_root_table_is_exactly_what_the_applier_mirrors) fails and says so.
 ROOTS = ("appmeta", "rnps", "userapp", "vsh_asset")
+# Virtual targets the applier expands itself (Shared/ThemePack.cs): every title's pic0.dds, or one title's.
+ALL_APPS_PATH = "allapps/pic0.dds"
+APP_PIC0_PATTERN = re.compile(r"^apps/[A-Z]{4}\d{5}/pic0\.dds$")
 WIDTH, HEIGHT = 3840, 2160
 FORMAT_VERSION = 2
 
@@ -1150,9 +1153,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
             if sha256_hex(data) != t["sha256"]:
                 problems.append(f"{t['path']}: sha256 mismatch")
             root = t["path"].partition("/")[0]
-            if root not in ROOTS or ".." in t["path"]:
+            virtual = t["path"] == ALL_APPS_PATH or APP_PIC0_PATTERN.match(t["path"]) is not None
+            if not virtual and (root not in ROOTS or ".." in t["path"]):
                 problems.append(f"{t['path']}: path is not under a known root ({', '.join(ROOTS)})")
-            if args.stock:
+            if args.stock and not virtual:
                 base = t["path"].split("/", 1)[1]
                 candidates = [Path(args.stock) / sub / base for sub in ("png", "mp4", "at9")]
                 candidates += [

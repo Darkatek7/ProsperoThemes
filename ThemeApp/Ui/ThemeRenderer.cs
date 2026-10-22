@@ -282,6 +282,7 @@ public sealed partial class ThemeRenderer : IDisposable
     public void Draw(Surface surface, ThemeBrowser browser, IReadOnlyList<ThemeLibraryEntry> entries, double seconds, double delta = 1.0 / 60)
     {
         _frameDelta = delta;
+        UpdateCreator(browser.StoreUrl);
         if (_noticeFresh) { _noticeAt = seconds; _noticeFresh = false; }
         if (browser.View != _previousView) { _previousView = browser.View; _viewStart = seconds; }
         var selected = browser.Selected >= 0 && browser.Selected < entries.Count ? entries[browser.Selected] : null;
@@ -402,6 +403,7 @@ public sealed partial class ThemeRenderer : IDisposable
     public void Dispose()
     {
         ReleaseDialogBase();
+        ReleaseCreator();
         ResetCovers();
         ResetCommunity();
         _fallback.Dispose();
