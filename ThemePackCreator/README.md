@@ -117,6 +117,25 @@ The stock layout expected under `--stock`: backgrounds as `<stock>/<name>.dds.zs
 mapping is in `BACKGROUNDS` at the top of the script and is annotated with which labels are **confirmed**
 by observation on 13.00 versus predicted from the title-id names.
 
+## Website previews
+
+A browser can show neither a BC7 background nor ATRAC9 music, so `create` also writes what the store website
+shows instead, and lists it in `theme.json` under `previews`. They are never targets and nothing of them is written to the console.
+
+- **A per-app background** (`appmeta/<TID>/pic0.dds=image`) gets `previews/apps/<TID>.jpg`: the source image fitted
+  into 1280×720 as a JPEG (Pillow), at the best quality that stays under 300 KB.
+- **The home music** (`bgm_home=audio`) gets `previews/music.mp3`: the first minute as a 128 kbps MP3 (ffmpeg, under
+  2 MiB). Without ffmpeg on `PATH` the pack is built without it.
+- **A system icon** (`svg:<slot>=file.svg`, e.g. `svg:iconid_search=search.svg`) gets `previews/icons/<slot>.png`: a
+  128×128 PNG render, white on transparent, for the console app, which has no SVG renderer. It needs `cairosvg`
+  (`pip install cairosvg`) or `resvg` or `rsvg-convert` on `PATH`; without one the pack is built without it and a note
+  says so.
+- `--no-previews` leaves all of them out.
+
+There is no all-apps target in this tool (`allapps/pic0.dds` comes from the web creator), so no `allApps` preview.
+`inspect` lists the previews and `verify` warns about one that is missing, too large or not a JPEG, PNG or MP3; a bad
+preview never makes a pack invalid.
+
 ## Applying a pack
 
 Copy the `.p5theme` to a USB drive (its root or a `prospero-themes` folder), import it in Prospero Themes on

@@ -64,3 +64,13 @@ if ($untested.Count -gt 0) {
     Write-Warning ("Not in a hardware-tested build yet: $($untested -join ', '). " +
         "Try this build on the console before relying on it, then add the module to `$Tested in $PSCommandPath.")
 }
+
+# The preview's sound (Library/ConsolePreviewAudio.cs) links these two. They are static imports like libSceHttp and
+# libSceSsl, not resolved at run time, so a console that cannot load either one stops the app before Main. The build
+# only reports them until a console has started the app with them.
+$audio = @($untested | Where-Object { $_ -in @("libSceAudioOut", "libSceAudiodec") })
+if ($audio.Count -gt 0) {
+    Write-Warning ("The preview's sound needs $($audio -join ' and '). If the app does not start on the console, create " +
+        "NullPreviewAudio instead of ConsolePreviewAudio in ThemeApp/Program.cs: the class is then trimmed and the need " +
+        "entries go. Once the app has started with them, add them to `$Tested.")
+}

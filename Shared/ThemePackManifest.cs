@@ -36,6 +36,118 @@ public sealed record ThemePackTarget(
     string? Resource = null);
 
 /// <summary>
+/// The optional <c>previews</c> of a manifest: pictures, an MP3 and icon renders that a browser or the console app can
+/// show where the payload itself (BC7 backgrounds, ATRAC9 music, SVG icons) cannot be shown. They are never targets and
+/// never written to the console. Only entries that are usable on their face are kept: a title id as a key and a safe
+/// relative archive path as a value. Everything else is dropped without a word, so a pack with odd previews still reads.
+/// </summary>
+/// <param name="Apps">Title id to the JPEG of that app's background.</param>
+/// <param name="AllApps">JPEG of the all-apps background.</param>
+/// <param name="Music">MP3 excerpt of the home music.</param>
+/// <param name="Icons">System icon slot (<c>iconid_search</c>, ...) to a PNG render of it, white on transparent.</param>
+public sealed record ThemePackPreviews(
+    IReadOnlyDictionary<string, string> Apps,
+    string? AllApps,
+    string? Music,
+    IReadOnlyDictionary<string, string> Icons)
+{
+    /// <summary>The most app pictures and the most icon renders read from one manifest.</summary>
+    public const int MaxEntries = 64;
+
+    /// <summary>A manifest without previews.</summary>
+    public static readonly ThemePackPreviews None = new(new Dictionary<string, string>(), null, null, new Dictionary<string, string>());
+
+    /// <summary>True when nothing is previewed.</summary>
+    public bool IsEmpty => Apps.Count == 0 && AllApps is null && Music is null && Icons.Count == 0;
+
+    /// <summary>Reads the <c>previews</c> value of a manifest; anything but an object gives <see cref="None"/>.</summary>
+    public static ThemePackPreviews Parse(JsonValue value)
+    {
+        if (value.Type != JsonType.Object)
+            return None;
+        var apps = new Dictionary<string, string>(StringComparer.Ordinal);
+        JsonValue appsValue = value["apps"];
+        foreach (string key in appsValue.Keys)
+            if (apps.Count < MaxEntries && AssetRoots.IsTitleId(key) && SafePath(appsValue[key]) is { } path)
+                apps[key] = path;
+        var icons = new Dictionary<string, string>(StringComparer.Ordinal);
+        JsonValue iconsValue = value["icons"];
+        foreach (string key in iconsValue.Keys)
+            if (icons.Count < MaxEntries && IsSlot(key) && SafePath(iconsValue[key]) is { } path)
+                icons[key] = path;
+        var previews = new ThemePackPreviews(apps, SafePath(value["allApps"]), SafePath(value["music"]), icons);
+        return previews.IsEmpty ? None : previews;
+    }
+
+    /// <summary>The <c>previews</c> value for a manifest, without the empty parts.</summary>
+    public JsonValue ToJson()
+    {
+        var o = JsonValue.NewObject();
+        if (Apps.Count > 0)
+        {
+            var apps = JsonValue.NewObject();
+            foreach (var (tid, path) in Apps)
+                apps[tid] = path;
+            o["apps"] = apps;
+        }
+        if (Icons.Count > 0)
+        {
+            var icons = JsonValue.NewObject();
+            foreach (var (slot, path) in Icons)
+                icons[slot] = path;
+            o["icons"] = icons;
+        }
+        if (AllApps is not null)
+            o["allApps"] = AllApps;
+        if (Music is not null)
+            o["music"] = Music;
+        return o;
+    }
+
+    // A record compares its dictionaries by reference; two manifests that say the same previews are equal.
+    public bool Equals(ThemePackPreviews? other) =>
+        other is not null && AllApps == other.AllApps && Music == other.Music && Same(Apps, other.Apps) && Same(Icons, other.Icons);
+
+    public override int GetHashCode() => HashCode.Combine(AllApps, Music, Apps.Count, Icons.Count);
+
+    private static bool Same(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b)
+    {
+        if (a.Count != b.Count)
+            return false;
+        foreach (var (key, value) in a)
+            if (!b.TryGetValue(key, out string? other) || other != value)
+                return false;
+        return true;
+    }
+
+    // Lower-case letters, digits and underscores: the shape of a slot name such as iconid_game_base.
+    private static bool IsSlot(string key)
+    {
+        if (key.Length == 0 || key.Length > 64)
+            return false;
+        foreach (char c in key)
+            if (!(c is >= 'a' and <= 'z' || c is >= '0' and <= '9' || c == '_'))
+                return false;
+        return true;
+    }
+
+    // A plain descendant path, like relativePathProblem in the TypeScript reader: no leading or trailing slash, no
+    // backslash, no NUL, no empty, "." or ".." segment, at most 200 characters. Null for anything else, a non-string too.
+    private static string? SafePath(JsonValue value)
+    {
+        if (value.Type != JsonType.String)
+            return null;
+        string path = value.AsString();
+        if (path.Length == 0 || path.Length > 200 || path.Contains('\\') || path.Contains('\0') || path[0] == '/' || path[^1] == '/')
+            return null;
+        foreach (string segment in path.Split('/'))
+            if (segment.Length == 0 || segment == "." || segment == "..")
+                return null;
+        return path;
+    }
+}
+
+/// <summary>
 /// A theme pack's <c>theme.json</c>.
 /// </summary>
 /// <remarks>
@@ -56,6 +168,9 @@ public sealed record ThemePackManifest(
     IReadOnlyList<ThemePackTarget> Targets,
     string? Preview = null)
 {
+    /// <summary>The optional pictures, music and icon renders to show (see <see cref="ThemePackPreviews"/>); empty for a pack without.</summary>
+    public ThemePackPreviews Previews { get; init; } = ThemePackPreviews.None;
+
     /// <summary>The manifest version this build understands.</summary>
     public const int CurrentFormat = 2;
 
@@ -119,7 +234,10 @@ public sealed record ThemePackManifest(
             Description: root.GetString("description"),
             Unmapped: root.ContainsKey("unmapped") ? root.GetString("unmapped") : "keep",
             Targets: targets,
-            Preview: root.ContainsKey("preview") ? root.GetString("preview") : null);
+            Preview: root.ContainsKey("preview") ? root.GetString("preview") : null)
+        {
+            Previews = ThemePackPreviews.Parse(root["previews"]),
+        };
     }
 
     /// <summary>Serialises the manifest back to JSON.</summary>
@@ -135,6 +253,8 @@ public sealed record ThemePackManifest(
         if (Preview is not null)
             o["preview"] = Preview;
         o["unmapped"] = Unmapped;
+        if (!Previews.IsEmpty)
+            o["previews"] = Previews.ToJson();
 
         JsonValue array = JsonValue.NewArray();
         foreach (ThemePackTarget t in Targets)

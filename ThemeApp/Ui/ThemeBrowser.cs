@@ -9,10 +9,14 @@ namespace ProsperoThemes.App.Ui;
 public enum ThemeView { Library, Detail, Preview, Community, Import, System, StoreAddress }
 /// <summary>
 /// SaveStoreUrl: Options in the store-address editor; the app reads <see cref="ThemeBrowser.StoreEditor"/>'s text.
+/// PreviewMusic: Square in the preview, which starts or stops the theme's music excerpt (the app owns the sound).
 /// ToggleBackgroundScope: the System row for app backgrounds. ToggleSounds: the System row for music and sounds. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
 /// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
 /// </summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, Busy }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, Busy }
+
+/// <summary>The two scenes of the preview: the home screen with its row of tiles, and the control centre's row of buttons.</summary>
+public enum PreviewScene { Home, ControlCentre }
 
 /// <summary>
 /// The modal question over Detail or System. Apply asks to apply; ApplyScope is the same for a pack with an all-apps
@@ -38,6 +42,17 @@ public sealed class ThemeBrowser
     public ThemeView View { get; private set; }
     public int Selected { get; private set; } = -1;
     public bool ShowOverlay { get; private set; } = true;
+    /// <summary>The scene of the preview: the home row, or the control centre (Triangle goes between them).</summary>
+    public PreviewScene PreviewScene { get; private set; }
+    /// <summary>The section of the home row (L1 and R1 switch between Games and Media).</summary>
+    public PreviewTab PreviewTab { get; private set; }
+    /// <summary>The focused tile of the home row's <see cref="PreviewTab"/>; each section remembers its own.</summary>
+    public int PreviewFocus => _previewFocus[(int)PreviewTab];
+    /// <summary>The focused button of the control centre's row.</summary>
+    public int PreviewButton { get; private set; }
+    private readonly int[] _previewFocus = new int[2], _previewTiles = [1, 1];
+    private static int PreviewButtons => PreviewModel.ControlSlots.Count;
+    private PreviewSound _previewSound;
     /// <summary>The open dialog, or <see cref="DialogKind.None"/>. While one is open it takes every button.</summary>
     public DialogKind Dialog { get; private set; }
     /// <summary>The focused option of the open dialog (an index into <see cref="DialogOptions"/>).</summary>
@@ -103,6 +118,25 @@ public sealed class ThemeBrowser
         Dialog = DialogKind.None;
     }
 
+    /// <summary>
+    /// The number of tiles in each section of the preview's home row (from <see cref="PreviewModel"/>); the focus is kept
+    /// inside them. The control centre always has the model's twelve buttons.
+    /// </summary>
+    public void SetPreviewLayout(int games, int media)
+    {
+        _previewTiles[(int)PreviewTab.Games] = Math.Max(1, games);
+        _previewTiles[(int)PreviewTab.Media] = Math.Max(1, media);
+        for (int i = 0; i < _previewFocus.Length; i++) _previewFocus[i] = Math.Clamp(_previewFocus[i], 0, _previewTiles[i] - 1);
+    }
+
+    /// <summary>The sound the last <see cref="Update"/> asks for (a move, a press, a step back), once; <see cref="PreviewSound.None"/> after that.</summary>
+    public PreviewSound TakePreviewSound()
+    {
+        PreviewSound sound = _previewSound;
+        _previewSound = PreviewSound.None;
+        return sound;
+    }
+
     public void SetCommunityCount(int count)
     {
         _communityCount = Math.Max(0, count);
@@ -151,8 +185,7 @@ public sealed class ThemeBrowser
         }
         if (View == ThemeView.Preview)
         {
-            if (input.Cancel || preview) View = _previewOrigin;
-            else if (input.Confirm) ShowOverlay = !ShowOverlay;
+            UpdatePreview(input, preview, triangle);
             return;
         }
         if (View == ThemeView.StoreAddress)
@@ -198,6 +231,11 @@ public sealed class ThemeBrowser
         {
             _previewOrigin = View;
             ShowOverlay = true;
+            PreviewScene = PreviewScene.Home;
+            PreviewTab = PreviewTab.Games;
+            Array.Clear(_previewFocus);
+            PreviewButton = 0;
+            _previewSound = PreviewSound.None;
             View = ThemeView.Preview;
             return;
         }
@@ -240,6 +278,66 @@ public sealed class ThemeBrowser
         }
         else if (View == ThemeView.Import && input.Confirm) _action = ThemeAction.ImportUsb;
         if (options && View == ThemeView.Library) _action = ThemeAction.Reload;
+    }
+
+    // The preview. The d-pad moves along the tiles of the home row, or along the buttons of the control centre; L1 and R1
+    // switch Games and Media; Triangle goes between the two scenes; X hides the overlay (or brings it back); Square asks
+    // the app to play or stop the music; Circle goes back (out of the control centre, then out of the preview). Every
+    // press that the console would answer with a sound sets <see cref="TakePreviewSound"/>.
+    private void UpdatePreview(UiInput input, bool music, bool triangle)
+    {
+        if (input.Cancel)
+        {
+            _previewSound = PreviewSound.Back;
+            if (PreviewScene == PreviewScene.ControlCentre) PreviewScene = PreviewScene.Home;
+            else View = _previewOrigin;
+            return;
+        }
+        if (music) _action = ThemeAction.PreviewMusic;
+        if (input.Confirm)
+        {
+            ShowOverlay = !ShowOverlay;
+            _previewSound = PreviewSound.Confirm;
+            return;
+        }
+        // With the overlay hidden the picture is all there is to look at.
+        if (!ShowOverlay) return;
+        if (triangle)
+        {
+            PreviewScene = PreviewScene == PreviewScene.Home ? PreviewScene.ControlCentre : PreviewScene.Home;
+            _previewSound = PreviewSound.Confirm;
+            return;
+        }
+        int step = (input.Right ? 1 : 0) - (input.Left ? 1 : 0);
+        if (PreviewScene == PreviewScene.ControlCentre)
+        {
+            if (step != 0) PreviewButton = PreviewStep(PreviewButton, PreviewButtons, step);
+            return;
+        }
+        if (input.PageUp || input.PageDown)
+        {
+            PreviewTab tab = input.PageDown ? PreviewTab.Media : PreviewTab.Games;
+            _previewSound = tab == PreviewTab ? PreviewSound.End : PreviewSound.Move;
+            PreviewTab = tab;
+        }
+        else if (step != 0)
+        {
+            int tab = (int)PreviewTab;
+            _previewFocus[tab] = PreviewStep(_previewFocus[tab], _previewTiles[tab], step);
+        }
+    }
+
+    // One step along a row of count items, with the sound it makes: a move, or the end of the row.
+    private int PreviewStep(int index, int count, int step)
+    {
+        int next = index + step;
+        if (next < 0 || next >= count)
+        {
+            _previewSound = PreviewSound.End;
+            return index;
+        }
+        _previewSound = PreviewSound.Move;
+        return next;
     }
 
     // The store tab has two rows to be in: the filter chips above the grid and the cards. Up from the cards' top row goes to

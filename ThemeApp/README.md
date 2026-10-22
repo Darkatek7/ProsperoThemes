@@ -12,7 +12,12 @@ launch evidence are recorded separately below.
 
 - Library navigation uses the d-pad or left stick. X opens details; Square opens fullscreen preview; Options
   reloads the library.
-- X in preview toggles the simulated home overlay; Circle (or Square) returns to the screen that opened it.
+- **Preview** is an interactive stand-in for the console's home screen, made of what the pack brings (see
+  "The preview" below). D-pad Left/Right moves the focus along the row of tiles (or along the control centre's
+  buttons), L1/R1 switch Games and Media, Triangle goes between the home screen and the control centre, X hides the
+  overlay (and brings it back), Square plays or stops the theme's music excerpt, Circle goes back (out of the
+  control centre first, then out of the preview, to the screen that opened it). The footer lists at most four of
+  these; the d-pad needs no hint.
 - L1/R1 switch between the Library, Community, USB Import and System tabs. Circle goes back to the Library from
   any tab.
 - **Questions first:** X on a theme's detail opens an Apply dialog; X on System's "Restore defaults" row opens a
@@ -73,10 +78,13 @@ launch evidence are recorded separately below.
   theme's background behind its tile (`bg_hub_default`), like every other app without its own image. A
   per-focus rotation (the BgRotator payload) existed until 2026-10-17 and was removed: it only served this
   one tile.
-- **Community HTTP** goes through `Library/StoreHttpClient.cs`, which loads libSceHttp and libSceSsl at run
-  time. Linked as need entries (the SDK's `HttpClient`) they kept the app from starting on FW 13.00.
-  `build.ps1` checks the need entries of `eboot.bin` with `tools/check-needed-modules.ps1` and stops if
-  either library is back.
+- **Community HTTP** goes through `Library/StoreHttpClient.cs`, over the SDK's libSceHttp and libSceSsl imports,
+  which are linked as need entries (`sceKernelDlsym` finds no export in an app, so they are not resolved at run
+  time; the module service only has to load them before the first call). They were once blamed for the app not
+  starting on FW 13.00; the cause was a `libc.prx` in the PS4 container (see below), and the app starts with them
+  (2026-10-15). `build.ps1` checks the need entries of `eboot.bin` with `tools/check-needed-modules.ps1`: it stops
+  for a carried module that is not in the PS5 container and reports every need entry that no hardware-tested build
+  has had yet.
 - **"In library" badge** (Community tab): a store theme whose pack is in the library carries a badge on its
   card. The library names packs `<sha256>.p5theme`; the app records the hash of every download in
   `/data/prospero-themes/community.json` (store id → hash), and uses the store's `sha256` per item instead
@@ -122,6 +130,47 @@ font licence, bundled pack and ThemeHelper inside the metadata tree **before** p
 and font
 source files stay in the repository and are excluded from the runtime artifact.
 
+## The preview
+
+The full-screen preview shows a theme the way the console would, using the pieces of the pack:
+
+- **Home row.** The system tiles (Store, Plus, Game Library, App Library, Welcome in Games; Discover, Music Home, All
+  Apps, Live TV in Media) with the pack's own 512x512 PNG tile icons (`rnps/...` targets) scaled down once; a tile the
+  pack does not dress is drawn as a neutral stand-in. After them come the apps the pack gives a background of its
+  own (`previews.apps`, and `apps/<TID>/pic0.dds` or `appmeta/<TID>/pic0.dds` targets; their tile shows the app's
+  picture cropped square; at most 12) and a few neutral drawn demo apps. The focused tile's name is under it. The
+  row slides (eased) when the focus moves and scrolls when it is longer than the screen.
+- **Background follows focus**, as on the console: a focused app with its own picture (`previews.apps[TID]`) shows
+  it, otherwise an app (not a system tile) shows the all-apps picture (`previews.allApps`), otherwise the theme's
+  cover (`preview`). A pack without previews shows its cover behind everything. A picture change cross-fades in six
+  steps over a quarter of a second (`FadeSteps` and `FadeSeconds` in `ThemeRenderer.Preview.cs`).
+- **Control centre** (Triangle): Home, Switcher, Notifications, Game Base, Music, Downloads, Share Screen, Sound,
+  Mic, Accessories, Profile and Power, with the pack's 128x128 PNG renders (`previews.icons[slot]`, white on
+  transparent; the app cannot draw SVG) or a neutral drawn stand-in where the pack has none.
+- **Sounds.** Moving the focus plays the pack's focus-move clip (`vag` target with `resource` `psfx_focus_move`),
+  X the confirm clip (`psfx_enter`), Circle the back clip (`psfx_cancel`), and the end of a row `psfx_cannot_move`;
+  a clip the pack lacks stays silent. Square plays `previews.music` (an MP3 excerpt) in a loop.
+
+How it is made cheap enough for the console: the pack is read on a worker when the preview opens (only the files
+`Library/PreviewModel.cs` names; a pack's big backgrounds are never inflated); tile art and icons are scaled once;
+a picture is decoded and scaled to the screen once, on a worker, together with the two washed bands of the overlay
+(`PreviewPicture`); the cover and four more are kept (the least recently used of the four goes first). A frame at rest is three copies of those
+plus the row's tiles and text; the cross-fade mixes the two pictures into one buffer per step and the frames
+between steps copy it. Everything is released when the preview closes. `ThemeApp.Preview --bench` prints the cost
+of each of these states.
+
+**Sound** is `Library/ConsolePreviewAudio.cs`: the SDK's `AudioOutDevice` (libSceAudioOut) fed by two
+`AudioMixer`s (clips, music) on a thread of its own, the MP3 decoded by `AudioDecoder` (libSceAudiodec, whose module
+is loaded with `SystemModule.Load(SystemModuleId.AudioDec)` first) in one go to 48 kHz PCM. The decoder does not
+report an MP3's rate or channel count, so `Library/Mp3Frames.cs` reads them from the first frame header. The output
+port is opened by the audio thread when the first sound is wanted and closed when the preview closes, after the clips
+that are still playing (the back clip of leaving) have ended. Any failure leaves the preview silent. **Both libraries
+are static imports, so they are new need entries of the app** (like libSceHttp and libSceSsl they are linked, not
+resolved at run time: `sceKernelDlsym` finds no export in an app). They are not in the tested list of
+`tools/check-needed-modules.ps1`, so the build warns about them until a console has started the app with them.
+If the app stops starting, create `NullPreviewAudio` instead of `ConsolePreviewAudio` in `Program.cs`: the class is
+then never used, and the trimmed build has no audio need entries.
+
 ## PC preview
 
 ```powershell
@@ -129,9 +178,12 @@ dotnet run --project ThemeApp.Preview/ThemeApp.Preview.csproj -p:SharpProsperoRo
 ```
 
 Open `http://127.0.0.1:5185`. Arrow keys navigate, Enter is X, Escape is Circle, V is Square, Q/E are
-L1/R1, T is Triangle (like) and O is Options. This host invokes the same `ThemeBrowser` and `ThemeRenderer` as the
-PS5; only file/image decoding and input transport differ. `--screenshots` renders every screen (Library, Detail, Preview, Artwork, Community, Import, System and
-the store-address keyboard) and the new states (the Apply, scope and Restore dialogs, each System row focused, the
+L1/R1, T is Triangle (like; the control centre in the preview) and O is Options. This host invokes the same
+`ThemeBrowser`, `PreviewController` and `ThemeRenderer` as the PS5; only file/image decoding (it has a small JPEG
+decoder of its own, since the SDK's PC texture library reads PNG only), the sound (none) and input transport differ.
+The last pack in its library is made in code (`PreviewDemoPack.cs`): tile icons, pictures, music and sounds for the
+preview to show; it is reached with End in the Library. `--screenshots` renders every screen (Library, Detail, Preview, Artwork, the demo pack's preview in each of its
+scenes, Community, Import, System and the store-address keyboard) and the new states (the Apply, scope and Restore dialogs, each System row focused, the
 three kinds of toast, the Applied badge) to `ThemeApp.Preview/out/`.
 
 ## ShadowMount deployment
@@ -294,6 +346,8 @@ Use PowerShell 7. The SDK's `build-app.ps1` merges native stderr into the pipeli
 | File | Purpose |
 |---|---|
 | `Program.cs` | The app: a `ProsperoApp` subclass, one screen. |
+| `Library/Preview*.cs`, `Ui/Preview*.cs`, `Library/Mp3Frames.cs`, `Library/ImageHeader.cs` | The preview: its model, the pack's files, the controller and its worker, the visuals. |
+| `Library/ConsolePreviewAudio.cs` | The preview's sound; the only file that links the audio libraries. |
 | `ThemeApp.csproj` | Application-module project; imports the SDK's `Prospero.App.props/targets`. |
 | `sce_sys/param.json` | Identity and the Game classification. |
 | `sce_sys/icon0.png` | 512×512 source icon; the build converts it to `icon0.dds`. |

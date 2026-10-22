@@ -40,12 +40,22 @@ public sealed class ThemePack
 
     /// <summary>Reads a pack from archive bytes.</summary>
     /// <exception cref="ThemePackException">The bytes are not a readable pack.</exception>
-    public static ThemePack Open(ReadOnlySpan<byte> archive)
+    public static ThemePack Open(ReadOnlySpan<byte> archive) => Open(archive, null);
+
+    /// <summary>
+    /// Reads a pack but keeps only <c>theme.json</c> and the files <paramref name="keep"/> accepts (by normalised archive
+    /// path). A zip's other entries are never inflated, which is what the console's preview wants: a few pictures and
+    /// sounds out of a pack whose backgrounds are tens of megabytes.
+    /// </summary>
+    /// <exception cref="ThemePackException">The bytes are not a readable pack.</exception>
+    public static ThemePack OpenSelected(ReadOnlySpan<byte> archive, Func<string, bool> keep) => Open(archive, keep);
+
+    private static ThemePack Open(ReadOnlySpan<byte> archive, Func<string, bool>? keep)
     {
         if (archive.Length == 0)
             throw new ThemePackException("pack archive is empty");
 
-        Dictionary<string, byte[]> files = ReadFiles(archive);
+        Dictionary<string, byte[]> files = ReadFiles(archive, keep);
 
         if (!files.TryGetValue(ManifestName, out byte[]? manifestBytes))
             throw new ThemePackException($"pack archive has no {ManifestName}");
@@ -213,25 +223,25 @@ public sealed class ThemePack
         return true;
     }
 
-    private static Dictionary<string, byte[]> ReadFiles(ReadOnlySpan<byte> archive)
+    private static Dictionary<string, byte[]> ReadFiles(ReadOnlySpan<byte> archive, Func<string, bool>? keep)
     {
         // zip: "PK\x03\x04"
         if (archive.Length >= 4 && archive[0] == 0x50 && archive[1] == 0x4B && archive[2] == 0x03 && archive[3] == 0x04)
-            return ReadZip(archive.ToArray());
+            return ReadZip(archive.ToArray(), keep);
 
         // tar: "ustar" at offset 257
         if (archive.Length > 262 &&
             archive[257] == (byte)'u' && archive[258] == (byte)'s' && archive[259] == (byte)'t' &&
             archive[260] == (byte)'a' && archive[261] == (byte)'r')
         {
-            return ReadTar(archive.ToArray());
+            return ReadTar(archive.ToArray(), keep);
         }
 
         throw new ThemePackException(
             "archive is neither zip nor tar (expected PK\\x03\\x04 or ustar magic)");
     }
 
-    private static Dictionary<string, byte[]> ReadZip(byte[] archive)
+    private static Dictionary<string, byte[]> ReadZip(byte[] archive, Func<string, bool>? keep)
     {
         ZipArchive zip;
         try
@@ -250,6 +260,8 @@ public sealed class ThemePack
                 continue;
 
             string name = NormaliseName(entry.Name);
+            if (keep is not null && name != ManifestName && !keep(name))
+                continue;
             try
             {
                 files[name] = zip.Extract(entry);
@@ -263,7 +275,7 @@ public sealed class ThemePack
         return files;
     }
 
-    private static Dictionary<string, byte[]> ReadTar(byte[] archive)
+    private static Dictionary<string, byte[]> ReadTar(byte[] archive, Func<string, bool>? keep)
     {
         List<TarEntry> entries;
         try
@@ -280,7 +292,10 @@ public sealed class ThemePack
         {
             if (entry.IsDirectory)
                 continue;
-            files[NormaliseName(entry.Name)] = entry.Data;
+            string name = NormaliseName(entry.Name);
+            if (keep is not null && name != ManifestName && !keep(name))
+                continue;
+            files[name] = entry.Data;
         }
 
         return files;

@@ -22,6 +22,8 @@ internal sealed class ThemeApp : ProsperoApp
     private readonly Dispatcher _results = new();
     private IReadOnlyList<ThemeLibraryEntry> _entries = Array.Empty<ThemeLibraryEntry>();
     private ThemeRenderer _renderer = null!;
+    // The preview's pictures, icons and sounds, read on workers of its own (they do not make the app busy), and its sound.
+    private PreviewController _preview = null!;
     private Thread? _worker;
     private bool _busy, _pngAvailable, _jpegAvailable;
     // Frame timing readout, toggled with R3, for checking the pace on the device.
@@ -63,6 +65,10 @@ internal sealed class ThemeApp : ProsperoApp
         try { SystemModule.Load(SystemModuleId.JpegDec); _jpegAvailable = true; }
         catch { _jpegAvailable = false; }
         _renderer = new ThemeRenderer(name => FileSystem.ReadAllBytes(DeviceThemeLibrary.AssetRoot + "/" + name), DecodeCover);
+        // ConsolePreviewAudio is the one class that links libSceAudioOut and libSceAudiodec. NullPreviewAudio here leaves the
+        // preview silent and, because the class is then never used, takes both need entries out of the build.
+        _preview = new PreviewController(_renderer, _browser, new ConsolePreviewAudio(), DecodeCover,
+            path => AppData.Files.ReadAllBytes(path), new ThreadWorker(_results));
         // Where the jailbreak starts the app without /data, ThemeHelper keeps the app's folder (see AppData).
         string? dataProblem = AppData.Probe();
         string? json = null;
@@ -238,6 +244,7 @@ internal sealed class ThemeApp : ProsperoApp
             _rescanAfterWork = false;
             StartWork(DeviceThemeLibrary.Scan);
         }
+        _preview.BeforeUpdate(_entries);
         _browser.Update(UiInput.From(context.Input, context.PreviousInput),
             preview: context.Pressed(ScePadButton.Square), options: context.Pressed(ScePadButton.Options),
             triangle: context.Pressed(ScePadButton.Triangle), asksScope: SelectedHasAllAppsBackground(),
@@ -250,6 +257,7 @@ internal sealed class ThemeApp : ProsperoApp
             case ThemeAction.ToggleBackgroundScope: ToggleBackgroundScope(); break;
             case ThemeAction.ToggleEarlierThemes: ToggleEarlierThemes(); break;
             case ThemeAction.ToggleSounds: ToggleSounds(); break;
+            case ThemeAction.PreviewMusic: _preview.ToggleMusic(); break;
             case ThemeAction.ImportUsb: StartWork(DeviceThemeLibrary.ImportUsb, announce: true); break;
             case ThemeAction.Reload: StartWork(DeviceThemeLibrary.Scan); break;
             case ThemeAction.Apply when _browser.Selected >= 0:
@@ -272,6 +280,7 @@ internal sealed class ThemeApp : ProsperoApp
             case ThemeAction.CommunityDownload when SelectedCommunity() is { } theme: StartCommunityDownload(theme); break;
             case ThemeAction.CommunityLike when SelectedCommunity() is { } theme: StartCommunityLike(theme); break;
         }
+        _preview.Update(_entries);
         _renderer.SelectedCommunityId = SelectedCommunity()?.Id;
         _renderer.Draw(context.Surface, _browser, _entries, context.TotalSeconds, context.DeltaSeconds);
         _stats.Record((float)context.DeltaSeconds);
@@ -741,7 +750,20 @@ internal sealed class ThemeApp : ProsperoApp
         _worker?.Join();
         _results.RunPending();
         _http?.Dispose();
+        _preview.Dispose();
         _renderer.Dispose();
+    }
+
+    /// <summary>Runs the preview's reading and decoding on a thread of its own and hands the result back to the frame thread.</summary>
+    private sealed class ThreadWorker(Dispatcher results) : IPreviewWorker
+    {
+        public void Run(Action work, Action done) =>
+            new Thread(() =>
+            {
+                try { work(); }
+                catch { /* the controller treats what the work left undone as a failure */ }
+                results.Post(done);
+            }) { IsBackground = true, Name = "ThemePreview" }.Start();
     }
 }
 

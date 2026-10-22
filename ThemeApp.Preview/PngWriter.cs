@@ -15,13 +15,19 @@ internal static unsafe class PngWriter
     private static readonly byte[] Signature = [137, 80, 78, 71, 13, 10, 26, 10];
     private static readonly uint[] CrcTable = BuildCrcTable();
 
-    public static byte[] Encode(Surface surface)
+    public static byte[] Encode(Surface surface) => Encode(surface, alpha: false);
+
+    /// <summary>The surface as an 8-bit RGBA PNG, keeping its alpha (the demo pack's tile icons and white control-centre icons).</summary>
+    public static byte[] EncodeRgba(Surface surface) => Encode(surface, alpha: true);
+
+    private static byte[] Encode(Surface surface, bool alpha)
     {
         int width = surface.Width, height = surface.Height, stride = surface.Stride;
         if (width <= 0 || height <= 0) throw new ArgumentException("The surface has no pixels to encode.", nameof(surface));
 
-        // Each row: a filter byte (0, none) then red, green, blue. Pixels are 0xAARRGGBB, blue in the low byte.
-        var raw = new byte[(long)height * (1 + 3L * width)];
+        // Each row: a filter byte (0, none) then red, green, blue (and alpha). Pixels are 0xAARRGGBB, blue in the low byte.
+        int bytesPerPixel = alpha ? 4 : 3;
+        var raw = new byte[(long)height * (1 + (long)bytesPerPixel * width)];
         int at = 0;
         for (int y = 0; y < height; y++)
         {
@@ -33,6 +39,7 @@ internal static unsafe class PngWriter
                 raw[at++] = (byte)(p >> 16);
                 raw[at++] = (byte)(p >> 8);
                 raw[at++] = (byte)p;
+                if (alpha) raw[at++] = (byte)(p >> 24);
             }
         }
 
@@ -43,7 +50,7 @@ internal static unsafe class PngWriter
         BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(0), (uint)width);
         BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(4), (uint)height);
         header[8] = 8;   // bit depth
-        header[9] = 2;   // colour type: RGB
+        header[9] = (byte)(alpha ? 6 : 2);   // colour type: RGBA, or RGB
         // compression, filter and interlace stay 0
 
         var png = new MemoryStream();

@@ -148,7 +148,10 @@ public class SystemScreenTests
         preview.SetCount(1);
         preview.Update(UiInput.None, preview: true);
         Assert.Equal(ThemeView.Preview, preview.View);
-        Steady("preview", preview);
+        Steady("preview", preview, rings: 1);
+        preview.Update(UiInput.None, triangle: true);
+        Assert.Equal(PreviewScene.ControlCentre, preview.PreviewScene);
+        Steady("preview, control centre", preview, rings: 1);
     }
 
     // ---- System -----------------------------------------------------------------------------------------------------
@@ -345,13 +348,14 @@ public class SystemScreenTests
             long overlay = Settled(renderer, canvas, browser, entries, 5);
             Assert.Equal(overlay, Settled(renderer, canvas, browser, entries, 20));   // static: the bands are copied, not drawn again
 
-            // Over a flat cover every pixel that is not flat is something drawn. Right of the home row, and in the middle
-            // of the picture, there is nothing (the old "Home preview" label sat at the top right).
-            for (int y = 0; y < 352; y++) Assert.True(RowIsFlat(canvas, y, 900, 1920), $"row {y} of the top band is not flat right of the tiles");
+            // Over a flat cover every pixel that is not flat is something drawn. Right of the home row (a pack without tile
+            // icons has eight tiles in Games), and in the middle of the picture, there is nothing (the old "Home preview"
+            // label sat at the top right).
+            for (int y = 0; y < 352; y++) Assert.True(RowIsFlat(canvas, y, 1400, 1920), $"row {y} of the top band is not flat right of the tiles");
             for (int y = 700; y < 940; y++) Assert.True(RowIsFlat(canvas, y, 1300, 1920), $"row {y} is not flat right of the name");
             for (int y = 352; y < 680; y += 7) Assert.True(RowIsFlat(canvas, y, 0, 1920), $"row {y} of the open picture is not flat");
-            // Below the name and left of the hints is just the scrim.
-            for (int y = 950; y < 1080; y++) Assert.True(RowIsFlat(canvas, y, 0, 1400), $"row {y} below the name is not flat");
+            // Below the name and left of the hints (four of them, from about x = 1200) is just the scrim.
+            for (int y = 950; y < 1080; y++) Assert.True(RowIsFlat(canvas, y, 0, 1100), $"row {y} below the name is not flat");
             // What is drawn: the tiles, the name, the hints.
             Assert.False(RowIsFlat(canvas, 200, 90, 800));
             Assert.False(RowIsFlat(canvas, 910, 90, 800));
@@ -427,7 +431,7 @@ public class SystemScreenTests
             string longName = "An extremely long theme name that cannot possibly fit on a single line of the big title font";
             ThemeLibraryEntry wrapped = same with { Manifest = same.Manifest with { Name = longName } };
             Settled(renderer, canvas, browser, [wrapped], 15);
-            for (int y = 950; y < 1080; y++) Assert.True(RowIsFlat(canvas, y, 0, 1400), $"row {y} below a two-line name is not flat");
+            for (int y = 950; y < 1080; y++) Assert.True(RowIsFlat(canvas, y, 0, 1100), $"row {y} below a two-line name is not flat");
             Assert.False(RowIsFlat(canvas, 915, 90, 1300));   // the second line is there
         }
     }

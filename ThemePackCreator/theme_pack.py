@@ -30,7 +30,8 @@ verification rather than a renderer.
 label (`hub_default`), or a full file name. A UI sound is `ui:<clip>` (`ui:psfx_focus_move`), with any audio file
 ffmpeg reads: it becomes a mono VAG that the app writes into that clip of the icon container. With the container
 under `--stock` (`rco/Sce.PlayStation.PUI_UI3.rco`), the sound is cut to the clip's length with a short fade, and
-the clip name is checked; `list` shows the clips then.
+the clip name is checked; `list` shows the clips then. A system icon is `svg:<slot>` (`svg:iconid_search`) with an SVG
+file: it is minified like the app does and patched into that slot of the icon container.
 
 Stock layout expected under `--stock`: `*.dds.zst` for backgrounds, and `png/` for the PNG assets. Copy them off
 the console (for example over FTP from the paths in docs/13.00-screen-assets.md) into `backups/`.
@@ -40,6 +41,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -197,6 +199,22 @@ def ui_sound_entry(target: str) -> dict | None:
     }
 
 
+def svg_icon_entry(target: str) -> dict | None:
+    """Builds an entry for `svg:<slot>`, or None if that is not the shape."""
+    if not target.startswith("svg:") or len(target) <= 4:
+        return None
+    slot = target[4:]
+    return {
+        "target": UI_CONTAINER,
+        "asset": slot,
+        "kind": "svg",
+        "layer": "svg",
+        "screen": f"system icon {slot}",
+        "name": f"System icon {slot}",
+        "resource": slot,
+    }
+
+
 def ui_container(stock_dir: Path) -> Path | None:
     for candidate in (stock_dir / "rco" / UI_CONTAINER, stock_dir / UI_CONTAINER):
         if candidate.exists():
@@ -251,13 +269,16 @@ def stock_path(stock_dir: Path, entry: dict) -> Path:
 
 
 def resolve(name: str) -> dict:
-    """Accepts an asset stem, a full file name, a title id, a screen label, appmeta/<TID>/pic0.dds, or ui:<clip>."""
+    """Accepts an asset stem, a full file name, a title id, a screen label, appmeta/<TID>/pic0.dds, ui:<clip> or svg:<slot>."""
     app = app_background_entry(name)
     if app is not None:
         return app
     ui = ui_sound_entry(name)
     if ui is not None:
         return ui
+    svg = svg_icon_entry(name)
+    if svg is not None:
+        return svg
     if name in BY_TARGET:
         return BY_TARGET[name]
     for entry in ASSETS:
@@ -559,6 +580,70 @@ def build_ui_sound(entry: dict, source: Path, stock_dir: Path, work: Path) -> tu
     return payload, record
 
 
+def minify_svg(svg: str) -> str:
+    """Minifies an SVG exactly as RcoSvg.Fit does (Shared/RcoSvg.cs): trim, drop comments, collapse whitespace between tags."""
+    text = svg.strip()
+    text = re.sub(r"<!--[\s\S]*?-->", "", text)
+    text = re.sub(r">\s+<", "><", text)
+    return text.strip()
+
+
+def icon_budgets() -> dict[str, int]:
+    """Slot name -> byte budget from web/shared/icon-slots.json; empty when the file is not next to this tool."""
+    path = Path(__file__).resolve().parent.parent / "web" / "shared" / "icon-slots.json"
+    try:
+        slots = json.loads(path.read_text(encoding="utf-8"))["slots"]
+        return {name: int(info["bytes"]) for name, info in slots.items()}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def svg_problem(svg: str) -> str | None:
+    """Why a minified SVG would be refused (the store's rules, web/shared/src/validate.ts), or None."""
+    if not svg.lower().startswith("<svg") or not svg.endswith("</svg>"):
+        return "must be one <svg> element"
+    if re.search(r"<script|<foreignObject|[\s\"'/]on\w+\s*=", svg, re.I):
+        return "contains a script, <foreignObject> or an on* event attribute"
+    for m in re.finditer(r"\bhref\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))", svg, re.I):
+        if not (m.group(1) or m.group(2) or m.group(3) or "").startswith("#"):
+            return "has an href that points outside the icon"
+    return None
+
+
+def read_svg(source: Path) -> str:
+    """An SVG file as the minified text that goes into the pack (a leading XML declaration is not part of the element)."""
+    return minify_svg(re.sub(r"^\s*<\?xml[^>]*\?>", "", source.read_text(encoding="utf-8-sig")))
+
+
+def build_svg_icon(entry: dict, source: Path, stock_dir: Path, work: Path) -> tuple[bytes, dict]:
+    """A system icon: the SVG, minified, checked the way the store checks it and against the slot's byte budget."""
+    svg = read_svg(source)
+    problem = svg_problem(svg)
+    if problem:
+        raise SystemExit(f"{source}: {problem}")
+    slot = entry["resource"]
+    payload = svg.encode("utf-8")
+    budget = icon_budgets().get(slot)
+    if budget is not None and len(payload) > budget:
+        raise SystemExit(f"{source}: {len(payload)} bytes minified, the slot {slot} takes {budget}")
+    record = {
+        "path": f"{ROOT}/{entry['target']}",
+        "layer": "svg",
+        "resource": slot,
+        "file": f"icons/{safe_name(slot)}.svg",
+        "bytes": len(payload),
+        "sha256": sha256_hex(payload),
+        "screen": entry["screen"],
+        "format": "svg, minified",
+    }
+    return payload, record
+
+
+def safe_name(name: str) -> str:
+    """An archive file name from a slot name, as the web builder does (anything outside A-Za-z0-9._- becomes _)."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+
+
 def _entry(entry: dict, payload: bytes, stock_bytes: bytes, extra: dict | None = None) -> dict:
     record = {
         "path": f"{entry.get('root', ROOT)}/{entry['target']}",
@@ -753,6 +838,155 @@ def cmd_catalog_from_report(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---- website previews -------------------------------------------------------
+
+# A browser can show neither a BC7 background nor ATRAC9 music, so the website gets a JPEG and an MP3 excerpt of
+# its own. The console app has no SVG renderer, so a system icon gets a PNG render of its SVG. They are listed in
+# theme.json under "previews" and are never targets: nothing of them is written to the console. The limits are the
+# ones the store's server takes (web/server/src/pack-info.ts): it drops a larger file silently.
+PREVIEW_BOX = (1280, 720)
+PREVIEW_JPEG_MAX = 300 * 1024
+PREVIEW_MP3_MAX = 2 * 1024 * 1024
+PREVIEW_MUSIC_SECONDS = 60
+PREVIEW_MP3_KBPS = 128
+PREVIEW_APP_DIR = "previews/apps"
+PREVIEW_ICON_DIR = "previews/icons"
+PREVIEW_ICON_SIZE = 128
+PREVIEW_MUSIC = "previews/music.mp3"
+HOME_MUSIC_ASSET = "bgm_home.at9"
+
+
+def build_image_preview(image: Path) -> bytes:
+    """A JPEG of a source image, fitted into 1280x720, at the best quality that stays under 300 KB."""
+    from PIL import Image
+    import io
+
+    with Image.open(image) as im:
+        im = im.convert("RGB")
+        im.thumbnail(PREVIEW_BOX, Image.LANCZOS)   # keeps the aspect ratio, only ever shrinks
+        for _ in range(8):
+            for quality in range(90, 29, -10):
+                buffer = io.BytesIO()
+                im.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
+                if buffer.tell() <= PREVIEW_JPEG_MAX:
+                    return buffer.getvalue()
+            im = im.resize((max(1, im.width * 3 // 4), max(1, im.height * 3 // 4)), Image.LANCZOS)
+    raise SystemExit(f"{image}: no JPEG preview under {PREVIEW_JPEG_MAX // 1024} KB")
+
+
+def audio_seconds(path: Path) -> float:
+    result = subprocess.run(["ffprobe", "-v", "error", "-of", "json", "-show_entries", "format=duration", str(path)],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"ffprobe failed on {path}:\n{result.stderr}")
+    return float(json.loads(result.stdout).get("format", {}).get("duration") or 0)
+
+
+def build_music_preview(source: Path, work: Path) -> bytes:
+    """An MP3 excerpt of the home music: the first minute, stereo, 128 kbps, with a short fade out."""
+    out = work / "music-preview.mp3"
+    # Cut a little short of the limit: the encoder pads the last frame, and the server takes 60 s at most.
+    seconds = PREVIEW_MUSIC_SECONDS - 1
+    fade = 2
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-i", str(source), "-t", str(seconds), "-vn", "-map_metadata", "-1",
+         "-af", f"afade=t=out:st={seconds - fade}:d={fade}",
+         "-ac", "2", "-ar", "44100", "-c:a", "libmp3lame", "-b:a", f"{PREVIEW_MP3_KBPS}k", "-f", "mp3", str(out)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not out.exists():
+        raise SystemExit(f"ffmpeg could not make an MP3 excerpt of {source}:\n{result.stderr[-2000:]}")
+    data = out.read_bytes()
+    if len(data) > PREVIEW_MP3_MAX or audio_seconds(out) > PREVIEW_MUSIC_SECONDS:
+        raise SystemExit(f"{source}: the MP3 excerpt is over {PREVIEW_MP3_MAX // 1024 // 1024} MiB or {PREVIEW_MUSIC_SECONDS} s")
+    return data
+
+
+def svg_rasteriser() -> str | None:
+    """The first SVG rasteriser that is there: the cairosvg module, then resvg or rsvg-convert on PATH."""
+    try:
+        import cairosvg  # noqa: F401
+        return "cairosvg"
+    except (ImportError, OSError):   # OSError: the module is there, the cairo library is not
+        pass
+    for tool in ("resvg", "rsvg-convert"):
+        if shutil.which(tool):
+            return tool
+    return None
+
+
+def build_icon_preview(svg: bytes, tool: str, work: Path) -> bytes:
+    """A 128x128 PNG of an SVG: fitted into the square and centred, white on transparent (the console tints icons)."""
+    from PIL import Image
+    import io
+
+    size = PREVIEW_ICON_SIZE
+    source, rendered = work / "icon.svg", work / "icon.png"
+    source.write_bytes(svg)
+    rendered.unlink(missing_ok=True)
+    if tool == "cairosvg":
+        import cairosvg
+        cairosvg.svg2png(bytestring=svg, write_to=str(rendered), output_width=size, output_height=size)
+    elif tool == "resvg":
+        run = subprocess.run(["resvg", "-w", str(size), "-h", str(size), str(source), str(rendered)], capture_output=True, text=True)
+    else:
+        run = subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), "--keep-aspect-ratio", "-o", str(rendered), str(source)],
+                             capture_output=True, text=True)
+    if tool != "cairosvg" and run.returncode != 0:
+        raise ValueError(run.stderr.strip()[-300:] or f"{tool} failed")
+    with Image.open(rendered) as im:
+        im = im.convert("RGBA")
+        im.thumbnail((size, size), Image.LANCZOS)
+        alpha = Image.new("L", (size, size), 0)
+        alpha.paste(im.getchannel("A"), ((size - im.width) // 2, (size - im.height) // 2))
+    out = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+    out.putalpha(alpha)
+    buffer = io.BytesIO()
+    out.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
+def build_previews(requests: list[tuple[dict, Path]], work: Path) -> tuple[dict, list[tuple[str, bytes]]]:
+    """The website previews for the targets that have one: per-app backgrounds, system icons and the home music.
+
+    This tool has no all-apps target (allapps/pic0.dds), so there is no "allApps" preview here.
+
+    Returns the manifest's "previews" object (empty when there are none) and the (archive name, bytes) files.
+    The music needs ffmpeg; without it the pack is built without that preview and a note says so.
+    """
+    previews: dict = {}
+    files: list[tuple[str, bytes]] = []
+    tool = svg_rasteriser() if any(entry["kind"] == "svg" for entry, _ in requests) else None
+    if tool is None and any(entry["kind"] == "svg" for entry, _ in requests):
+        print("  no icon previews: no SVG rasteriser (pip install cairosvg, or put resvg or rsvg-convert on PATH)", file=sys.stderr)
+    for entry, image in requests:
+        if entry["kind"] == "svg" and tool is not None:
+            name = f"{PREVIEW_ICON_DIR}/{safe_name(entry['resource'])}.png"
+            try:
+                data = build_icon_preview(read_svg(image).encode("utf-8"), tool, work)
+            except Exception as e:   # one icon the rasteriser cannot draw leaves out only its own preview
+                print(f"  no preview for {entry['resource']}: {e}", file=sys.stderr)
+                continue
+            previews.setdefault("icons", {})[entry["resource"]] = name
+            files.append((name, data))
+            print(f"  preview {name:<36} {len(data):>8} bytes")
+        elif entry["kind"] == "app_dds":
+            data = build_image_preview(image)
+            name = f"{PREVIEW_APP_DIR}/{entry['title_id']}.jpg"
+            previews.setdefault("apps", {})[entry["title_id"]] = name
+            files.append((name, data))
+            print(f"  preview {name:<36} {len(data):>8} bytes")
+        elif entry["kind"] == "audio" and entry["asset"] == HOME_MUSIC_ASSET:
+            if shutil.which("ffmpeg") is None:
+                print("  no music preview: ffmpeg is not on PATH", file=sys.stderr)
+                continue
+            data = build_music_preview(image, work)
+            previews["music"] = PREVIEW_MUSIC
+            files.append((PREVIEW_MUSIC, data))
+            print(f"  preview {PREVIEW_MUSIC:<36} {len(data):>8} bytes")
+    return previews, files
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     stock_dir = Path(args.stock)
     out = Path(args.out)
@@ -787,6 +1021,8 @@ def cmd_create(args: argparse.Namespace) -> int:
                 payload, record = build_video(entry, image, stock_dir, work)
             elif entry["kind"] == "vag":
                 payload, record = build_ui_sound(entry, image, stock_dir, work)
+            elif entry["kind"] == "svg":
+                payload, record = build_svg_icon(entry, image, stock_dir, work)
             else:
                 payload, record = build_audio(entry, image, stock_dir, work)
 
@@ -797,6 +1033,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             print(f"  {record['path']:<40} {image.name:<24} -> {record['bytes']:>8} bytes  [{detail}]")
 
         preview_bytes = Path(args.preview).read_bytes() if args.preview else None
+        previews, preview_files = ({}, []) if args.no_previews else build_previews(requests, work)
 
         manifest = {
             "format": FORMAT_VERSION,
@@ -810,12 +1047,16 @@ def cmd_create(args: argparse.Namespace) -> int:
         }
         if preview_bytes is not None:
             manifest["preview"] = "preview.png"
+        if previews:
+            manifest["previews"] = previews
 
         out.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("theme.json", json.dumps(manifest, indent=2) + "\n")
             if preview_bytes is not None:
                 zf.writestr("preview.png", preview_bytes)
+            for name, data in preview_files:
+                zf.writestr(name, data, compress_type=zipfile.ZIP_STORED)   # JPEG, PNG and MP3 do not deflate further
             for name, data in payloads:
                 zf.writestr(name, data)
 
@@ -823,10 +1064,51 @@ def cmd_create(args: argparse.Namespace) -> int:
     return 0
 
 
+def preview_files(manifest: dict) -> list[tuple[str, object]]:
+    """The (label, archive path) pairs of the manifest's "previews"; a malformed object gives what is readable."""
+    previews = manifest.get("previews")
+    if not isinstance(previews, dict):
+        return []
+    rows: list[tuple[str, object]] = []
+    apps = previews.get("apps")
+    if isinstance(apps, dict):
+        rows += [(f"apps.{tid}", path) for tid, path in apps.items()]
+    icons = previews.get("icons")
+    if isinstance(icons, dict):
+        rows += [(f"icons.{slot}", path) for slot, path in icons.items()]
+    rows += [(key, previews[key]) for key in ("allApps", "music") if key in previews]
+    return rows
+
+
+def preview_problem(label: str, path: object, data: bytes | None) -> str | None:
+    """Why a website preview would not be shown (the limits are the store server's), or None. Icon renders are for the app."""
+    if not isinstance(path, str) or not path:
+        return f"{label}: not an archive path"
+    if path.startswith(("/", "\\")) or ".." in path.replace("\\", "/").split("/"):
+        return f"{label}: '{path}' is not a relative path inside the archive"
+    if data is None:
+        return f"{label}: '{path}' is not in the archive"
+    if label == "music":
+        if len(data) > PREVIEW_MP3_MAX:
+            return f"{label}: {len(data)} bytes, over the {PREVIEW_MP3_MAX} limit"
+        if not (data[:3] == b"ID3" or (len(data) > 1 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0)):
+            return f"{label}: '{path}' is not an MP3"
+    elif label.startswith("icons."):
+        if data[:8] != b"\x89PNG\r\n\x1a\n":
+            return f"{label}: '{path}' is not a PNG"
+    else:
+        if len(data) > PREVIEW_JPEG_MAX:
+            return f"{label}: {len(data)} bytes, over the {PREVIEW_JPEG_MAX} limit"
+        if data[:3] != b"\xff\xd8\xff":
+            return f"{label}: '{path}' is not a JPEG"
+    return None
+
+
 def cmd_inspect(args: argparse.Namespace) -> int:
     with zipfile.ZipFile(args.pack) as zf:
         manifest = json.loads(zf.read("theme.json"))
         names = set(zf.namelist())
+        sizes = {i.filename: i.file_size for i in zf.infolist()}
 
     print(f"{manifest['name']} v{manifest['version']} by {manifest['author']}  (format {manifest['format']})")
     print(f"id {manifest['id']}  unmapped={manifest.get('unmapped')}")
@@ -836,12 +1118,21 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     for t in manifest["targets"]:
         present = "ok" if t["file"] in names else "MISSING"
         print(f"{t['path']:<42} {t['layer']:<12} {t['bytes']:>9}  {t['sha256'][:16]}...  {present}")
+
+    rows = preview_files(manifest)
+    if rows:
+        print("\npreviews (shown on the store and in the app, never written to the console):")
+        for label, path in rows:
+            size = sizes.get(path) if isinstance(path, str) else None
+            print(f"  {label:<26} {str(path):<36} {size if size is not None else 'MISSING':>9}")
     return 0
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
     """Structural check. Shared.Tests holds the authoritative validator; this is the quick local one."""
     problems = []
+    warnings = []
+    previews_ok = 0
     with zipfile.ZipFile(args.pack) as zf:
         names = set(zf.namelist())
         if "theme.json" not in names:
@@ -876,12 +1167,26 @@ def cmd_verify(args: argparse.Namespace) -> int:
                             problems.append(f"{t['path']}: stock_sha256 does not match {candidate.name}")
                         break
 
+        # The website previews are never targets: a bad one is only a warning, the store just shows nothing for it.
+        if "previews" in manifest and not isinstance(manifest["previews"], dict):
+            warnings.append("previews: must be an object")
+        for label, path in preview_files(manifest):
+            data = zf.read(path) if isinstance(path, str) and path in names else None
+            problem = preview_problem(label, path, data)
+            if problem:
+                warnings.append(f"previews: {problem}")
+            else:
+                previews_ok += 1
+
+    for w in warnings:
+        print(f"warning: {w}")
     if problems:
         print("INVALID")
         for p in problems:
             print(f"  - {p}")
         return 1
-    print(f"valid: {len(manifest['targets'])} target(s), all payloads present and hashed correctly")
+    note = f", {previews_ok} preview(s)" if previews_ok else ""
+    print(f"valid: {len(manifest['targets'])} target(s), all payloads present and hashed correctly{note}")
     return 0
 
 
@@ -917,6 +1222,8 @@ def main() -> int:
     p_create.add_argument("--description", default="")
     p_create.add_argument("--unmapped", default="keep", choices=["keep", "stock"])
     p_create.add_argument("--preview", default=None, help="image used as the pack cover")
+    p_create.add_argument("--no-previews", action="store_true",
+                          help="skip the previews (a JPEG per app background, a PNG per system icon, an MP3 excerpt of the home music)")
     p_create.set_defaults(func=cmd_create)
 
     p_inspect = sub.add_parser("inspect", help="show a pack's manifest")

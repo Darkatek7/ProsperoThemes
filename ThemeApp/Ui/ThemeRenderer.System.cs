@@ -91,7 +91,6 @@ public sealed partial class ThemeRenderer
 
     private void DrawImport(Surface s, int enter)
     {
-        ReleasePreviewStrips();
         var (x, cardY, _, cardHeight) = ImportCard();
         int y = cardY + enter;
         SysGlass(s, x, y, ImportCardWidth, cardHeight);
@@ -166,7 +165,6 @@ public sealed partial class ThemeRenderer
 
     private void DrawSystem(Surface s, ThemeBrowser browser, int count, int enter)
     {
-        ReleasePreviewStrips();
         DrawSysHeading(s, "PROSPERO THEMES", "System", enter);
 
         if (_sysSegmentOwnWidth == 0)
@@ -318,7 +316,6 @@ public sealed partial class ThemeRenderer
     /// <summary>The on-screen keyboard for the store address: input box with caret, key grid, and one line of help.</summary>
     private void DrawStoreAddress(Surface s, StoreAddressEditor editor, int enter, double seconds)
     {
-        ReleasePreviewStrips();
         // The cover behind the screen is already calmed (see Backdrop), so the keys read the same on any theme.
         DrawSysHeading(s, "COMMUNITY STORE", "Store address", enter);
         string text = editor.Text;

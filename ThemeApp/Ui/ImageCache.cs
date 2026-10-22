@@ -120,14 +120,27 @@ public sealed class ImageCache : IDisposable
         var key = new Key(name, width, height, radius, dim);
         if (_entries.Remove(key, out var old)) { _bytes -= old.Image.Bytes; old.Image.Dispose(); }
 
-        PixelBuffer pixels = Scaled(source, width, height);
-        Flatten(pixels, dim);
-        var image = new CachedImage(pixels, radius);
-        ApplyCorners(pixels, image.Radius);
+        CachedImage image = Prepare(source, width, height, radius, dim);
 
         while (_entries.Count > 0 && (_entries.Count >= _maxEntries || _bytes + image.Bytes > _maxBytes)) EvictOldest();
         _entries[key] = new Entry(image) { Stamp = ++_clock };
         _bytes += image.Bytes;
+        return image;
+    }
+
+    /// <summary>
+    /// What <see cref="Add"/> makes, without a cache: <paramref name="source"/> scaled to width x height, flattened over
+    /// <see cref="Theme.Ink"/>, dimmed by <paramref name="dim"/> and with its corners rounded. It touches no shared state,
+    /// so a worker thread can make an image for the frame thread to keep.
+    /// </summary>
+    public static CachedImage Prepare(PixelBuffer source, int width, int height, int radius = 0, byte dim = 0)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        PixelBuffer pixels = Scaled(source, width, height);
+        Flatten(pixels, dim);
+        var image = new CachedImage(pixels, radius);
+        ApplyCorners(pixels, image.Radius);
         return image;
     }
 

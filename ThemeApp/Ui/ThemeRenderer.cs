@@ -119,7 +119,7 @@ public sealed partial class ThemeRenderer : IDisposable
 
     public void ResetCovers()
     {
-        ReleasePreviewStrips();
+        ReleasePreview();
         _libraryImages.Clear();
         _summaries.Clear();
         ResetLibraryState();
@@ -164,8 +164,9 @@ public sealed partial class ThemeRenderer : IDisposable
 
     /// <summary>
     /// The picture behind a view. Library: the sharp cover of the selected theme under a left and bottom scrim, so the
-    /// hero text and the collection row stay readable on bright art. Preview: the sharp cover as it is. Every other
-    /// view: the cover blurred and dimmed, so panels and cards read cleanly on it (the keyboard screen calms it further).
+    /// hero text and the collection row stay readable on bright art. Every other view: the cover blurred and dimmed, so
+    /// panels and cards read cleanly on it (the keyboard screen calms it further). The preview does not come here: it
+    /// draws its own pictures (see <see cref="DrawPreview"/>).
     /// </summary>
     private void Backdrop(Surface s, ThemeView view, ThemeLibraryEntry? selected)
     {
@@ -173,7 +174,6 @@ public sealed partial class ThemeRenderer : IDisposable
         {
             // With no theme the placeholder art would only compete with the centred message, so it is blurred like the quiet views'.
             ThemeView.Library => selected is null ? BlurredBackdrop(null) : SharpBackdrop(selected, scrim: true),
-            ThemeView.Preview => SharpBackdrop(selected, scrim: false),
             ThemeView.StoreAddress => CalmBackdrop(selected),
             _ => BlurredBackdrop(selected),
         };
@@ -297,12 +297,13 @@ public sealed partial class ThemeRenderer : IDisposable
             DrawNotice(surface, seconds);
             return;
         }
-        Backdrop(surface, browser.View, selected);
         if (browser.View == ThemeView.Preview)
         {
-            if (browser.ShowOverlay) DrawHomescreen(surface, selected, seconds);
+            DrawPreview(surface, browser, selected, seconds);
             return;
         }
+        ReleasePreview();
+        Backdrop(surface, browser.View, selected);
         DrawHeader(surface, browser.View);
         int enter = (int)(16 * Math.Exp(-Math.Max(0, seconds - _viewStart) * 9));
         switch (browser.View)
@@ -401,7 +402,6 @@ public sealed partial class ThemeRenderer : IDisposable
     public void Dispose()
     {
         ReleaseDialogBase();
-        ReleasePreviewStrips();
         ResetCovers();
         ResetCommunity();
         _fallback.Dispose();
