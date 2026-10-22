@@ -12,6 +12,12 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     public const string Path = "/data/prospero-themes/settings.json";
 
     /// <summary>
+    /// Whether an apply first puts back what earlier themes changed (see ThemeApplier.KeepEarlierThemes). Off by
+    /// default, so themes combine: "earlier_themes": "replace" in settings.json turns it on.
+    /// </summary>
+    public bool ReplaceEarlierThemes { get; init; }
+
+    /// <summary>
     /// The public community store, used when settings.json has no "store_url" (a first start writes it there).
     /// An empty "store_url" means the user removed the store on purpose.
     /// </summary>
@@ -20,24 +26,26 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     /// <summary>Reads settings, tolerating a missing or broken file; a missing device id is created.</summary>
     public static AppSettings Parse(string? json, Func<string> newDeviceId)
     {
-        bool all = false;
+        bool all = false, replace = false;
         string url = DefaultStoreUrl, device = "";
         // The SDK's parser, not System.Text.Json: JsonDocument seeds its hashing from the BCL's crypto
         // random source, which pulls OpenSSL imports the console cannot link (see ThemePack.Hash).
         if (!string.IsNullOrWhiteSpace(json) && JsonValue.TryParse(json, out JsonValue root) && root.Type == JsonType.Object)
         {
             all = root.GetString("background_scope") == "all";
+            replace = root.GetString("earlier_themes") == "replace";
             url = root.GetString("store_url", url).Trim();
             device = root.GetString("device_id");
         }
         if (!IsDeviceId(device)) device = newDeviceId();
-        return new AppSettings(all, url, device);
+        return new AppSettings(all, url, device) { ReplaceEarlierThemes = replace };
     }
 
     public string Serialize()
     {
         var o = JsonValue.NewObject();
         o["background_scope"] = AllAppsBackgrounds ? "all" : "default";
+        o["earlier_themes"] = ReplaceEarlierThemes ? "replace" : "keep";
         o["store_url"] = StoreUrl;
         o["device_id"] = DeviceId;
         return o.Write(indented: true) + "\n";

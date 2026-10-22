@@ -55,7 +55,7 @@ public sealed partial class ThemeRenderer
 
     /// <summary>The footer hints of the System list: a row that holds a value says "Change", the others "Choose".</summary>
     private HintItem[] SystemHints(ThemeBrowser browser) =>
-        (SystemRow)browser.SystemSelected is SystemRow.Backgrounds or SystemRow.StoreAddress ? SystemChangeHints : SystemChooseHints;
+        (SystemRow)browser.SystemSelected is SystemRow.Backgrounds or SystemRow.EarlierThemes or SystemRow.StoreAddress ? SystemChangeHints : SystemChooseHints;
 
     private HintItem[] ImportHints(ThemeBrowser browser) => ImportHintItems;
 
@@ -129,28 +129,31 @@ public sealed partial class ThemeRenderer
 
     // ---- System -----------------------------------------------------------------------------------------------------
 
-    private static readonly string[] SystemLabels = ["App backgrounds", "Store address", "Firmware report", "Restore defaults"];
+    private static readonly string[] SystemLabels = ["App backgrounds", "Earlier themes", "Store address", "Firmware report", "Restore defaults"];
     private static readonly string[] SystemDescriptions =
     [
         "Which apps show a theme’s background image",
+        "Whether a new theme keeps what earlier themes changed",
         "Where the Community tab loads themes from",
         "Save a list of the console’s theme files",
         "Put every background, icon and sound back to the original",
     ];
 
-    internal const int SysRowsTop = SysBodyTop, SysRowH = 80, SysRowGap = 16;
+    internal const int SysRowsTop = SysBodyTop, SysRowH = 72, SysRowGap = 12;
     private const int SysRowPad = 32, SysLabelWidth = 288;
-    // Four equal rows, then the info panel below them.
-    private const int SysInfoTop = SysRowsTop + 4 * SysRowH + 3 * SysRowGap + 32, SysInfoPad = 28, SysInfoPitch = 40, SysInfoLabelWidth = 176;
+    // Equal rows, then the info panel below them.
+    private const int SysInfoTop = SysRowsTop + ThemeBrowser.SystemRowCount * SysRowH + (ThemeBrowser.SystemRowCount - 1) * SysRowGap + 32, SysInfoPad = 28, SysInfoPitch = 40, SysInfoLabelWidth = 176;
     private const int SysSegmentHeight = 48, SysSegmentInset = 4, SysSegmentPad = 20, SysUrlMaxWidth = 640;
     // A focused row is lighter than the glass of the others; its text steps up a little with it.
     internal static readonly Color SysRowFocusFill = Color.FromRgb(46, 62, 84);
     private static readonly Color SysFocusText = Color.FromRgb(196, 208, 226);
     private static readonly Color SysSegmentTrack = Theme.White.WithAlpha(26);
 
-    // The two states of the App backgrounds row, as one segmented control. Measured once, with the font they are drawn in.
+    // The two states of the App backgrounds and Earlier themes rows, as segmented controls. Measured once, with the
+    // font they are drawn in.
     private const string SysSegmentOwn = "Without own image", SysSegmentAll = "All apps";
-    private int _sysSegmentOwnWidth, _sysSegmentAllWidth;
+    private const string SysSegmentKeep = "Combine", SysSegmentReplace = "Replace";
+    private int _sysSegmentOwnWidth, _sysSegmentAllWidth, _sysSegmentKeepWidth, _sysSegmentReplaceWidth;
     // Texts of the info panel, rebuilt only when what they show changes.
     private string _sysCountText = "", _sysFirmwareText = "";
     private int _sysCountFor = -1;
@@ -168,6 +171,8 @@ public sealed partial class ThemeRenderer
         {
             _sysSegmentOwnWidth = _small.MeasureText(SysSegmentOwn) + 2 * SysSegmentPad;
             _sysSegmentAllWidth = _small.MeasureText(SysSegmentAll) + 2 * SysSegmentPad;
+            _sysSegmentKeepWidth = _small.MeasureText(SysSegmentKeep) + 2 * SysSegmentPad;
+            _sysSegmentReplaceWidth = _small.MeasureText(SysSegmentReplace) + 2 * SysSegmentPad;
         }
 
         // Every row first, then the one focus ring: its glow reaches past the gap into the neighbours.
@@ -189,7 +194,12 @@ public sealed partial class ThemeRenderer
             switch ((SystemRow)i)
             {
                 case SystemRow.Backgrounds:
-                    descriptionRight = DrawSysSegments(s, right, y) - 24;
+                    descriptionRight = DrawSysSegments(s, right, y, SysSegmentOwn, _sysSegmentOwnWidth,
+                        SysSegmentAll, _sysSegmentAllWidth, AllAppsBackgrounds) - 24;
+                    break;
+                case SystemRow.EarlierThemes:
+                    descriptionRight = DrawSysSegments(s, right, y, SysSegmentKeep, _sysSegmentKeepWidth,
+                        SysSegmentReplace, _sysSegmentReplaceWidth, ReplaceEarlierThemes) - 24;
                     break;
                 case SystemRow.StoreAddress:
                     descriptionRight = DrawSysUrl(s, browser.StoreUrl, right, y, textY, focus) - 24;
@@ -215,20 +225,19 @@ public sealed partial class ThemeRenderer
         DrawSysInfo(s, count, enter);
     }
 
-    // The two-state control of the App backgrounds row: a track with both choices and a white thumb under the active one.
+    // A two-state control of a System row: a track with both choices and a white thumb under the active one.
     // Returns its left edge.
-    private int DrawSysSegments(Surface s, int right, int rowY)
+    private int DrawSysSegments(Surface s, int right, int rowY, string first, int firstW, string second, int secondW, bool onSecond)
     {
-        int trackW = _sysSegmentOwnWidth + _sysSegmentAllWidth + 2 * SysSegmentInset;
+        int trackW = firstW + secondW + 2 * SysSegmentInset;
         int x = right - trackW, y = rowY + (SysRowH - SysSegmentHeight) / 2;
         int thumbH = SysSegmentHeight - 2 * SysSegmentInset;
         Paint.Capsule(s, x, y, trackW, SysSegmentHeight, SysSegmentTrack);
-        bool all = AllAppsBackgrounds;
-        Paint.Capsule(s, all ? x + SysSegmentInset + _sysSegmentOwnWidth : x + SysSegmentInset, y + SysSegmentInset,
-            all ? _sysSegmentAllWidth : _sysSegmentOwnWidth, thumbH, White);
+        Paint.Capsule(s, onSecond ? x + SysSegmentInset + firstW : x + SysSegmentInset, y + SysSegmentInset,
+            onSecond ? secondW : firstW, thumbH, White);
         int textY = y + SysSegmentInset + (thumbH - _small.LineHeight) / 2;
-        DrawMid(_small, s, SysSegmentOwn, x + SysSegmentInset + _sysSegmentOwnWidth / 2, textY, all ? Muted : PillInk);
-        DrawMid(_small, s, SysSegmentAll, x + SysSegmentInset + _sysSegmentOwnWidth + _sysSegmentAllWidth / 2, textY, all ? PillInk : Muted);
+        DrawMid(_small, s, first, x + SysSegmentInset + firstW / 2, textY, onSecond ? Muted : PillInk);
+        DrawMid(_small, s, second, x + SysSegmentInset + firstW + secondW / 2, textY, onSecond ? PillInk : Muted);
         return x;
     }
 

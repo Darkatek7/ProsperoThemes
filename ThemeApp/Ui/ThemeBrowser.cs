@@ -12,7 +12,7 @@ public enum ThemeView { Library, Detail, Preview, Community, Import, System, Sto
 /// ToggleBackgroundScope: the System row for app backgrounds. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
 /// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
 /// </summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, RemoveTheme, Busy }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, RemoveTheme, Busy }
 
 /// <summary>
 /// The modal question over Detail or System. Apply asks to apply; ApplyScope is the same for a pack with an all-apps
@@ -22,7 +22,7 @@ public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, Comm
 public enum DialogKind { None, Apply, ApplyScope, Restore, Remove }
 
 /// <summary>The focusable rows of the System screen, top to bottom.</summary>
-public enum SystemRow { Backgrounds, StoreAddress, FirmwareReport, Restore }
+public enum SystemRow { Backgrounds, EarlierThemes, StoreAddress, FirmwareReport, Restore }
 
 public sealed class ThemeBrowser
 {
@@ -32,7 +32,7 @@ public sealed class ThemeBrowser
     private static readonly string[] RemoveOptions = ["Remove from library", "Cancel"];
 
     /// <summary>Number of focusable rows on the System screen.</summary>
-    public const int SystemRowCount = 4;
+    public const int SystemRowCount = 5;
 
     public ThemeView View { get; private set; }
     public int Selected { get; private set; } = -1;
@@ -262,6 +262,9 @@ public sealed class ThemeBrowser
         {
             case SystemRow.Backgrounds:
                 _action = busy ? ThemeAction.Busy : ThemeAction.ToggleBackgroundScope;
+                break;
+            case SystemRow.EarlierThemes:
+                _action = busy ? ThemeAction.Busy : ThemeAction.ToggleEarlierThemes;
                 break;
             case SystemRow.StoreAddress:
                 // Typing starts on the next frame: this X only opens the keyboard.

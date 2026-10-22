@@ -98,19 +98,19 @@ public sealed partial class ThemeRenderer
     {
         DialogKind.Restore => "Puts the original backgrounds, icons and sounds back on this console. Your theme library stays as it is.",
         DialogKind.ApplyScope => "This theme has a background for apps. Choose where it goes: only apps without their own image, or all apps.",
-        DialogKind.Remove => "Takes it out of your library; the file is kept in /data/prospero-themes/attic. If it is applied, it stays on the console until you apply another theme or restore the defaults.",
+        DialogKind.Remove => "Takes it out of your library; the file is kept in /data/prospero-themes/attic. If it is applied, it stays on the console until another theme replaces it or you restore the defaults.",
         _ => "This changes the backgrounds, icons and sounds on this console. Restore defaults on the System tab puts the originals back.",
     };
 
     // What is on screen under a dialog, as it looks once dimmed. The screen behind a dialog is still, so it is dimmed
     // once (a full-screen pass is several milliseconds) and copied on every later frame, until something it shows changes.
-    private readonly record struct DialogBase(ThemeView View, string? Path, bool Applied, bool Busy, bool AllApps, int Row,
+    private readonly record struct DialogBase(ThemeView View, string? Path, bool Applied, bool Busy, bool AllApps, bool Replace, int Row,
         string StoreUrl, string Firmware, int Count);
     private PixelBuffer? _dialogBase;
     private DialogBase _dialogKey;
 
     private DialogBase DialogBaseKey(ThemeBrowser browser, ThemeLibraryEntry? selected, int count) =>
-        new(browser.View, selected?.Path, selected is not null && IsApplied(selected), Busy, AllAppsBackgrounds,
+        new(browser.View, selected?.Path, selected is not null && IsApplied(selected), Busy, AllAppsBackgrounds, ReplaceEarlierThemes,
             browser.SystemSelected, browser.StoreUrl, Firmware, count);
 
     private void ReleaseDialogBase()

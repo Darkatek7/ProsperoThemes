@@ -139,6 +139,39 @@ public class RcoSvgTests
     }
 
     [Fact]
+    public void Kept_icon_themes_combine_in_one_container_and_a_theme_can_change_its_own_icon_again()
+    {
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+        Assert.True(new ThemeApplier(files, () => 0).Apply(SvgPack("a", ("iconid_settings", Star))).Success);
+
+        var keep = new ThemeApplier(files, () => 0) { KeepEarlierThemes = true };
+        Assert.True(keep.Apply(SvgPack("b", ("iconid_notification", Star))).Success);
+        // Patched slots carry no title any more: they are found by where the stock copy has them.
+        string live = Encoding.UTF8.GetString(files.Files[RcoDevice]);
+        Assert.Equal(Container().Length, files.Files[RcoDevice].Length);
+        Assert.Equal(2, Count(live, "M32 6l8 16"));      // both themes' stars
+        Assert.DoesNotContain("#FFFFFF", live);
+
+        // A slot an earlier theme already patched can be patched again.
+        byte[] green = Encoding.UTF8.GetBytes(Icon("iconid_settings", "#00FF00"));
+        Assert.True(keep.Apply(SvgPack("c", ("iconid_settings", green))).Success);
+        live = Encoding.UTF8.GetString(files.Files[RcoDevice]);
+        Assert.Equal(1, Count(live, "M32 6l8 16"));
+        Assert.Contains("#00FF00", live);
+
+        Assert.True(keep.RestoreOriginals().Success);
+        Assert.Equal(Container(), files.Files[RcoDevice]);
+    }
+
+    private static int Count(string text, string part)
+    {
+        int count = 0;
+        for (int at = text.IndexOf(part, StringComparison.Ordinal); at >= 0; at = text.IndexOf(part, at + 1, StringComparison.Ordinal)) count++;
+        return count;
+    }
+
+    [Fact]
     public void Icon_changes_say_they_show_after_a_restart_and_backgrounds_do_not()
     {
         // The home screen reads icons at start (app.db caches tile icons), so a restore that "did nothing" was only

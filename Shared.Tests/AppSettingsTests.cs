@@ -77,6 +77,16 @@ public class AppSettingsTests
     }
 
     [Fact]
+    public void Earlier_themes_are_kept_unless_the_file_says_replace()
+    {
+        Assert.False(AppSettings.Parse(null, () => "abcdef0123456789").ReplaceEarlierThemes);
+        var s = AppSettings.Parse("""{"device_id":"abcdef0123456789","earlier_themes":"replace"}""", () => "unused");
+        Assert.True(s.ReplaceEarlierThemes);
+        Assert.True(AppSettings.Parse(s.Serialize(), () => "unused").ReplaceEarlierThemes);
+        Assert.False(AppSettings.Parse((s with { ReplaceEarlierThemes = false }).Serialize(), () => "unused").ReplaceEarlierThemes);
+    }
+
+    [Fact]
     public void A_home_background_key_from_an_older_build_is_dropped()
     {
         // Builds with the BgRotator tile rotation wrote "home_background"; it is ignored and not written back.

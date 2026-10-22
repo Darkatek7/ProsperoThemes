@@ -89,6 +89,14 @@ public sealed class ThemeApplier
     public bool IncludeAllApps { get; init; }
 
     /// <summary>
+    /// Whether an apply keeps what earlier themes changed and this one does not write, so themes combine (a
+    /// background theme, then an icon theme). Off: every apply starts from the defaults, so themes replace each
+    /// other. Icons in the same container combine too: the new ones are patched onto the container as the app
+    /// last wrote it. A user setting in the app, which keeps by default.
+    /// </summary>
+    public bool KeepEarlierThemes { get; init; }
+
+    /// <summary>
     /// The console's system software version as it reports it (e.g. "13.000.000"), recorded in state.json.
     /// Null when not known (PC tests). It decides nothing: every check compares the console's own files.
     /// </summary>
@@ -116,6 +124,8 @@ public sealed class ThemeApplier
     public List<string> Refreshed { get; } = new();
 
     private Dictionary<string, string>? _written;
+    // Where each named icon of the current apply sits in its container, found in the stock copy by Prepare.
+    private readonly Dictionary<(string Device, string Resource), (int Offset, int Length)> _slots = new();
 
     public ThemeApplier(IDeviceFiles files, Func<long> unixSecondsClock, string dataRoot = "/data/prospero-themes")
     {
@@ -160,12 +170,13 @@ public sealed class ThemeApplier
                 return Fail($"remount failed, nothing was written: {ex.Message}");
             }
 
-            // Every theme starts from the defaults: what an earlier theme changed and this one does not write
-            // goes back to its original first, so themes replace each other instead of stacking. Files that
-            // already hold their original are left alone, and so are files the system replaced meanwhile.
+            // Unless earlier themes are kept, every theme starts from the defaults: what an earlier theme changed
+            // and this one does not write goes back to its original first, so themes replace each other instead
+            // of stacking. Files that already hold their original are left alone, and so are files the system
+            // replaced meanwhile.
             var planned = new HashSet<string>(plans.Select(p => p.Device), StringComparer.Ordinal);
             var reset = new List<string>();
-            foreach (var (device, backup, logical) in BackedUp())
+            foreach (var (device, backup, logical) in KeepEarlierThemes ? [] : BackedUp())
             {
                 if (planned.Contains(device) || !_files.Exists(device) || _files.Length(device) > MaxFileBytes)
                     continue;
@@ -209,14 +220,18 @@ public sealed class ThemeApplier
                     if (icons.Count == 0)
                         continue;
 
-                    // Named icons inside one container: always patched onto the stock copy from the backup, so
-                    // a second theme replaces the first one's icons instead of stacking on top of them. Taken out
-                    // of the dictionary, so no copy of it outlives this write.
+                    // Named icons inside one container: patched onto the stock copy from the backup, so a second
+                    // theme replaces the first one's icons, or with KeepEarlierThemes onto the copy the app last
+                    // wrote, so they combine. The slots were found in the stock copy; a patch keeps every slot
+                    // where it is. Taken out of the dictionary, so no copy of it outlives this write.
                     current = icons[0];
                     byte[]? container = containers[icons[0].Device];
                     containers.Remove(icons[0].Device);
                     foreach (Plan icon in icons)
-                        RcoSvg.Replace(container!, icon.Target.Resource!, pack.Payload(icon.Target));
+                    {
+                        (int offset, int length) = _slots[(icon.Device, icon.Target.Resource!)];
+                        RcoSvg.Fit(pack.Payload(icon.Target), length).CopyTo(container!, offset);
+                    }
                     WriteVerified(icons[0].Device, container!, ThemePack.Hash(container!), () => touched.Add(icons[0]));
                     container = null;
                 }
@@ -413,6 +428,7 @@ public sealed class ThemeApplier
     {
         var containers = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var drop = new HashSet<Plan>();
+        _slots.Clear();
         foreach (IGrouping<string, Plan> file in plans.GroupBy(p => p.Device, StringComparer.Ordinal).ToList())
         {
             Plan first = file.First();
@@ -448,8 +464,9 @@ public sealed class ThemeApplier
                     icons = true;
                     try
                     {
-                        (_, int length) = RcoSvg.Find(stock, plan.Target.Resource!);
+                        (int offset, int length) = RcoSvg.Find(stock, plan.Target.Resource!);
                         RcoSvg.Fit(payload, length);
+                        _slots[(plan.Device, plan.Target.Resource!)] = (offset, length);
                     }
                     catch (ThemePackException ex)
                     {
@@ -463,7 +480,18 @@ public sealed class ThemeApplier
                     drop.Add(plan);
                 }
             }
-            if (icons) containers[first.Device] = stock;
+            if (!icons)
+                continue;
+            if (KeepEarlierThemes && IsLastWritten(first.Device, stock))
+            {
+                // The stock copy is let go before the live one is read: one whole copy at a time.
+                stock = null!;
+                containers[first.Device] = _files.ReadAllBytes(first.Device);
+            }
+            else
+            {
+                containers[first.Device] = stock;
+            }
         }
         plans.RemoveAll(drop.Contains);
         return containers;
@@ -495,6 +523,17 @@ public sealed class ThemeApplier
         byte[] live = _files.ReadAllBytes(plan.Device);
         Refresh(plan.Logical, plan.Backup, live);
         return live;
+    }
+
+    /// <summary>
+    /// Whether new icons go onto the live container when earlier themes are kept: it differs from the stock copy, is
+    /// the app's own (see <see cref="IsReplaced"/>) and as long as the stock copy, so every slot is where the stock
+    /// copy has it.
+    /// </summary>
+    private bool IsLastWritten(string device, byte[] stock)
+    {
+        string liveHash = _files.Hash(device);
+        return liveHash != ThemePack.Hash(stock) && !IsReplaced(device, liveHash) && _files.Length(device) == stock.Length;
     }
 
     /// <summary>

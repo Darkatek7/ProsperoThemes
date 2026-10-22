@@ -173,6 +173,26 @@ public class ThemeApplierTests
     }
 
     [Fact]
+    public void Kept_earlier_themes_combine_with_the_next_one_and_restore_undoes_both()
+    {
+        byte[] live1 = Live("one"), live2 = Live("two");
+        var fake = DeviceWithLive((Dev1, live1), (Dev2, live2));
+        Assert.True(Applier(fake).Apply(MakePack(null, (Path2, Zst("a2")))).Success);
+
+        var keep = new ThemeApplier(fake, () => FixedNow) { KeepEarlierThemes = true };
+        ApplyResult result = keep.Apply(MakePack(null, (Path1, Zst("b1"))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.DoesNotContain("back to default", result.Message);
+        Assert.Equal(Zst("b1"), fake.Files[Dev1]);
+        Assert.Equal(Zst("a2"), fake.Files[Dev2]);   // the first theme's change is still there
+
+        Assert.True(keep.RestoreOriginals().Success);
+        Assert.Equal(live1, fake.Files[Dev1]);
+        Assert.Equal(live2, fake.Files[Dev2]);
+    }
+
+    [Fact]
     public void System_tiles_get_the_main_background_unless_the_pack_names_them()
     {
         const string gallery = "/system_ex/vsh_asset/bg_NPXS40056.dds.zst", allApps = "/system_ex/vsh_asset/bg_NPXS40139.dds.zst";

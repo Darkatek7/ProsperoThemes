@@ -54,6 +54,8 @@ public sealed partial class ThemeRenderer : IDisposable
     public string? AppliedId { get; set; }
     /// <summary>The background-scope setting shown on the System screen (see ThemeApplier.IncludeAllApps).</summary>
     public bool AllAppsBackgrounds { get; set; }
+    /// <summary>The earlier-themes setting shown on the System screen (see ThemeApplier.KeepEarlierThemes).</summary>
+    public bool ReplaceEarlierThemes { get; set; }
     /// <summary>The system software version as the console reports it ("13.000.000"); empty when it could not be read.</summary>
     public string Firmware { get; set; } = "";
 

@@ -520,7 +520,7 @@ public class ThemeBrowserTests
     private static ThemeBrowser OnRestoreRow()
     {
         var browser = OnSystemTab();
-        for (int i = 0; i < 3; i++) browser.Update(Down);
+        for (int i = 0; i < ThemeBrowser.SystemRowCount - 1; i++) browser.Update(Down);
         Assert.Equal((int)SystemRow.Restore, browser.SystemSelected);
         return browser;
     }
@@ -551,6 +551,12 @@ public class ThemeBrowserTests
         browser.Update(X);                                          // App backgrounds
         Assert.Equal(ThemeAction.ToggleBackgroundScope, browser.TakeAction());
         Assert.Equal(ThemeView.System, browser.View);
+
+        browser.Update(Down);
+        browser.Update(X);                                          // Earlier themes
+        Assert.Equal(ThemeAction.ToggleEarlierThemes, browser.TakeAction());
+        browser.Update(X, busy: true);                              // a setting is not changed under a running job
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
 
         browser.Update(Down);
         browser.Update(X);                                          // Store address
@@ -661,6 +667,9 @@ public class ThemeBrowserTests
         browser.Update(X, busy: true);                              // App backgrounds
         Assert.Equal(ThemeAction.Busy, browser.TakeAction());
         browser.Update(Down);
+        browser.Update(X, busy: true);                              // Earlier themes
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
+        browser.Update(Down);
         browser.Update(Down);
         browser.Update(X, busy: true);                              // Firmware report
         Assert.Equal(ThemeAction.Busy, browser.TakeAction());
@@ -675,7 +684,7 @@ public class ThemeBrowserTests
     public void The_store_address_row_still_opens_the_keyboard_while_busy()
     {
         var browser = OnSystemTab();
-        browser.Update(Down);
+        while (browser.SystemSelected != (int)SystemRow.StoreAddress) browser.Update(Down);
         browser.Update(X, busy: true);
         Assert.Equal(ThemeView.StoreAddress, browser.View);
         Assert.Equal(ThemeAction.None, browser.TakeAction());
@@ -727,7 +736,7 @@ public class ThemeBrowserTests
     private static ThemeBrowser Editing(string storeUrl = "")
     {
         var browser = OnSystemTab(storeUrl);
-        browser.Update(Down);
+        while (browser.SystemSelected != (int)SystemRow.StoreAddress) browser.Update(Down);
         browser.Update(X);
         Assert.Equal(ThemeView.StoreAddress, browser.View);
         return browser;

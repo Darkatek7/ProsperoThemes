@@ -68,6 +68,7 @@ internal sealed class ThemeApp : ProsperoApp
         if (json is null || !json.Contains(_settings.DeviceId)) SaveSettings();
         _allAppsBackgrounds = _settings.AllAppsBackgrounds;
         _renderer.AllAppsBackgrounds = _allAppsBackgrounds;
+        _renderer.ReplaceEarlierThemes = _settings.ReplaceEarlierThemes;
         try { _firmware = SharpProspero.Platform.SystemInfo.SystemSoftwareVersion; }
         catch { _firmware = null; }
         _renderer.Firmware = _firmware ?? "";
@@ -166,7 +167,7 @@ internal sealed class ThemeApp : ProsperoApp
     /// </summary>
     private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work) =>
         StartHelperWork(busyText, needsHelper: true, _ => work(new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
-            { IncludeAllApps = _allAppsBackgrounds, Firmware = _firmware }));
+            { IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware }));
 
     /// <summary>
     /// Starts the helper, then runs <paramref name="work"/> on the worker with the helper's problem (null when it
@@ -231,6 +232,7 @@ internal sealed class ThemeApp : ProsperoApp
         {
             case ThemeAction.Busy: Wait(); break;
             case ThemeAction.ToggleBackgroundScope: ToggleBackgroundScope(); break;
+            case ThemeAction.ToggleEarlierThemes: ToggleEarlierThemes(); break;
             case ThemeAction.ImportUsb: StartWork(DeviceThemeLibrary.ImportUsb, announce: true); break;
             case ThemeAction.Reload: StartWork(DeviceThemeLibrary.Scan); break;
             case ThemeAction.Apply when _browser.Selected >= 0:
@@ -309,6 +311,23 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.Notify(_allAppsBackgrounds
             ? "Takes effect on the next apply: backgrounds also replace the apps’ own images."
             : "Takes effect on the next apply: apps with their own image keep it.", NoticeLevel.Success);
+    }
+
+    /// <summary>The Earlier themes row on the System tab: whether an apply keeps or replaces earlier themes.</summary>
+    private void ToggleEarlierThemes()
+    {
+        bool replace = !_settings.ReplaceEarlierThemes;
+        _settings = _settings with { ReplaceEarlierThemes = replace };
+        _renderer.ReplaceEarlierThemes = replace;
+        try { WriteSettings(); }
+        catch (Exception ex)
+        {
+            _renderer.Notify("Setting not saved: " + ex.Message, NoticeLevel.Error);
+            return;
+        }
+        _renderer.Notify(replace
+            ? "Takes effect on the next apply: a theme first puts back what earlier themes changed."
+            : "Takes effect on the next apply: a theme keeps what earlier themes changed, so themes combine.", NoticeLevel.Success);
     }
 
     /// <summary>
