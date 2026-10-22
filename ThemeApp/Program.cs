@@ -63,8 +63,10 @@ internal sealed class ThemeApp : ProsperoApp
         try { SystemModule.Load(SystemModuleId.JpegDec); _jpegAvailable = true; }
         catch { _jpegAvailable = false; }
         _renderer = new ThemeRenderer(name => FileSystem.ReadAllBytes(DeviceThemeLibrary.AssetRoot + "/" + name), DecodeCover);
+        // Where the jailbreak starts the app without /data, ThemeHelper keeps the app's folder (see AppData).
+        string? dataProblem = AppData.Probe();
         string? json = null;
-        try { if (FileSystem.Exists(AppSettings.Path)) json = FileSystem.ReadAllText(AppSettings.Path); }
+        try { if (AppData.Files.Exists(AppSettings.Path)) json = AppData.Files.ReadAllText(AppSettings.Path); }
         catch { json = null; }
         _settings = AppSettings.Parse(json, NewDeviceId);
         // A first start creates the device id; keep it so likes stay one per console.
@@ -81,18 +83,19 @@ internal sealed class ThemeApp : ProsperoApp
         _browser.StoreUrl = _settings.StoreUrl;
         try
         {
-            if (FileSystem.Exists(CommunityList.DownloadsPath))
-                _downloads = CommunityList.ParseDownloads(FileSystem.ReadAllText(CommunityList.DownloadsPath));
+            if (AppData.Files.Exists(CommunityList.DownloadsPath))
+                _downloads = CommunityList.ParseDownloads(AppData.Files.ReadAllText(CommunityList.DownloadsPath));
         }
         catch { /* no badges for earlier downloads; new ones are recorded again */ }
         try
         {
-            if (FileSystem.Exists(CommunityList.LikesPath))
-                foreach (string id in CommunityList.ParseLikedIds(FileSystem.ReadAllText(CommunityList.LikesPath))) _liked.Add(id);
+            if (AppData.Files.Exists(CommunityList.LikesPath))
+                foreach (string id in CommunityList.ParseLikedIds(AppData.Files.ReadAllText(CommunityList.LikesPath))) _liked.Add(id);
         }
         catch { /* no hearts for earlier likes until they are pressed again (the store keeps one like per console) */ }
         _renderer.CommunityLiked = _liked;
         StartWork(DeviceThemeLibrary.Scan);
+        if (dataProblem is not null) _renderer.Notify("Can’t use " + AppData.Root + ": " + dataProblem, NoticeLevel.Error);
     }
 
     private PixelBuffer DecodeCover(byte[] bytes)
@@ -166,7 +169,7 @@ internal sealed class ThemeApp : ProsperoApp
     /// <summary>The manifest id of the theme the console shows now (state.json, see <see cref="AppliedTheme"/>), or null.</summary>
     private static string? ReadApplied()
     {
-        try { return FileSystem.Exists(AppliedTheme.Path) ? AppliedTheme.Read(FileSystem.ReadAllText(AppliedTheme.Path)) : null; }
+        try { return AppData.Files.Exists(AppliedTheme.Path) ? AppliedTheme.Read(AppData.Files.ReadAllText(AppliedTheme.Path)) : null; }
         catch { return null; }
     }
 
@@ -254,7 +257,7 @@ internal sealed class ThemeApp : ProsperoApp
                 // uses it even when settings.json cannot be written; only the next start would not know it.
                 if (_browser.ApplyAsksScope) SetBackgroundScope(_browser.ApplyAllApps);
                 string path = _entries[_browser.Selected].Path;
-                StartSystemWork("Applying theme…", applier => applier.Apply(ThemeArchive.Open(FileSystem.ReadAllBytes(path))), _browser.ApplyParts);
+                StartSystemWork("Applying theme…", applier => applier.Apply(ThemeArchive.Open(AppData.Files.ReadAllBytes(path))), _browser.ApplyParts);
                 break;
             case ThemeAction.RestoreOriginals:
                 StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals());
@@ -299,8 +302,8 @@ internal sealed class ThemeApp : ProsperoApp
                 ("helper_reads", files.HelperReads.ToString()),
             ]);
         string name = FirmwareReport.FileName(_firmware);
-        Folders.Ensure(FirmwareReport.Folder);
-        FileSystem.WriteAllBytes(FirmwareReport.Folder + "/" + name, report);
+        AppData.Files.CreateDirectoryRecursive(FirmwareReport.Folder);
+        AppData.Files.WriteAllBytes(FirmwareReport.Folder + "/" + name, report);
         string where = FirmwareReport.Folder + "/" + name;
         try
         {
@@ -437,8 +440,8 @@ internal sealed class ThemeApp : ProsperoApp
 
     private void WriteSettings()
     {
-        Folders.Ensure("/data/prospero-themes");
-        FileSystem.WriteAllText(AppSettings.Path, _settings.Serialize());
+        AppData.Files.CreateDirectoryRecursive(AppData.Root);
+        AppData.Files.WriteAllText(AppSettings.Path, _settings.Serialize());
     }
 
     // 32 hex characters that only have to differ between consoles. Not from HardwareEntropy: that adds a
@@ -668,7 +671,7 @@ internal sealed class ThemeApp : ProsperoApp
             _results.Post(() =>
             {
                 _downloads[theme.Id] = digest;
-                try { FileSystem.WriteAllText(CommunityList.DownloadsPath, CommunityList.SerializeDownloads(_downloads)); }
+                try { AppData.Files.WriteAllText(CommunityList.DownloadsPath, CommunityList.SerializeDownloads(_downloads)); }
                 catch { /* the badge lasts until the app quits */ }
                 // The store counted this download; show it without reloading the list.
                 var updated = new List<CommunityTheme>(_community);
@@ -724,8 +727,8 @@ internal sealed class ThemeApp : ProsperoApp
                 if (liked) _liked.Add(theme.Id); else _liked.Remove(theme.Id);
                 try
                 {
-                    Folders.Ensure("/data/prospero-themes");
-                    FileSystem.WriteAllText(CommunityList.LikesPath, CommunityList.FormatLikedIds(_liked));
+                    AppData.Files.CreateDirectoryRecursive(AppData.Root);
+                    AppData.Files.WriteAllText(CommunityList.LikesPath, CommunityList.FormatLikedIds(_liked));
                 }
                 catch { /* the heart lasts until the app quits */ }
             });

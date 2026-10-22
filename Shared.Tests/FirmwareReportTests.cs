@@ -56,6 +56,25 @@ public class FirmwareReportTests
     }
 
     [Fact]
+    public void A_backup_that_cannot_be_read_is_reported_with_its_error_and_the_live_file_is_described()
+    {
+        const string RcoBackup = "/data/prospero-themes/backup/original/vsh_asset/Sce.PlayStation.PUI_UI3.rco";
+        var files = new RcoSvgTests.MemoryDeviceFiles();
+        files.Files[Rco] = Encoding.UTF8.GetBytes("RCOF<svg><title>utility/iconid_settings</title></svg>");
+        files.Files[RcoBackup] = Encoding.UTF8.GetBytes("RCOF stock");
+        files.Unreadable.Add(RcoBackup);
+
+        using JsonDocument report = JsonDocument.Parse(
+            FirmwareReport.Build(files, "13.600.007", "01.000.017", "2026-10-22T18:00:00Z", [FirmwareReport.IconContainer]));
+
+        JsonElement rco = File(report, FirmwareReport.IconContainer);
+        Assert.Equal($"read {RcoBackup} failed", rco.GetProperty("backup_error").GetString());
+        Assert.Equal("console", rco.GetProperty("source").GetString());
+        Assert.Equal(files.Files[Rco].Length, rco.GetProperty("bytes").GetInt64());
+        Assert.Equal("utility/iconid_settings", rco.GetProperty("icons")[0].GetProperty("title").GetString());
+    }
+
+    [Fact]
     public void Looks_at_the_catalog_and_everything_the_applier_adds_once()
     {
         string catalog = """{"firmware":"13.00","assets":[{"path":"vsh_asset/bg_hub_default.dds.zst"},{"path":"vsh_asset/bgm_home.at9"}]}""";

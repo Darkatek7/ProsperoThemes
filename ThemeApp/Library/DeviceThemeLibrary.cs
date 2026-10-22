@@ -8,7 +8,10 @@ namespace ProsperoThemes.App.Library;
 
 public sealed record LibrarySnapshot(IReadOnlyList<ThemeLibraryEntry> Entries, string Message);
 
-/// <summary>Device file access, called on a worker rather than the frame thread.</summary>
+/// <summary>
+/// Device file access, called on a worker rather than the frame thread. The library goes through
+/// <see cref="AppData.Files"/>, so it works where only ThemeHelper reaches /data; USB drives are read directly.
+/// </summary>
 public static class DeviceThemeLibrary
 {
     public const string Root = "/data/prospero-themes/library";
@@ -16,6 +19,7 @@ public static class DeviceThemeLibrary
     public const string Bundle = AssetRoot + "/blue-hour.p5theme";
     private const int MaxPacks = 128;
     private const int MaxCoverBytes = 16 * 1024 * 1024;
+    private static DeviceFiles Files => AppData.Files;
 
     public static LibrarySnapshot Scan()
     {
@@ -27,10 +31,10 @@ public static class DeviceThemeLibrary
             if (entries.Count >= MaxPacks) return;
             try
             {
-                long size = FileSystem.GetFileSize(path);
+                long size = Files.Length(path);
                 if (size <= 0 || size > ThemeArchive.MaxArchiveBytes)
                     throw new ThemePackException("Pack exceeds the file size limit.");
-                var entry = ThemeLibraryEntry.Inspect(path, FileSystem.ReadAllBytes(path)) with { Bundled = bundled };
+                var entry = ThemeLibraryEntry.Inspect(path, Files.ReadAllBytes(path)) with { Bundled = bundled };
                 if (covers + (entry.Preview?.Length ?? 0) > MaxCoverBytes) entry = entry with { Preview = null };
                 covers += entry.Preview?.Length ?? 0;
                 entries.Add(entry);
@@ -38,10 +42,11 @@ public static class DeviceThemeLibrary
             catch (Exception ex) { if (errors.Count < 8) errors.Add(path.Split('/').Last() + ": " + ex.Message); }
         }
         if (FileSystem.Exists(Bundle)) Add(Bundle, true);
-        if (FileSystem.TryEnumerateDirectory(Root, out var files, out int error))
-            foreach (var file in files.Where(f => f.IsFile && IsPack(f.Name)).OrderBy(f => f.Name, StringComparer.Ordinal))
-                Add(Root + "/" + file.Name, false);
-        else if (error != 0 && FileSystem.Exists(Root)) errors.Add($"Can’t read the library (0x{error:X8}).");
+        IReadOnlyList<string> names;
+        try { names = Files.ListFiles(Root); }
+        catch (Exception ex) { names = []; errors.Add("Can’t read the library: " + ex.Message); }
+        foreach (string name in names.Where(IsPack).OrderBy(n => n, StringComparer.Ordinal))
+            Add(Root + "/" + name, false);
         entries.Sort((a, b) => string.Compare(a.Manifest.Name, b.Manifest.Name, StringComparison.OrdinalIgnoreCase));
         string message = errors.Count > 0 ? string.Join(" | ", errors) : entries.Count >= MaxPacks ?
             "Library shows the first 128 valid packs." : "Packs checked. Ready to preview.";
@@ -52,7 +57,7 @@ public static class DeviceThemeLibrary
     {
         int imported = 0, existing = 0, rejected = 0, found = 0;
         string? lastError = null;
-        Folders.Ensure(Root);
+        Files.CreateDirectoryRecursive(Root);
         for (int usb = 0; usb < 8; usb++)
         {
             foreach (string directory in new[] { $"/mnt/usb{usb}/prospero-themes", $"/mnt/usb{usb}" })
@@ -94,20 +99,20 @@ public static class DeviceThemeLibrary
         if (bytes.Length <= 0 || bytes.Length > ThemeArchive.MaxArchiveBytes)
             throw new ThemePackException("Pack too large (48 MiB at most).");
         ThemeLibraryEntry.Inspect(label, bytes);
-        Folders.Ensure(Root);
+        Files.CreateDirectoryRecursive(Root);
         string digest = ThemePack.Hash(bytes);
         string destination = Root + "/" + digest + ".p5theme";
-        if (FileSystem.Exists(destination))
+        if (Files.Exists(destination))
         {
-            if (FileSystem.GetFileSize(destination) == bytes.Length && ThemePack.Hash(FileSystem.ReadAllBytes(destination)) == digest)
+            if (Files.Length(destination) == bytes.Length && Files.Hash(destination) == digest)
                 return false;
             throw new ThemePackException("Existing copy is damaged; import skipped.");
         }
         string temporary = destination + ".tmp";
-        Folders.Named(temporary, () => FileSystem.WriteAllBytes(temporary, bytes));
-        if (FileSystem.GetFileSize(temporary) != bytes.Length || ThemePack.Hash(FileSystem.ReadAllBytes(temporary)) != digest)
+        Files.WriteAllBytes(temporary, bytes);
+        if (Files.Length(temporary) != bytes.Length || Files.Hash(temporary) != digest)
             throw new ThemePackException("The copy failed the integrity check.");
-        Folders.Named(destination, () => FileSystem.Move(temporary, destination));
+        Files.Move(temporary, destination);
         return true;
     }
 
@@ -121,11 +126,11 @@ public static class DeviceThemeLibrary
     public static bool Retire(string digest)
     {
         string source = Root + "/" + digest + ".p5theme";
-        if (!FileSystem.Exists(source)) return false;
-        Folders.Ensure(Attic);
+        if (!Files.Exists(source)) return false;
+        Files.CreateDirectoryRecursive(Attic);
         string target = Attic + "/" + digest + ".p5theme";
-        for (int n = 2; FileSystem.Exists(target); n++) target = Attic + "/" + digest + "-" + n + ".p5theme";
-        Folders.Named(target, () => FileSystem.Move(source, target));
+        for (int n = 2; Files.Exists(target); n++) target = Attic + "/" + digest + "-" + n + ".p5theme";
+        Files.Move(source, target);
         return true;
     }
 
@@ -138,11 +143,11 @@ public static class DeviceThemeLibrary
         string file = path[(path.LastIndexOf('/') + 1)..];
         if (path != Root + "/" + file || !IsPack(file))
             throw new InvalidOperationException("Only themes in the library can be removed.");
-        Folders.Ensure(Attic);
+        Files.CreateDirectoryRecursive(Attic);
         string stem = file[..file.LastIndexOf('.')], extension = file[file.LastIndexOf('.')..];
         string target = Attic + "/" + file;
-        for (int n = 2; FileSystem.Exists(target); n++) target = Attic + "/" + stem + "-" + n + extension;
-        Folders.Named(target, () => FileSystem.Move(path, target));
+        for (int n = 2; Files.Exists(target); n++) target = Attic + "/" + stem + "-" + n + extension;
+        Files.Move(path, target);
         return Scan() with { Message = "Removed “" + name + "” from your library." };
     }
 

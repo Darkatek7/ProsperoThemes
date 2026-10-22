@@ -119,9 +119,15 @@ public static class FirmwareReport
 
         byte[] live = files.ReadAllBytes(device);
         byte[] stock = live;
+        byte[]? saved = null;
         if (files.Exists(backup))
         {
-            byte[] saved = files.ReadAllBytes(backup);
+            // A backup the app cannot read is reported with its error; the live file is described instead.
+            try { saved = files.ReadAllBytes(backup); }
+            catch (Exception ex) { w.WriteString("backup_error", ex.Message); }
+        }
+        if (saved is not null)
+        {
             w.WriteString("source", "backup");
             // The backup is the stock file unless the system replaced the file since; then the live one is.
             w.WriteBoolean("themed", !saved.AsSpan().SequenceEqual(live));

@@ -21,7 +21,7 @@ public static class ThemeHelperClient
     public const int Port = 9071;
     public const int LoaderPort = 9021;
     /// <summary>The build tag this app expects; ThemeHelper/Program.cs BuildTag.</summary>
-    public const int ExpectedTag = 5;
+    public const int ExpectedTag = 6;
     public const string ElfPath = DeviceThemeLibrary.AssetRoot + "/ThemeHelper.elf";
 
     private const uint ReplyTimeoutMicroseconds = 15_000_000;
@@ -159,19 +159,60 @@ public static class ThemeHelperClient
         if (reply != "WRITE wrote=" + data.Length) throw new InvalidOperationException($"write {path} failed: {reply}");
     }
 
-    /// <summary>Sub-folder names of /user/app/ or /user/appmeta/ (the only folders the helper lists).</summary>
-    public static IReadOnlyList<string> List(string path)
+    /// <summary>Sub-folder names of /user/app/, /user/appmeta/ or a folder in the app's own folder.</summary>
+    public static IReadOnlyList<string> List(string path) => ListEntries(path).Folders;
+
+    /// <summary>
+    /// Sub-folders and files of a folder in the app's own folder (the helper lists files nowhere else). A folder
+    /// that does not exist lists as empty.
+    /// </summary>
+    public static (IReadOnlyList<string> Folders, IReadOnlyList<string> Files) ListEntries(string path)
     {
         using var connection = TcpConnection.Connect(SocketAddress.Loopback(Port));
         connection.SetReceiveTimeout(ReplyTimeoutMicroseconds);
         connection.SendAll(Encoding.ASCII.GetBytes("LIST " + path + "\n"));
         string reply = ReadLine(connection);
+        if (reply == "ERR opendir") return ([], []);
         if (reply != "OK") throw new InvalidOperationException($"list {path} failed: {reply}");
-        var names = new List<string>();
+        var folders = new List<string>();
+        var files = new List<string>();
         for (string line = ReadLine(connection); line != "END" && line.Length > 0; line = ReadLine(connection))
-            if (line.StartsWith("D ", StringComparison.Ordinal)) names.Add(line[2..]);
+        {
+            if (line.StartsWith("D ", StringComparison.Ordinal)) folders.Add(line[2..]);
+            else if (line.StartsWith("F ", StringComparison.Ordinal)) files.Add(line[2..]);
+        }
         connection.SendAll("QUIT\n"u8);
-        return names;
+        return (folders, files);
+    }
+
+    /// <summary>
+    /// Creates a folder in the app's own folder, and the ones above it up to /data/prospero-themes. "Already exists"
+    /// counts as done.
+    /// </summary>
+    public static void MakeDirectories(string path)
+    {
+        string folder = path.TrimEnd('/');
+        if (folder != AppData.Root && !folder.StartsWith(AppData.Root + "/", StringComparison.Ordinal))
+            throw new InvalidOperationException($"the theme helper only creates folders in {AppData.Root}, not {folder}");
+        var steps = new List<string> { AppData.Root };
+        if (folder != AppData.Root)
+        {
+            for (int slash = folder.IndexOf('/', AppData.Root.Length + 1); slash > 0; slash = folder.IndexOf('/', slash + 1))
+                steps.Add(folder[..slash]);
+            steps.Add(folder);
+        }
+        foreach (string step in steps)
+        {
+            string reply = Request("MKDIR " + step, null, out _);
+            if (reply != "MKDIR rc=0" && reply != "MKDIR rc=" + unchecked((int)0x80020011))
+                throw new InvalidOperationException($"mkdir {step} failed: {reply}");
+        }
+    }
+
+    public static void Unlink(string path)
+    {
+        string reply = Request("UNLINK " + path, null, out _);
+        if (reply != "UNLINK rc=0") throw new InvalidOperationException($"delete {path} failed: {reply}");
     }
 
     public static void Rename(string from, string to)
@@ -295,7 +336,7 @@ public sealed class HelperDeviceFiles : IDeviceFiles
 
 /// <summary>
 /// Read-only <see cref="IDeviceFiles"/> for the firmware report: the app's own file access first, the helper
-/// for what the app may not read, and no helper at all when it did not start (the report is how a console
+/// for theme-root files the app may not read (it refuses every other path, so the app's own error is kept), and no helper at all when it did not start (the report is how a console
 /// where it does not start gets diagnosed). Counts which side answered.
 /// </summary>
 public sealed class ReportDeviceFiles : IDeviceFiles
@@ -330,7 +371,7 @@ public sealed class ReportDeviceFiles : IDeviceFiles
             AppReads++;
             return data;
         }
-        catch when (_helper)
+        catch when (_helper && HelperDeviceFiles.IsThemeRoot(path))
         {
             byte[] data = ThemeHelperClient.Read(path);
             HelperReads++;
@@ -346,7 +387,7 @@ public sealed class ReportDeviceFiles : IDeviceFiles
             AppReads++;
             return digest;
         }
-        catch when (_helper)
+        catch when (_helper && HelperDeviceFiles.IsThemeRoot(path))
         {
             string digest = ThemeHelperClient.Hash(path);
             HelperReads++;

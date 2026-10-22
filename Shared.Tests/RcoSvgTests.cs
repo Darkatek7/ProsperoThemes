@@ -405,7 +405,14 @@ public class RcoSvgTests
         public List<string> Reads { get; } = new();
         public bool Exists(string path) => Files.ContainsKey(path);
         public long Length(string path) => Files.TryGetValue(path, out byte[]? bytes) ? bytes.Length : -1;
-        public byte[] ReadAllBytes(string path) { Reads.Add(path); return (byte[])Files[path].Clone(); }
+        /// <summary>Paths that exist but fail to read, as a file the app may not read whole.</summary>
+        public HashSet<string> Unreadable { get; } = new(StringComparer.Ordinal);
+        public byte[] ReadAllBytes(string path)
+        {
+            Reads.Add(path);
+            if (Unreadable.Contains(path)) throw new IOException($"read {path} failed");
+            return (byte[])Files[path].Clone();
+        }
 
         /// <summary>Paths hashed with Hash (streamed on the console, never held whole), in order.</summary>
         public List<string> Hashes { get; } = new();

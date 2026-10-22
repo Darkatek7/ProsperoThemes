@@ -10,23 +10,32 @@ research payload (not part of the public repository), with the same low-level id
   `PayloadNetwork.Listen` binds every address.
 - **Single instance:** no `SO_REUSEADDR`; a second copy fails to bind and exits.
 - **Paths:** every path must lie inside `/system_ex/vsh_asset/`, `/user/appmeta/`, `/mnt/rnps/apps/`, or be exactly `/user/app/<TID>/sce_sys/pic0.dds` (the `AssetRoots`
-  mounts) and must not contain `..`, `//` or a backslash. Over-long paths are refused, never truncated.
-  Anything else gets `ERR badpath`.
+  mounts), or inside the app's own folder `/data/prospero-themes/`, and must not contain `..`, `//` or a
+  backslash. Over-long paths are refused, never truncated. Anything else gets `ERR badpath`.
+- **The app's folder (v6):** some jailbreaks start the app without `/data` in its sandbox (10.01 with OnionHEN,
+  ProsperoThemes issue #7). The app then keeps its library, backups and settings through the helper
+  (`AppData` in `ThemeApp/Library/DeviceFiles.cs`). Inside `/data/prospero-themes/` only, `WRITE` and
+  `RENAME` take any name, and `MKDIR`, `UNLINK` and `LIST` with files are allowed.
 - **Commands:**
   - `PING` returns `OK PONG 9071 v<tag>`, the build tag (`BuildTag` in `Program.cs`, `ExpectedTag` in the app).
   - `REMOUNT` remounts `/system_ex` read-write (exfatfs, same options as DevProbe). `EBUSY` counts as success.
   - `STAT <path>` returns `OK size=<n>`.
   - `READ <path>` returns `OK <size>` then the raw bytes, streamed in 32 KiB chunks.
   - `WRITE <path>.tmp <len>` followed by `<len>` raw bytes (at most 160 MiB: the icon container is about
-    100 MB before firmware 13.00). Only `.tmp` paths are accepted. Streamed in 32 KiB chunks. Replies
+    100 MB before firmware 13.00). In a theme root only `.tmp` paths are accepted. Streamed in 32 KiB chunks. Replies
     `WRITE wrote=<n>`, or `WRITE rc=<error>` when the file cannot be opened. A refused header (`ERR badpath`)
     or an incomplete write closes the connection, so the body is never read as commands; after an open or
     write failure the rest of the body is read and dropped first, so the client still gets the answer.
-  - `RENAME <path>.tmp <path>`: only this exact shape, so the helper can replace an asset atomically
-    and nothing else.
-  - `LIST /user/app/` or `LIST /user/appmeta/` (no other folder) returns `OK`, one `D <name>` per sub-folder, then `END`.
+  - `RENAME <path>.tmp <path>`: in a theme root only this exact shape, so the helper can replace an asset
+    atomically and nothing else. Inside the app's folder any rename within it.
+  - `LIST /user/app/` or `LIST /user/appmeta/` returns `OK`, one `D <name>` per sub-folder, then `END`. A
+    folder in the app's folder also lists its files as `F <name>`. A folder that cannot be opened answers
+    `ERR opendir`.
+  - `MKDIR <path>` (the app's folder or a folder in it) replies `MKDIR rc=<n>`; "already exists" is
+    `0x80020011` as a signed number.
+  - `UNLINK <path>` (a file in the app's folder) replies `UNLINK rc=<n>`.
   - `QUIT` closes the connection.
-- **Not included:** `LIST`, `MKDIR`, `RMDIR`, `UNLINK`, `SOTEST` and the remaining DevProbe diagnostics.
+- **Not included:** `RMDIR`, `SOTEST` and the remaining DevProbe diagnostics.
 
 ## Notes
 

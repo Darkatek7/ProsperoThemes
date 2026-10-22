@@ -7,11 +7,15 @@
 //   - FIXED PORT 9071, SINGLE INSTANCE. No SO_REUSEADDR, so a second copy fails to bind and exits
 //     instead of silently sharing the port; the app pings first and only loads the helper when absent.
 //   - CONFINED PATHS. Every path must lie inside one of the three theme roots, /system_ex/vsh_asset/,
-//     /user/appmeta/ or /mnt/rnps/apps/ (the mounts in Shared/AssetRoots.cs), with no "..", "//" or backslash. WRITE may
-//     only create "<target>.tmp", and RENAME may only move "<target>.tmp" onto "<target>", so the helper
-//     can replace a theme asset atomically and do nothing else.
-//   - NARROW COMMAND SET. PING, REMOUNT, STAT, READ, WRITE, RENAME, QUIT. There is no LIST, MKDIR,
-//     RMDIR, UNLINK, SOTEST or any other diagnostic command.
+//     /user/appmeta/ or /mnt/rnps/apps/ (the mounts in Shared/AssetRoots.cs), or the app's own folder
+//     /data/prospero-themes, with no "..", "//" or backslash. In a theme root WRITE may only create
+//     "<target>.tmp", and RENAME may only move "<target>.tmp" onto "<target>", so the helper can replace a
+//     theme asset atomically and do nothing else there.
+//   - THE APP'S FOLDER. Where the app's sandbox has no /data (10.01 with OnionHEN), the app keeps its library,
+//     backups and settings through the helper: inside /data/prospero-themes WRITE and RENAME take any name, and
+//     MKDIR, UNLINK and a LIST of files and folders are allowed. Nowhere else.
+//   - NARROW COMMAND SET. PING, REMOUNT, STAT, READ, WRITE, RENAME, LIST, MKDIR, UNLINK, QUIT. There is no
+//     RMDIR, SOTEST or any other diagnostic command.
 //
 // Requests are ASCII lines terminated by '\n'. ReadLine consumes exactly one byte past the newline and
 // never reads ahead, so a WRITE command's binary payload that follows its header line stays intact.
@@ -48,6 +52,9 @@ internal static unsafe class Program
     private const string AppMetaPrefix = "/user/appmeta/";
     private const string RnpsPrefix = "/mnt/rnps/apps/";
     private const string UserAppPrefix = "/user/app/";
+    // The app's own folder; the helper manages it only for an app that cannot reach /data itself.
+    private const string DataRoot = "/data/prospero-themes";
+    private const string DataPrefix = DataRoot + "/";
     // The largest file the helper writes: the icon container (Sce.PlayStation.PUI_UI3.rco), 39 MB on 13.00 and
     // about 100 MB before it, with room. WRITE streams through one chunk, so this is not a memory limit. The
     // app's ThemeApplier.MaxFileBytes is the same number.
@@ -64,7 +71,7 @@ internal static unsafe class Program
     private const int SysNmount = 378;
 
     // Build tag announced on PING, so a client can tell which helper revision it is talking to.
-    private const int BuildTag = 5;
+    private const int BuildTag = 6;
 
     // /system_ex is remounted once per boot. A second MNT_UPDATE on the already writable mount was the
     // last thing before a console hang (2026-10-13), so it is not repeated: not within this helper's
@@ -199,7 +206,7 @@ internal static unsafe class Program
                 *cursor = 0;
                 int wanted = ParseInt(cursor + 1);
                 byte* path = ConfinedPathFrom(line + 6, scratch);
-                if (path == null || !EndsWithTmp(path) || wanted < 0 || wanted > MaxWrite)
+                if (path == null || !(EndsWithTmp(path) || IsDataPath(path)) || wanted < 0 || wanted > MaxWrite)
                 {
                     Send(client, "ERR badpath\n"u8);
                     return;
@@ -221,7 +228,8 @@ internal static unsafe class Program
                 byte* fromPath = line + 7;
                 if (!IsConfined(fromPath)) { Send(client, "ERR badpath\n"u8); continue; }
                 byte* toPath = ConfinedPathFrom(cursor + 1, scratch);
-                if (toPath == null || !IsTmpOf(fromPath, toPath)) { Send(client, "ERR badpath\n"u8); continue; }
+                bool inData = toPath != null && IsDataPath(fromPath) && IsDataPath(toPath);
+                if (toPath == null || !(inData || IsTmpOf(fromPath, toPath))) { Send(client, "ERR badpath\n"u8); continue; }
 
                 int rc = KernelFile.sceKernelRename(fromPath, toPath);
                 if (rc != 0)
@@ -233,6 +241,30 @@ internal static unsafe class Program
             if (StartsWith(line, "LIST "))
             {
                 ServeList(client, line + 5);
+                continue;
+            }
+
+            // MKDIR and UNLINK: only in the app's own folder (MKDIR also for the folder itself).
+            if (StartsWith(line, "MKDIR "))
+            {
+                byte* path = PathFrom(line + 6, scratch);
+                if (path == null || !(IsDataPath(path) || Equals(path, DataRoot))) { Send(client, "ERR badpath\n"u8); continue; }
+                int rc = KernelFile.sceKernelMkdir(path, 0x1FF);
+                if (rc != 0 && rc != AlreadyExists)
+                    rc = (int)PayloadCrt.Syscall(PayloadCrt.SYS_mkdir, (long)(nint)path, 0x1FF);
+                if (rc == -EExist) rc = AlreadyExists;
+                SendResult(client, "MKDIR", "rc="u8, rc);
+                continue;
+            }
+
+            if (StartsWith(line, "UNLINK "))
+            {
+                byte* path = PathFrom(line + 7, scratch);
+                if (path == null || !IsDataPath(path)) { Send(client, "ERR badpath\n"u8); continue; }
+                int rc = KernelFile.sceKernelUnlink(path);
+                if (rc != 0)
+                    rc = (int)PayloadCrt.Syscall(PayloadCrt.SYS_unlink, (long)(nint)path);
+                SendResult(client, "UNLINK", "rc="u8, rc);
                 continue;
             }
 
@@ -401,11 +433,33 @@ internal static unsafe class Program
     /// </summary>
     private static bool IsConfined(byte* path)
     {
+        if (IsDataPath(path)) return true;
         int prefix = StartsWith(path, VshAssetPrefix) ? VshAssetPrefix.Length
             : StartsWith(path, AppMetaPrefix) ? AppMetaPrefix.Length
             : StartsWith(path, RnpsPrefix) ? RnpsPrefix.Length
             : StartsWith(path, UserAppPrefix) && IsUserAppBackground(path) ? UserAppPrefix.Length : -1;
         if (prefix < 0 || path[prefix] == 0) return false;
+        for (int i = 0; path[i] != 0; i++)
+        {
+            if (i >= MaxPath - 1) return false;
+            if (path[i] == (byte)'\\') return false;
+            if (path[i] == (byte)'.' && path[i + 1] == (byte)'.') return false;
+            if (path[i] == (byte)'/' && path[i + 1] == (byte)'/') return false;
+        }
+        return true;
+    }
+
+    // sceKernelMkdir's "already exists", and EEXIST from the raw syscall.
+    private const int AlreadyExists = unchecked((int)0x80020011);
+    private const int EExist = 17;
+
+    /// <summary>
+    /// True when a NUL-terminated path lies strictly inside the app's own folder and contains no "..", "//" or
+    /// backslash.
+    /// </summary>
+    private static bool IsDataPath(byte* path)
+    {
+        if (!StartsWith(path, DataPrefix) || path[DataPrefix.Length] == 0) return false;
         for (int i = 0; path[i] != 0; i++)
         {
             if (i >= MaxPath - 1) return false;
@@ -435,12 +489,14 @@ internal static unsafe class Program
     }
 
     /// <summary>
-    /// LIST is allowed for exactly two folders, and only reports the sub-folder names there: the title ids
-    /// that may carry an entry background.
+    /// LIST is allowed for two theme-root folders, where it only reports the sub-folder names (the title ids that
+    /// may carry an entry background), and for folders in the app's own folder, where it reports sub-folders as
+    /// "D name" and files as "F name".
     /// </summary>
     private static void ServeList(int client, byte* path)
     {
-        if (!(Equals(path, UserAppPrefix) || Equals(path, AppMetaPrefix))) { Send(client, "ERR badpath\n"u8); return; }
+        bool data = IsDataPath(path) || Equals(path, DataRoot);
+        if (!(data || Equals(path, UserAppPrefix) || Equals(path, AppMetaPrefix))) { Send(client, "ERR badpath\n"u8); return; }
         void* dir = PayloadFileSystem.opendir(path);
         if (dir == null) { Send(client, "ERR opendir\n"u8); return; }
         Send(client, "OK\n"u8);
@@ -452,9 +508,10 @@ internal static unsafe class Program
             byte namlen = entry->d_namlen;
             if (namlen == 0) { if (++emptyRun > 8) break; continue; }
             emptyRun = 0;
-            if (entry->d_type != PayloadFileSystem.DT_DIR) continue;
             if (entry->d_name[0] == (byte)'.') continue;
-            Send(client, "D "u8);
+            if (entry->d_type == PayloadFileSystem.DT_DIR) Send(client, "D "u8);
+            else if (data && entry->d_type == PayloadFileSystem.DT_REG) Send(client, "F "u8);
+            else continue;
             PayloadTcpServer.SendAll(client, entry->d_name, namlen);
             Send(client, "\n"u8);
         }
