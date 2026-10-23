@@ -307,6 +307,93 @@ public class SoundThemeTests
         Assert.Empty(none.Writes);
     }
 
+    private const string StatePath = "/data/prospero-themes/state.json", LookPath = "/data/prospero-themes/look.json";
+
+    private static string Text(MemoryDeviceFiles files, string path) => Encoding.UTF8.GetString(files.Files[path]);
+
+    [Fact]
+    public void Restoring_the_background_keeps_the_rest_of_the_theme_applied()
+    {
+        var files = Console();
+        Assert.True(new ThemeApplier(files, () => 0) { SourcePath = "/lib/all.p5theme" }.Apply(Everything()).Success);
+
+        ApplyResult result = new ThemeApplier(files, () => 0).RestoreOriginals(ThemePart.Background);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains("original(s) of Background", result.Message);
+        Assert.Equal(Encoding.ASCII.GetBytes("live-bg"), files.Files[BgDevice]);
+        Assert.Contains("#f00", Text(files, RcoDevice));
+        Assert.Equal(Music("fein"), files.Files[MusicDevice]);
+        // The theme is still applied, and the look keeps what is left of it.
+        Assert.Contains("\"action\": \"restore-parts\"", Text(files, StatePath));
+        Assert.Equal("all", AppliedTheme.Read(Text(files, StatePath)));
+        Assert.Equal(new[] { new LookLayer("/lib/all.p5theme", "all", "Sounds", ThemePart.Icons | ThemePart.Sounds) }, Look.Parse(Text(files, LookPath)));
+    }
+
+    [Fact]
+    public void Icons_and_sounds_go_back_together_and_the_last_part_ends_the_theme()
+    {
+        var files = Console();
+        Assert.True(new ThemeApplier(files, () => 0) { SourcePath = "/lib/all.p5theme" }.Apply(Everything()).Success);
+        Assert.True(new ThemeApplier(files, () => 0).RestoreOriginals(ThemePart.Background).Success);
+
+        // Only the icons were asked for: they share the container with the UI sounds, so the sounds come back too.
+        ApplyResult result = new ThemeApplier(files, () => 0).RestoreOriginals(ThemePart.Icons);
+
+        Assert.True(result.Success, result.Message);
+        Assert.DoesNotContain("#f00", Text(files, RcoDevice));
+        Assert.Equal(Music("stock"), files.Files[MusicDevice]);
+        Assert.Empty(Look.Parse(Text(files, LookPath))!);
+        Assert.Null(AppliedTheme.Read(Text(files, StatePath)));
+    }
+
+    [Fact]
+    public void Every_part_is_the_full_restore_and_a_part_without_backups_writes_nothing()
+    {
+        var files = Console();
+        Assert.True(new ThemeApplier(files, () => 0).Apply(Pack("bg", new Item(BgPath, "background", Background("bg")))).Success);
+
+        ApplyResult tiles = new ThemeApplier(files, () => 0).RestoreOriginals(ThemePart.Tiles);
+        Assert.False(tiles.Success);
+        Assert.Contains("chosen parts", tiles.Message);
+        Assert.Equal(Background("bg"), files.Files[BgDevice]);
+
+        ApplyResult all = new ThemeApplier(files, () => 0).RestoreOriginals(ThemePart.All);
+        Assert.True(all.Success, all.Message);
+        Assert.Contains("\"action\": \"restore-originals\"", Text(files, StatePath));
+        Assert.Empty(Look.Parse(Text(files, LookPath))!);
+    }
+
+    [Fact]
+    public void Without_a_look_file_a_partial_restore_keeps_the_pack_and_writes_no_look()
+    {
+        var files = Console();
+        Assert.True(new ThemeApplier(files, () => 0).Apply(Everything()).Success);
+        files.Files.Remove(LookPath);   // applied by 01.000.020
+
+        Assert.True(new ThemeApplier(files, () => 0).RestoreOriginals(ThemePart.Icons).Success);
+
+        Assert.Equal("all", AppliedTheme.Read(Text(files, StatePath)));
+        Assert.False(files.Files.ContainsKey(LookPath));
+    }
+
+    [Fact]
+    public void The_look_records_the_parts_an_apply_wrote_and_combines_or_replaces()
+    {
+        var files = Console();
+        Assert.True(new ThemeApplier(files, () => 0) { SourcePath = "/lib/all.p5theme", Parts = ThemePart.All & ~ThemePart.Sounds }
+            .Apply(Everything()).Success);
+        Assert.Equal(new[] { new LookLayer("/lib/all.p5theme", "all", "Sounds", ThemePart.Background | ThemePart.Icons) },
+            Look.Parse(Text(files, LookPath)));
+
+        ThemePack music = Pack("music", new Item(MusicPath, "sound", Music("fein")));
+        Assert.True(new ThemeApplier(files, () => 0) { SourcePath = "/lib/music.p5theme", KeepEarlierThemes = true }.Apply(music).Success);
+        Assert.Equal(new[] { "/lib/all.p5theme", "/lib/music.p5theme" }, Look.Parse(Text(files, LookPath))!.Select(l => l.Pack));
+
+        Assert.True(new ThemeApplier(files, () => 0) { SourcePath = "/lib/music.p5theme" }.Apply(music).Success);
+        Assert.Equal(new[] { "/lib/music.p5theme" }, Look.Parse(Text(files, LookPath))!.Select(l => l.Pack));
+    }
+
     [Fact]
     public void Each_target_belongs_to_one_part()
     {

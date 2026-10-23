@@ -13,6 +13,29 @@ public sealed partial class ThemeRenderer
     /// </summary>
     public string AppVersion { get; set; } = "";
 
+    private string _newerVersion = "", _newerText = "";
+    private string _reportCode = "", _reportValue = "Save";
+
+    /// <summary>
+    /// The code the store answered for the firmware report sent in this session; the Firmware report row shows it in
+    /// place of "Save", since the notice that names it goes away. Empty until one is sent.
+    /// </summary>
+    public string ReportCode
+    {
+        get => _reportCode;
+        set { _reportCode = value; _reportValue = value.Length > 0 ? "Code " + value : "Save"; }
+    }
+
+    /// <summary>
+    /// A later release the store knows of (<see cref="AppUpdate"/>), shown after the app's version on the System screen.
+    /// Empty when there is none or the store was not asked.
+    /// </summary>
+    public string NewerVersion
+    {
+        get => _newerVersion;
+        set { _newerVersion = value; _newerText = value.Length > 0 ? " · " + value + " available" : ""; }
+    }
+
     // ---- Shared by System, USB Import and the store-address keyboard ------------------------------------------------
 
     // Every one of these screens opens with the same block at the left safe edge: an eyebrow in the accent colour over
@@ -52,6 +75,8 @@ public sealed partial class ThemeRenderer
     private static readonly HintItem[] ImportHintItems = [new(PadButton.Circle, "Library")];
     private static readonly HintItem[] StoreAddressHintItems =
         [new(PadButton.Cross, "Type"), new(PadButton.Square, "Delete"), new(PadButton.Circle, "Cancel"), new(PadButton.Options, "Save")];
+    private static readonly HintItem[] SearchHintItems =
+        [new(PadButton.Cross, "Type"), new(PadButton.Square, "Delete"), new(PadButton.Circle, "Cancel"), new(PadButton.Options, "Search")];
 
     /// <summary>The footer hints of the System list: a row that holds a value says "Change", the others "Choose".</summary>
     private HintItem[] SystemHints(ThemeBrowser browser) =>
@@ -60,7 +85,7 @@ public sealed partial class ThemeRenderer
 
     private HintItem[] ImportHints(ThemeBrowser browser) => ImportHintItems;
 
-    private HintItem[] StoreAddressHints(ThemeBrowser browser) => StoreAddressHintItems;
+    private HintItem[] StoreAddressHints(ThemeBrowser browser) => browser.View == ThemeView.Search ? SearchHintItems : StoreAddressHintItems;
 
     // ---- USB Import -------------------------------------------------------------------------------------------------
 
@@ -143,7 +168,7 @@ public sealed partial class ThemeRenderer
         "Whether a new theme keeps what earlier themes changed",
         "Whether themes may change the music and sounds",
         "Where the Community tab loads themes from",
-        "Save a list of the console’s theme files",
+        "Save or send a list of the console’s theme files",
         "Put every background, icon and sound back to the original",
     ];
 
@@ -219,8 +244,8 @@ public sealed partial class ThemeRenderer
                     break;
                 case SystemRow.FirmwareReport:
                     int chevron = DrawSysChevron(s, right, y + SysRowH / 2, focus ? White : Muted);
-                    DrawRight(_label, s, "Save", chevron - 12, textY, Accent);
-                    descriptionRight = chevron - 12 - _label.MeasureText("Save") - 24;
+                    DrawRight(_label, s, _reportValue, chevron - 12, textY, Accent);
+                    descriptionRight = chevron - 12 - _label.MeasureText(_reportValue) - 24;
                     break;
                 default:
                     DrawSysChevron(s, right, y + SysRowH / 2, restore ? Theme.Danger : focus ? White : Muted);
@@ -295,7 +320,16 @@ public sealed partial class ThemeRenderer
         SysInfoRow(s, "Library", _sysCountText, leftX, rowY, rightX - leftX - SysInfoLabelWidth - 32);
         SysInfoRow(s, "Firmware", _sysFirmwareText, leftX, rowY + SysInfoPitch, rightX - leftX - SysInfoLabelWidth - 32);
         if (AppVersion.Length > 0)
-            SysInfoRow(s, "App version", AppVersion, leftX, rowY + 2 * SysInfoPitch, rightX - leftX - SysInfoLabelWidth - 32);
+        {
+            int width = rightX - leftX - SysInfoLabelWidth - 32;
+            SysInfoRow(s, "App version", AppVersion, leftX, rowY + 2 * SysInfoPitch, width);
+            // "01.000.021 · 01.000.022 available", the newer one in the accent colour.
+            if (_newerText.Length > 0)
+            {
+                int used = _small.MeasureText(AppVersion);
+                ClipLeft(_small, s, _newerText, leftX + SysInfoLabelWidth + used, rowY + 2 * SysInfoPitch, Accent, width - used);
+            }
+        }
         int valueWidth = Theme.ContentRight - SysRowPad - rightX - SysInfoLabelWidth;
         SysInfoRow(s, "Storage", "/data/prospero-themes/library", rightX, rowY, valueWidth);
         SysInfoRow(s, "Pack format", "Format 2 · ZIP / TAR", rightX, rowY + SysInfoPitch, valueWidth);
@@ -320,16 +354,20 @@ public sealed partial class ThemeRenderer
     private string? _keyboardTextFor;
     private int _keyboardStart, _keyboardShownWidth;
 
-    /// <summary>The on-screen keyboard for the store address: input box with caret, key grid, and one line of help.</summary>
+    /// <summary>
+    /// The on-screen keyboard for the store address, or for the Community search (<see cref="StoreAddressEditor.IsSearch"/>):
+    /// input box with caret, key grid, and one line of help.
+    /// </summary>
     private void DrawStoreAddress(Surface s, StoreAddressEditor editor, int enter, double seconds)
     {
         // The cover behind the screen is already calmed (see Backdrop), so the keys read the same on any theme.
-        DrawSysHeading(s, "COMMUNITY STORE", "Store address", enter);
+        bool search = editor.IsSearch;
+        DrawSysHeading(s, "COMMUNITY STORE", search ? "Search themes" : "Store address", enter);
         string text = editor.Text;
-        if (_keyboardCountFor != text.Length)
+        if (_keyboardCountFor != text.Length + 1000 * editor.Limit)
         {
-            _keyboardCountFor = text.Length;
-            _keyboardCount = $"{text.Length} / {StoreAddressEditor.MaxLength}";
+            _keyboardCountFor = text.Length + 1000 * editor.Limit;
+            _keyboardCount = $"{text.Length} / {editor.Limit}";
         }
         // The counter sits on the heading's baseline at the right safe edge.
         DrawRight(_small, s, _keyboardCount, Theme.ContentRight, SysHeadingY + enter + Ascent(_screenHeading) - Ascent(_small), Muted);
@@ -342,7 +380,7 @@ public sealed partial class ThemeRenderer
         if (text.Length == 0)
         {
             // The caret waits in front of the placeholder, where the first letter will go, instead of on top of its "h".
-            DrawLeft(_body, s, "http://192.168.0.5:8080", textX, textY, KeyboardPlaceholder);
+            DrawLeft(_body, s, search ? "Name, author or a word of the description" : "http://192.168.0.5:8080", textX, textY, KeyboardPlaceholder);
             caretX = textX - 5;
         }
         else
@@ -361,16 +399,17 @@ public sealed partial class ThemeRenderer
         if (seconds % 1.0 < .6) s.FillRect(caretX, textY + 3, 3, _body.LineHeight - 6, Accent);
 
         if (editor.Notice.Length > 0) ClipLeft(_small, s, editor.Notice, Theme.SafeX, KeyboardNoticeY + enter, Warn, Theme.ContentWidth);
-        else ClipLeft(_small, s, "Leave empty and save to remove the store.", Theme.SafeX, KeyboardNoticeY + enter, Muted, Theme.ContentWidth);
+        else ClipLeft(_small, s, search ? "Options searches. Search for nothing to see every theme again." : "Leave empty and save to remove the store.",
+            Theme.SafeX, KeyboardNoticeY + enter, Muted, Theme.ContentWidth);
 
         // Every key first, then the one focus ring: it reaches past the gap into the neighbouring keys.
         int focusX = 0, focusY = 0, focusW = 0;
-        for (int row = 0; row < StoreAddressEditor.Layout.Count; row++)
+        for (int row = 0; row < editor.Keys.Count; row++)
         {
             int column = 0;
-            for (int i = 0; i < StoreAddressEditor.Layout[row].Count; i++)
+            for (int i = 0; i < editor.Keys[row].Count; i++)
             {
-                EditorKey key = StoreAddressEditor.Layout[row][i];
+                EditorKey key = editor.Keys[row][i];
                 int x = Theme.SafeX + column * (KeyboardUnit + KeyboardGap), y = KeyboardKeysTop + row * (KeyboardKeyH + KeyboardGap) + enter;
                 int w = key.Width * KeyboardUnit + (key.Width - 1) * KeyboardGap;
                 bool focus = row == editor.Row && i == editor.Column;

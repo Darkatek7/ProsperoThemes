@@ -28,6 +28,25 @@ public class FirmwareReportTests
         report.RootElement.GetProperty("files").EnumerateArray().Single(f => f.GetProperty("path").GetString() == path);
 
     [Fact]
+    public void The_store_answers_a_sent_report_with_a_code()
+    {
+        Assert.Equal("https://themes.example.org/api/firmware-reports", FirmwareReport.UploadUrl("https://themes.example.org/"));
+        Assert.Equal("K7Q2MX", FirmwareReport.ParseCode("""{"code":"K7Q2MX"}"""));
+        Assert.Null(FirmwareReport.ParseCode("""{"error":"send the app's firmware report (report 1 with a files list)"}"""));
+        Assert.Null(FirmwareReport.ParseCode("""{"code":"k7<b>"}"""));
+        Assert.Null(FirmwareReport.ParseCode("<html>"));
+        Assert.Null(FirmwareReport.ParseCode(null));
+    }
+
+    [Fact]
+    public void A_refused_report_says_why()
+    {
+        Assert.StartsWith("the store takes only a few reports an hour", FirmwareReport.SendProblem(429, """{"error":"rate limit reached, try again later"}"""));
+        Assert.Equal("the store answered 413: Request body is too large", FirmwareReport.SendProblem(413, """{"error":"Request body is too large"}"""));
+        Assert.Equal("the store answered 404", FirmwareReport.SendProblem(404, "<html>"));
+    }
+
+    [Fact]
     public void Describes_the_stock_copy_of_every_file_and_lists_the_icons()
     {
         var files = new RcoSvgTests.MemoryDeviceFiles();

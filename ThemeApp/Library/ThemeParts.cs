@@ -34,7 +34,7 @@ public static class ThemeParts
     public static ThemePart Of(ThemePackTarget target)
     {
         string path = target.Path;
-        if (path == AssetRoots.AllAppsBackground || AssetRoots.IsAppBackground(path, out _)) return ThemePart.AppBackgrounds;
+        if (path == AssetRoots.AllAppsBackground || AssetRoots.IsAppBackground(path, out _) || IsTitleImage(path)) return ThemePart.AppBackgrounds;
         if (target.Layer == ThemePack.VagLayer || target.Layer == "sound" || path.EndsWith(".at9", StringComparison.OrdinalIgnoreCase))
             return ThemePart.Sounds;
         if (target.Layer == ThemePack.SvgLayer) return ThemePart.Icons;
@@ -42,6 +42,30 @@ public static class ThemeParts
         if (path == AssetRoots.HubBackground || target.Layer == "background") return ThemePart.Background;
         return ThemePart.Other;
     }
+
+    /// <summary>
+    /// The parts a backed-up file belongs to, from its logical path (the backup index has no layers). The icon container
+    /// holds the system icons and the UI sounds, so it is both. A home or system tile background, also as the plain .dds
+    /// of firmware before 13.00, is the background; a title's own image is an app background (what the all-apps and
+    /// per-app targets resolve to). Any other texture of the system assets may be a background or another file, so it
+    /// is both. Superset of <see cref="Of"/> for the targets that wrote the file, so a restore of a part reaches it.
+    /// </summary>
+    public static ThemePart OfLogical(string logical)
+    {
+        if (logical.EndsWith(".rco", StringComparison.OrdinalIgnoreCase)) return ThemePart.Icons | ThemePart.Sounds;
+        if (logical.EndsWith(".at9", StringComparison.OrdinalIgnoreCase)) return ThemePart.Sounds;
+        if (logical.StartsWith(AssetRoots.Rnps + "/", StringComparison.Ordinal)) return ThemePart.Tiles;
+        if (IsTitleImage(logical)) return ThemePart.AppBackgrounds;
+        if (logical.StartsWith(AssetRoots.VshAsset + "/", StringComparison.Ordinal)
+            && (logical.EndsWith(".dds.zst", StringComparison.Ordinal) || logical.EndsWith(".dds", StringComparison.Ordinal)))
+            return logical.StartsWith(AssetRoots.VshAsset + "/bg_", StringComparison.Ordinal) ? ThemePart.Background : ThemePart.Background | ThemePart.Other;
+        return ThemePart.Other;
+    }
+
+    // A title's own entry image as the console keeps it: userapp/<TID>/sce_sys/pic0.dds or appmeta/<TID>/pic0.dds.
+    private static bool IsTitleImage(string path) =>
+        (path.StartsWith(AssetRoots.UserApp + "/", StringComparison.Ordinal) || path.StartsWith(AssetRoots.AppMeta + "/", StringComparison.Ordinal))
+        && path.EndsWith("/pic0.dds", StringComparison.Ordinal);
 
     /// <summary>The parts a pack has something for.</summary>
     public static ThemePart In(ThemePackManifest manifest)

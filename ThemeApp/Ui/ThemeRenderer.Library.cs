@@ -9,11 +9,14 @@ namespace ProsperoThemes.App.Ui;
 public sealed partial class ThemeRenderer
 {
     private static readonly HintItem[] LibraryHintItems =
-        [new(PadButton.Cross, "Details"), new(PadButton.Square, "Preview"), new(PadButton.Options, "Reload")];
+        [new(PadButton.Cross, "Details"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Sort"), new(PadButton.Options, "Reload")];
     private static readonly HintItem[] LibraryEmptyHintItems = [new(PadButton.Options, "Reload")];
+    private static readonly HintItem[] LookCardHintItems =
+        [new(PadButton.Cross, "Save as theme"), new(PadButton.Triangle, "Sort"), new(PadButton.Options, "Reload")];
 
     /// <summary>The footer hints of the library: with no theme there is nothing to open or preview, only to look for packs again.</summary>
-    private HintItem[] LibraryHints(ThemeBrowser browser) => browser.Selected >= 0 ? LibraryHintItems : LibraryEmptyHintItems;
+    private HintItem[] LibraryHints(ThemeBrowser browser) =>
+        browser.LookCardFocused ? LookCardHintItems : browser.Selected >= 0 ? LibraryHintItems : LibraryEmptyHintItems;
 
     // ---- Layout -----------------------------------------------------------------------------------------------------
 
@@ -56,9 +59,30 @@ public sealed partial class ThemeRenderer
         public readonly string Contents = contents, Meta = meta;
     }
     private HeroText? _hero;
+
+    /// <summary>
+    /// The themes the console shows now, bottom first (look.json), for the "Save current look" card; the card shows while
+    /// <see cref="ThemeBrowser.LookSavable"/>.
+    /// </summary>
+    public IReadOnlyList<LookLayer>? Look { get; set; }
+    // The text of the look's hero, made again when the look is another one.
+    private IReadOnlyList<LookLayer>? _lookFor;
+    private IReadOnlyList<string> _lookDescription = [];
+    private string _lookContents = "", _lookMeta = "";
     private IReadOnlyList<string>? _emptyText;
     private string _countText = "";
     private int _countFor = -1;
+    private LibrarySort _countSort;
+
+    /// <summary>The order of the library row (after the applied theme), named next to the count.</summary>
+    public LibrarySort LibrarySort { get; set; }
+
+    /// <summary>The library row is the same packs in another order: the cards are prepared and scrolled again.</summary>
+    public void LibraryReordered()
+    {
+        _scrollReady = false;
+        _cardsPreparedFor = int.MinValue;
+    }
 
     private void ResetLibraryState()
     {
@@ -87,8 +111,9 @@ public sealed partial class ThemeRenderer
         int enter, double seconds, double delta)
     {
         if (selected is null) DrawEmptyHero(s, enter);
+        else if (browser.LookCardFocused) DrawLookHero(s, enter);
         else DrawHero(s, selected, enter);
-        DrawCollection(s, browser.Selected, entries, delta);
+        DrawCollection(s, browser.Selected, entries, delta, browser.LookSavable, browser.LookCardFocused);
         WarmBackdrop(selected, seconds);
     }
 
@@ -114,6 +139,34 @@ public sealed partial class ThemeRenderer
         GlassPill(s, Theme.SafeX + primary + 16, buttonsY, "Preview", PadButton.Square);
     }
 
+    // The hero of the "Save current look" card: what saving does, and which themes with which parts go into the mix.
+    private void DrawLookHero(Surface s, int enter)
+    {
+        IReadOnlyList<LookLayer> look = Look ?? [];
+        if (!ReferenceEquals(look, _lookFor))
+        {
+            _lookFor = look;
+            _lookDescription = _body.Wrap("Keeps what the console shows now as one theme in your library, to apply again or preview later.", HeroTextWidth, 2);
+            var names = new List<string>(look.Count);
+            for (int i = look.Count - 1; i >= 0; i--) names.Add(look[i].Name);   // the top layer first
+            _lookContents = string.Join("  ·  ", names);
+            _lookMeta = Plural(look.Count, "theme") + " combined";
+        }
+        int buttonsY = HeroButtonsY + enter;
+        int metaY = buttonsY - 20 - 2 * MetaLine;
+        int descriptionTop = metaY - 12 - _lookDescription.Count * _body.LineHeight;
+        int titleTop = descriptionTop - 2 - _title.LineHeight;
+        int eyebrowTop = titleTop - 8 - EyebrowHeight;
+
+        DrawLeft(_small, s, "YOUR LOOK", Theme.SafeX, eyebrowTop + (EyebrowHeight - _small.LineHeight) / 2, Accent);
+        DrawLeft(_title, s, "Save current look", Theme.SafeX - TitleOptical, titleTop, White);
+        for (int i = 0; i < _lookDescription.Count; i++)
+            DrawLeft(_body, s, _lookDescription[i], Theme.SafeX, descriptionTop + i * _body.LineHeight, Muted);
+        ClipLeft(_small, s, _lookContents, Theme.SafeX, metaY, Muted, HeroWidth);
+        ClipLeft(_small, s, _lookMeta, Theme.SafeX, metaY + MetaLine, Muted, HeroWidth);
+        PillButton(s, Theme.SafeX, buttonsY, "Save as theme", true);
+    }
+
     // With no theme there is nothing to act on, so the message is centred and names the tabs that fill the library.
     private void DrawEmptyHero(Surface s, int enter)
     {
@@ -131,19 +184,27 @@ public sealed partial class ThemeRenderer
         }
     }
 
-    private void DrawCollection(Surface s, int selected, IReadOnlyList<ThemeLibraryEntry> entries, double delta)
+    private void DrawCollection(Surface s, int selected, IReadOnlyList<ThemeLibraryEntry> entries, double delta, bool lookCard, bool lookFocused)
     {
         // "Your collection" and its count share one baseline.
         int baseline = CollectionTop + Ascent(_heading);
         DrawLeft(_heading, s, "Your collection", Theme.SafeX, CollectionTop, White);
-        if (_countFor != entries.Count) { _countFor = entries.Count; _countText = Plural(entries.Count, "theme"); }
+        if (_countFor != entries.Count || _countSort != LibrarySort)
+        {
+            _countFor = entries.Count;
+            _countSort = LibrarySort;
+            _countText = entries.Count > 1 ? Plural(entries.Count, "theme") + "  ·  " + LibraryOrder.Label(LibrarySort)
+                : Plural(entries.Count, "theme");
+        }
         DrawLeft(_small, s, _countText, Theme.SafeX + _heading.MeasureText("Your collection") + 16, baseline - Ascent(_small), Muted);
 
         // Scroll: the focused card stays the third one when the row is long enough (and the row never scrolls past
         // its ends); the offset eases toward that, and settles exactly so a still screen is a still picture.
-        int items = entries.Count + 1;   // the last one is the card that points to USB Import
+        // After the packs: the card that saves the look (when there is one to save), then the one that points to USB Import.
+        int items = entries.Count + (lookCard ? 2 : 1);
         int maxScroll = Math.Max(0, items * CardStride - CardGap - Theme.ContentWidth);
-        float target = selected < 0 ? 0 : Math.Clamp((selected - 2) * CardStride, 0, maxScroll);
+        int focus = lookFocused ? entries.Count : selected;
+        float target = focus < 0 ? 0 : Math.Clamp((focus - 2) * CardStride, 0, maxScroll);
         if (!_scrollReady) { _scroll = target; _scrollReady = true; }
         else
         {
@@ -163,9 +224,10 @@ public sealed partial class ThemeRenderer
             int x = Theme.SafeX + i * CardStride - offset;
             if (x + CardW <= RowClipLeft || x >= RowClipRight) continue;
             int lx = x - RowClipLeft, ly = CardY - RowClipTop;
-            if (i == entries.Count) { DrawAddCard(row, lx, ly); continue; }
+            if (i == entries.Count && lookCard) { DrawLookCard(row, lx, ly, lookFocused); continue; }
+            if (i >= entries.Count) { DrawAddCard(row, lx, ly); continue; }
             ThemeLibraryEntry entry = entries[i];
-            bool focused = i == selected;
+            bool focused = i == selected && !lookFocused;
             if (focused)
             {
                 int fx = lx - (FocusW - CardW) / 2, fy = ly - (FocusH - CardH) / 2;
@@ -194,6 +256,23 @@ public sealed partial class ThemeRenderer
         Paint.Line(row, cx, cy - 14f, cx, cy + 14f, 3f, Muted);
         DrawMid(_small, row, "Import from USB", x + CardW / 2, y + 112, Muted);
         ClipLeft(_body, row, "Add themes", x, CardTitleY - RowClipTop, Muted, CardW);
+    }
+
+    // The card that saves the look: two stacked frames for the themes it combines. Focused, it grows like a pack's card.
+    private void DrawLookCard(Surface row, int x, int y, bool focused)
+    {
+        int w = focused ? FocusW : CardW, h = focused ? FocusH : CardH;
+        int fx = focused ? x - (FocusW - CardW) / 2 : x, fy = focused ? y - (FocusH - CardH) / 2 : y;
+        Color ink = focused ? White : Muted;
+        Paint.FillRoundedRect(row, fx, fy, w, h, Theme.RadiusCard, AddCardInk);
+        Paint.StrokeRoundedRect(row, fx, fy, w, h, Theme.RadiusCard, 1, Theme.PanelStroke);
+        float cx = fx + w / 2f, cy = fy + h * 0.38f;
+        Paint.StrokeRoundedRect(row, (int)cx - 30, (int)cy - 26, 48, 36, 6, 2, ink);
+        Paint.FillRoundedRect(row, (int)cx - 18, (int)cy - 14, 48, 36, 6, AddCardInk);
+        Paint.StrokeRoundedRect(row, (int)cx - 18, (int)cy - 14, 48, 36, 6, 2, ink);
+        DrawMid(_small, row, "Save current look", fx + w / 2, fy + h * 112 / CardH, ink);
+        if (focused) Paint.FocusRing(row, fx, fy, w, h, Theme.RadiusCard);
+        ClipLeft(_body, row, "Your look", x, CardTitleY - RowClipTop, focused ? White : Muted, CardW);
     }
 
     private CachedImage CardPicture(ThemeLibraryEntry entry, bool focused)

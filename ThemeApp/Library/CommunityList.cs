@@ -110,9 +110,11 @@ public static class CommunityList
     /// The list request. <paramref name="category"/> is a category id (see <see cref="CommunityCategories"/>); without
     /// one the store lists every theme. The id is escaped, so only what the store would accept reaches it intact.
     /// </summary>
-    public static string ListUrl(string baseUrl, CommunitySort sort, string? category = null, int page = 1, int pageSize = 24) =>
+    public static string ListUrl(string baseUrl, CommunitySort sort, string? category = null, int page = 1, int pageSize = 24,
+        string? query = null) =>
         $"{baseUrl.TrimEnd('/')}/api/themes?sort={SortKey(sort)}&page={page}&pageSize={pageSize}"
-        + (string.IsNullOrEmpty(category) ? "" : "&category=" + Uri.EscapeDataString(category));
+        + (string.IsNullOrEmpty(category) ? "" : "&category=" + Uri.EscapeDataString(category))
+        + (string.IsNullOrEmpty(query) ? "" : "&q=" + Uri.EscapeDataString(query));
 
     public static string LikeUrl(string baseUrl, string id) => $"{baseUrl.TrimEnd('/')}/api/themes/{Uri.EscapeDataString(id)}/like";
 

@@ -151,6 +151,16 @@ public class CommunityListTests
     }
 
     [Fact]
+    public void The_list_url_names_the_search_term_only_when_there_is_one_and_escapes_it()
+    {
+        const string all = "https://t.example/api/themes?sort=top&page=1&pageSize=24";
+        Assert.Equal(all, CommunityList.ListUrl("https://t.example", CommunitySort.Top, query: ""));
+        Assert.Equal(all + "&q=blue", CommunityList.ListUrl("https://t.example", CommunitySort.Top, query: "blue"));
+        Assert.Equal(all + "&category=anime&q=rock%20%26%20roll",
+            CommunityList.ListUrl("https://t.example", CommunitySort.Top, "anime", query: "rock & roll"));
+    }
+
+    [Fact]
     public void The_category_list_is_the_stores_twelve_in_its_order_with_their_labels()
     {
         // Mirrors web/shared/src/categories.ts: the store answers 400 for an id that is not in its list.

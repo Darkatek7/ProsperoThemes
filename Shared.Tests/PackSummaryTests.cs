@@ -57,6 +57,23 @@ public class PackSummaryTests
     }
 
     [Fact]
+    public void Each_group_names_its_kind_and_the_missing_targets_count_in_the_same_groups()
+    {
+        var targets = new List<ThemePackTarget> { Target("vsh_asset/bg_hub_default.dds.zst", "background") };
+        targets.AddRange(Many(16, "vsh_asset/Sce.PlayStation.PUI_UI3.rco#{0}", "svg"));
+        targets.AddRange(Many(9, "rnps/NPXS4004{0}/appdb/default/icon0.png", "icon"));
+
+        PackSummary summary = PackSummary.Of(Pack(targets.ToArray()));
+        Assert.Equal(new[] { PackGroup.Background, PackGroup.Icons, PackGroup.Tiles }, summary.Kinds);
+        Assert.Equal((1, 16, 9, 0), (summary.Count(PackGroup.Background), summary.Count(PackGroup.Icons), summary.Count(PackGroup.Tiles),
+            summary.Count(PackGroup.Sounds)));
+
+        // Three tile icons this console does not have.
+        PackSummary missing = PackSummary.Of(targets.Skip(17).Take(3));
+        Assert.Equal((0, 0, 3), (missing.Count(PackGroup.Background), missing.Count(PackGroup.Icons), missing.Count(PackGroup.Tiles)));
+    }
+
+    [Fact]
     public void Counting_follows_the_stores_rules_not_the_layer_names_of_the_console()
     {
         // pack-info.ts: icons are the svg layer only, tiles are anything under rnps/, per-app images need a real title id.

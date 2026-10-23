@@ -23,6 +23,15 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     /// </summary>
     public bool Sounds { get; init; } = true;
 
+    /// <summary>The order of the library row after the applied theme; "library_sort": "newest" in settings.json.</summary>
+    public LibrarySort LibrarySort { get; init; }
+
+    /// <summary>
+    /// The system software for which the user answered "Not now" when asked to apply the theme again after a system
+    /// update ("reapply_skipped"), so the question does not come back until the next update. Null when never answered.
+    /// </summary>
+    public string? ReapplySkipped { get; init; }
+
     /// <summary>
     /// The public community store, used when settings.json has no "store_url" (a first start writes it there).
     /// An empty "store_url" means the user removed the store on purpose.
@@ -32,8 +41,8 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     /// <summary>Reads settings, tolerating a missing or broken file; a missing device id is created.</summary>
     public static AppSettings Parse(string? json, Func<string> newDeviceId)
     {
-        bool all = false, replace = false, sounds = true;
-        string url = DefaultStoreUrl, device = "";
+        bool all = false, replace = false, sounds = true, newest = false;
+        string url = DefaultStoreUrl, device = "", skipped = "";
         // The SDK's parser, not System.Text.Json: JsonDocument seeds its hashing from the BCL's crypto
         // random source, which pulls OpenSSL imports the console cannot link (see ThemePack.Hash).
         if (!string.IsNullOrWhiteSpace(json) && JsonValue.TryParse(json, out JsonValue root) && root.Type == JsonType.Object)
@@ -41,11 +50,17 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
             all = root.GetString("background_scope") == "all";
             replace = root.GetString("earlier_themes") == "replace";
             sounds = root.GetString("sounds") != "off";
+            newest = root.GetString("library_sort") == "newest";
             url = root.GetString("store_url", url).Trim();
             device = root.GetString("device_id");
+            skipped = root.GetString("reapply_skipped");
         }
         if (!IsDeviceId(device)) device = newDeviceId();
-        return new AppSettings(all, url, device) { ReplaceEarlierThemes = replace, Sounds = sounds };
+        return new AppSettings(all, url, device)
+        {
+            ReplaceEarlierThemes = replace, Sounds = sounds, LibrarySort = newest ? LibrarySort.Newest : LibrarySort.Name,
+            ReapplySkipped = skipped.Length > 0 ? skipped : null,
+        };
     }
 
     public string Serialize()
@@ -54,8 +69,10 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
         o["background_scope"] = AllAppsBackgrounds ? "all" : "default";
         o["earlier_themes"] = ReplaceEarlierThemes ? "replace" : "keep";
         o["sounds"] = Sounds ? "on" : "off";
+        o["library_sort"] = LibrarySort == LibrarySort.Newest ? "newest" : "name";
         o["store_url"] = StoreUrl;
         o["device_id"] = DeviceId;
+        if (ReapplySkipped is { Length: > 0 }) o["reapply_skipped"] = ReapplySkipped;
         return o.Write(indented: true) + "\n";
     }
 

@@ -4,11 +4,13 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
 13.00.
 
 - **Library:** browse your theme packs (`.p5theme`), look at the details (what the theme changes) and a fullscreen
-  preview, apply one and restore the original look at any time. The theme the console shows now is marked "Applied".
+  preview, apply one and restore the original look at any time. The theme the console shows now is marked "Applied"
+  and leads the row; Triangle sorts the rest by name or by newest. When you combine parts of several themes, the
+  row ends with "Save current look", which keeps that mix as a theme of its own in your library.
 - **Community:** download themes other people published at [themes.darkatek7.com](https://themes.darkatek7.com),
   sort them by top rated, most downloaded or new, and like the ones you enjoy. Themes already in your library carry
   an "In library" badge; when a creator publishes a new version, the card says "Update". A theme you liked shows a
-  heart, and Triangle on it removes the like.
+  heart, and Triangle on it removes the like. The Search chip finds themes by name, author or description.
 - **USB import:** packs on a USB drive (its root or a `prospero-themes` folder) are checked and copied into the
   library.
 - **What a theme can change:** the home-screen background, including behind the system tiles (Game Library,
@@ -38,11 +40,11 @@ Your library, backups and settings live in `/data/prospero-themes/`, so updating
 | Screen | Buttons |
 |---|---|
 | Every screen | L1 / R1 switch tab (Library, Community, USB Import, System). D-pad or left stick moves. Circle goes back to the Library. |
-| Library | X opens the details. Square opens the fullscreen preview. Options reloads the library. |
+| Library | X opens the details. Square opens the fullscreen preview. Triangle changes the order. Options reloads the library. On the "Save current look" card at the end, X saves the mix. |
 | Details | X applies the theme (it asks first). Square opens the preview. Circle goes back. |
 | Apply dialog | D-pad chooses, X confirms, Circle cancels. |
 | Preview | X shows or hides the home overlay. Square or Circle goes back. |
-| Community | X downloads (or updates). Triangle likes, or removes your like. Square changes the sort. Options refreshes the list. D-pad up from the first row reaches the category chips: Left and Right move, X filters, Down goes back to the themes. |
+| Community | X downloads (or updates). Triangle likes, or removes your like. Square changes the sort. Options refreshes the list. D-pad up from the first row reaches the chips: Left and Right move, X filters, Down goes back to the themes. X on Search opens a keyboard; Options searches, and X on the chip with a term shows every theme again. |
 | USB Import | X imports from USB. |
 | System | D-pad picks a row, X acts on it. |
 
@@ -64,12 +66,13 @@ Tested on 13.00, but nothing in the app is tied to it: before anything is writte
 replaces is compared with the console's own copy (same image size and texture format). What does not fit
 this console is skipped and listed, never written. After a system update the app notices files the update
 replaced and takes those as the new defaults, so Restore defaults never puts an old firmware's file back.
+It then offers to apply your theme again.
 
-On another firmware, please send a report: on the System tab, X on the Firmware report row saves
-`/data/prospero-themes/reports/firmware-<version>.json` (and a copy on a connected USB drive). It only
-reads, and describes the files a theme can change (sizes, hashes, formats, the icon list). Attach it to an
-issue on this repository; `ThemePackCreator/theme_pack.py catalog-from-report` turns it into a catalog for
-that firmware.
+On another firmware, please send a report: on the System tab, X on the Firmware report row offers "Save" or
+"Save and send". It saves `/data/prospero-themes/reports/firmware-<version>.json` (and a copy on a connected USB
+drive); "Save and send" also sends it to the store and shows a short code. It only reads, and describes the files
+a theme can change (sizes, hashes, formats, the icon list). Open an issue on this repository with the code, or
+attach the file; `ThemePackCreator/theme_pack.py catalog-from-report` turns it into a catalog for that firmware.
 
 ## Making themes
 
@@ -121,6 +124,9 @@ The Community tab talks only to the store address set on the System tab (default
 first start (`/data/prospero-themes/settings.json`); each like sends that ID to the store. The ID is anonymous and
 not linked to your account. The console also keeps its own list of the themes it liked, in
 `/data/prospero-themes/likes.json`, so the hearts show again after a restart. That list stays on the console.
+
+On start the app asks the store for the number of the newest release, to say when an update is out; nothing is
+sent with that question. A firmware report goes to the store only when you choose "Save and send".
 
 ## License
 

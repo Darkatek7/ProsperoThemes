@@ -5,15 +5,19 @@ using System.Collections.Generic;
 
 namespace ProsperoThemes.App.Ui;
 
-/// <summary>StoreAddress is the keyboard screen: opened from System, not a header tab, and it returns there.</summary>
-public enum ThemeView { Library, Detail, Preview, Community, Import, System, StoreAddress }
+/// <summary>
+/// StoreAddress is the keyboard screen: opened from System, not a header tab, and it returns there. Search is the same
+/// keyboard for the Community search: opened from the search chip, and it returns to Community.
+/// </summary>
+public enum ThemeView { Library, Detail, Preview, Community, Import, System, StoreAddress, Search }
 /// <summary>
 /// SaveStoreUrl: Options in the store-address editor; the app reads <see cref="ThemeBrowser.StoreEditor"/>'s text.
 /// PreviewMusic: Square in the preview, which starts or stops the theme's music excerpt (the app owns the sound).
+/// ToggleLibrarySort: Triangle in the library, which switches the order of the row (name or newest).
 /// ToggleBackgroundScope: the System row for app backgrounds. ToggleSounds: the System row for music and sounds. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
 /// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
 /// </summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, Busy }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, Busy }
 
 /// <summary>The two scenes of the preview: the home screen with its row of tiles, and the control centre's row of buttons.</summary>
 public enum PreviewScene { Home, ControlCentre }
@@ -22,9 +26,12 @@ public enum PreviewScene { Home, ControlCentre }
 /// The modal question over Detail or System. Apply asks to apply; ApplyScope is the same for a pack with an all-apps
 /// background and asks where that background goes; Restore asks before the defaults are put back; Remove asks before
 /// the selected pack leaves the library; ApplyParts lets the user tick the parts of a theme to apply (its options are
-/// <see cref="ThemeBrowser.DialogParts"/>, then Apply and Cancel).
+/// <see cref="ThemeBrowser.DialogParts"/>, then Apply and Cancel); RestoreParts is Restore when the console shows more
+/// than one part, with the parts to put back ticked the same way; Reapply asks after a system update whether to apply
+/// the theme again (the app opens it, <see cref="ThemeBrowser.AskReapply"/>); FirmwareReport says what the report holds
+/// and whether to only save it or also send it to the store.
 /// </summary>
-public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts }
+public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts, RestoreParts, Reapply, FirmwareReport }
 
 /// <summary>The focusable rows of the System screen, top to bottom.</summary>
 public enum SystemRow { Backgrounds, EarlierThemes, Sounds, StoreAddress, FirmwareReport, Restore }
@@ -35,12 +42,21 @@ public sealed class ThemeBrowser
     private static readonly string[] ScopeOptions = ["Apps without their own image", "All apps", "Cancel"];
     private static readonly string[] RestoreOptions = ["Restore defaults", "Cancel"];
     private static readonly string[] RemoveOptions = ["Remove from library", "Cancel"];
+    private static readonly string[] ReapplyOptions = ["Apply again", "Not now"];
+    private static readonly string[] ReportOptions = ["Save", "Save and send", "Cancel"];
 
     /// <summary>Number of focusable rows on the System screen.</summary>
     public const int SystemRowCount = 6;
 
     public ThemeView View { get; private set; }
     public int Selected { get; private set; } = -1;
+    /// <summary>
+    /// Whether the current look combines themes that are all in the library, so it can be saved as a theme of its own
+    /// (set by the app from look.json). The library row then ends with the card that does that.
+    /// </summary>
+    public bool LookSavable { get; set; }
+    /// <summary>Whether the library's focus is on the "Save current look" card after the packs (<see cref="Selected"/> stays on the last pack).</summary>
+    public bool LookCardFocused { get; private set; }
     public bool ShowOverlay { get; private set; } = true;
     /// <summary>The scene of the preview: the home row, or the control centre (Triangle goes between them).</summary>
     public PreviewScene PreviewScene { get; private set; }
@@ -64,11 +80,25 @@ public sealed class ThemeBrowser
         DialogKind.ApplyScope => ScopeOptions,
         DialogKind.Restore => RestoreOptions,
         DialogKind.Remove => RemoveOptions,
-        DialogKind.ApplyParts => _partsOptions,
+        DialogKind.Reapply => ReapplyOptions,
+        DialogKind.FirmwareReport => ReportOptions,
+        DialogKind.ApplyParts or DialogKind.RestoreParts => _partsOptions,
         _ => Array.Empty<string>(),
     };
-    /// <summary>The parts the open ApplyParts dialog lists, in order: its first options. Empty for every other dialog.</summary>
-    public IReadOnlyList<ThemePart> DialogParts => Dialog == DialogKind.ApplyParts ? _dialogParts : Array.Empty<ThemePart>();
+    /// <summary>Whether the last <see cref="ThemeAction.FirmwareReport"/> also sends the report to the store ("Save and send").</summary>
+    public bool SendReport { get; private set; }
+    /// <summary>The parts the open ApplyParts or RestoreParts dialog lists, in order: its first options. Empty for every other dialog.</summary>
+    public IReadOnlyList<ThemePart> DialogParts =>
+        Dialog is DialogKind.ApplyParts or DialogKind.RestoreParts ? _dialogParts : Array.Empty<ThemePart>();
+    /// <summary>The parts ticked in the open parts dialog.</summary>
+    public ThemePart DialogTicked => Dialog == DialogKind.RestoreParts ? RestoreParts : ApplyParts;
+    /// <summary>
+    /// The parts the next restore puts back: every part (a full restore) unless the RestoreParts dialog had some of its
+    /// parts unticked.
+    /// </summary>
+    public ThemePart RestoreParts { get; private set; } = ThemePart.All;
+    // The parts the console shows, which a restore can offer (see Update).
+    private ThemePart _restorable;
     /// <summary>
     /// The parts the next apply writes: what the user ticked in the ApplyParts dialog, or every part when the apply
     /// did not ask (a pack with one part).
@@ -91,12 +121,24 @@ public sealed class ThemeBrowser
     /// <summary>Whether the filter chip row above the grid has the focus (and not a card).</summary>
     public bool CommunityChipFocused { get; private set; }
     /// <summary>
-    /// The chip the cursor is on while <see cref="CommunityChipFocused"/>: 0 is "All", 1 and up are the categories in order
-    /// (so the chip of <see cref="CommunityCategory"/> is that plus one). Moving into the row starts on the chosen chip.
+    /// The chip the cursor is on while <see cref="CommunityChipFocused"/>: <see cref="SearchChip"/>, then
+    /// <see cref="AllChip"/>, then the categories in order (<see cref="ChipOfCategory"/>). Moving into the row starts on
+    /// the chosen category's chip.
     /// </summary>
     public int CommunityChip { get; private set; }
-    /// <summary>The chips of the filter row: "All" and every category.</summary>
-    public static int CommunityChipCount => CommunityCategories.Count + 1;
+    /// <summary>The chips of the filter row: the search, "All" and every category.</summary>
+    public static int CommunityChipCount => CommunityCategories.Count + 2;
+    /// <summary>The first chip: "Search" opens the keyboard; with a search term it shows the term, and X removes it.</summary>
+    public const int SearchChip = 0;
+    public const int AllChip = 1;
+    /// <summary>The chip of a category (an index into <see cref="CommunityCategories.List"/>, -1 for "All").</summary>
+    public static int ChipOfCategory(int category) => category + 2;
+    /// <summary>The category of a chip after the search chip (-1 for "All").</summary>
+    public static int CategoryOfChip(int chip) => chip - 2;
+    /// <summary>What the Community tab searches for (the store's <c>q=</c>); empty for no search.</summary>
+    public string CommunityQuery { get; private set; } = "";
+    /// <summary>The keyboard behind <see cref="ThemeView.Search"/>.</summary>
+    public StoreAddressEditor SearchEditor { get; private set; } = StoreAddressEditor.ForSearch();
     /// <summary>The saved store address: shown on System and what the editor starts from. The app keeps it current.</summary>
     public string StoreUrl { get; set; } = "";
     /// <summary>The keyboard behind <see cref="ThemeView.StoreAddress"/>; keeps its text after the screen is left.</summary>
@@ -114,8 +156,16 @@ public sealed class ThemeBrowser
         _count = Math.Max(0, count);
         Selected = _count == 0 ? -1 : Math.Clamp(Selected, 0, _count - 1);
         if (_count == 0 && View is ThemeView.Detail or ThemeView.Preview) View = ThemeView.Library;
-        // The library changed under the question, so it may no longer be about the pack that is selected.
-        Dialog = DialogKind.None;
+        // The library changed under the question, so it may no longer be about the pack that is selected. The question
+        // after a system update is about the look, not the selection, so it stays.
+        if (Dialog != DialogKind.Reapply) Dialog = DialogKind.None;
+    }
+
+    /// <summary>Puts the focus on the pack at <paramref name="index"/> (after the library was put in another order).</summary>
+    public void Select(int index)
+    {
+        if (_count > 0) Selected = Math.Clamp(index, 0, _count - 1);
+        LookCardFocused = false;
     }
 
     /// <summary>
@@ -174,8 +224,9 @@ public sealed class ThemeBrowser
     /// </summary>
     public void Update(UiInput input, bool preview = false, bool options = false, bool triangle = false,
         bool asksScope = false, bool allAppsScope = false, bool busy = false, bool removable = false,
-        ThemePart parts = ThemePart.None, bool sounds = true)
+        ThemePart parts = ThemePart.None, bool sounds = true, ThemePart restorable = ThemePart.None)
     {
+        _restorable = restorable;
         // One Update is one frame, and an open dialog answers first. The X that opens a dialog (below) returns
         // right after opening it, so the same X cannot also confirm it.
         if (Dialog != DialogKind.None)
@@ -198,6 +249,29 @@ public sealed class ThemeBrowser
                 StoreEditor.Move((input.Right ? 1 : 0) - (input.Left ? 1 : 0), (input.Down ? 1 : 0) - (input.Up ? 1 : 0));
                 if (input.Confirm) StoreEditor.Press();
                 if (preview) StoreEditor.Backspace();
+            }
+            return;
+        }
+        if (View == ThemeView.Search)
+        {
+            // O goes back without searching; Options searches for what is typed (nothing typed shows every theme).
+            if (input.Cancel) View = ThemeView.Community;
+            else if (options)
+            {
+                View = ThemeView.Community;
+                string query = SearchEditor.Text.Trim();
+                if (query != CommunityQuery)
+                {
+                    CommunityQuery = query;
+                    CommunitySelected = _communityCount == 0 ? -1 : 0;
+                    _action = ThemeAction.CommunityRefresh;
+                }
+            }
+            else
+            {
+                SearchEditor.Move((input.Right ? 1 : 0) - (input.Left ? 1 : 0), (input.Down ? 1 : 0) - (input.Up ? 1 : 0));
+                if (input.Confirm) SearchEditor.Press();
+                if (preview) SearchEditor.Backspace();
             }
             return;
         }
@@ -227,7 +301,8 @@ public sealed class ThemeBrowser
             UpdateSystem(input, busy);
             return;
         }
-        if (preview && Selected >= 0 && View is ThemeView.Library or ThemeView.Detail)
+        if (!LookSavable) LookCardFocused = false;
+        if (preview && Selected >= 0 && (View == ThemeView.Detail || View == ThemeView.Library && !LookCardFocused))
         {
             _previewOrigin = View;
             ShowOverlay = true;
@@ -239,13 +314,27 @@ public sealed class ThemeBrowser
             View = ThemeView.Preview;
             return;
         }
-        if (View == ThemeView.Library && _count > 0)
+        if (View == ThemeView.Library && _count > 0 && LookCardFocused)
         {
-            if (input.Right || input.Down) Selected = Math.Min(_count - 1, Selected + 1);
+            // The card after the last pack: back onto the packs, or save the look.
+            if (input.Left || input.Up) LookCardFocused = false;
+            if (input.Home) Select(0);
+            if (input.Confirm) _action = busy ? ThemeAction.Busy : ThemeAction.SaveLook;
+            else if (triangle) _action = ThemeAction.ToggleLibrarySort;
+        }
+        else if (View == ThemeView.Library && _count > 0)
+        {
+            if ((input.Right || input.Down) && Selected == _count - 1 && LookSavable) LookCardFocused = true;
+            else if (input.Right || input.Down) Selected = Math.Min(_count - 1, Selected + 1);
             if (input.Left || input.Up) Selected = Math.Max(0, Selected - 1);
             if (input.Home) Selected = 0;
-            if (input.End) Selected = _count - 1;
-            if (input.Confirm) View = ThemeView.Detail;
+            if (input.End)
+            {
+                Selected = _count - 1;
+                LookCardFocused = LookSavable;
+            }
+            if (input.Confirm && !LookCardFocused) View = ThemeView.Detail;
+            else if (triangle) _action = ThemeAction.ToggleLibrarySort;
         }
         else if (View == ThemeView.Detail)
         {
@@ -351,10 +440,25 @@ public sealed class ThemeBrowser
             int step = (input.Right ? 1 : 0) - (input.Left ? 1 : 0);
             if (step != 0) CommunityChip = Math.Clamp(CommunityChip + step, 0, CommunityChipCount - 1);
             if (input.Down) CommunityChipFocused = false;
+            else if (input.Confirm && CommunityChip == SearchChip)
+            {
+                // Without a term X opens the keyboard (typing starts on the next frame); with one, X removes it.
+                if (CommunityQuery.Length == 0)
+                {
+                    SearchEditor = StoreAddressEditor.ForSearch();
+                    View = ThemeView.Search;
+                }
+                else
+                {
+                    CommunityQuery = "";
+                    CommunitySelected = _communityCount == 0 ? -1 : 0;
+                    _action = ThemeAction.CommunityRefresh;
+                }
+            }
             else if (input.Confirm)
             {
                 // The list on screen stays until the filtered one arrives, like a new sort.
-                CommunityCategory = CommunityChip - 1;
+                CommunityCategory = CategoryOfChip(CommunityChip);
                 CommunitySelected = _communityCount == 0 ? -1 : 0;
                 _action = ThemeAction.CommunityRefresh;
             }
@@ -363,7 +467,7 @@ public sealed class ThemeBrowser
         else if (input.Up && (_communityCount == 0 || CommunitySelected < columns))
         {
             CommunityChipFocused = true;
-            CommunityChip = CommunityCategory + 1;
+            CommunityChip = ChipOfCategory(CommunityCategory);
         }
         else if (_communityCount > 0)
         {
@@ -404,13 +508,32 @@ public sealed class ThemeBrowser
                 OpenStoreAddress(StoreUrl);
                 break;
             case SystemRow.FirmwareReport:
-                _action = busy ? ThemeAction.Busy : ThemeAction.FirmwareReport;
+                if (busy) _action = ThemeAction.Busy;
+                else OpenDialog(DialogKind.FirmwareReport, 0);   // starts on Save; sending is a choice of its own
                 break;
             case SystemRow.Restore:
+                RestoreParts = ThemePart.All;
                 if (busy) _action = ThemeAction.Busy;
+                else if (ThemeParts.List(_restorable) is { Count: > 1 } list)
+                {
+                    // Every part starts ticked (that is the full restore); the focus starts on Cancel.
+                    _dialogParts = list;
+                    _partsOptions = [.. list.ConvertAll(ThemeParts.Label), "Restore defaults", "Cancel"];
+                    RestoreParts = _restorable;
+                    OpenDialog(DialogKind.RestoreParts, list.Count + 1);
+                }
                 else OpenDialog(DialogKind.Restore, RestoreOptions.Length - 1);   // starts on Cancel
                 break;
         }
+    }
+
+    /// <summary>
+    /// Asks whether to apply the theme again after a system update, unless another question is open. The focus starts
+    /// on "Apply again"; "Not now" and O answer <see cref="ThemeAction.ReapplyLater"/>.
+    /// </summary>
+    public void AskReapply()
+    {
+        if (Dialog == DialogKind.None) OpenDialog(DialogKind.Reapply, 0);
     }
 
     private void OpenDialog(DialogKind kind, int focus)
@@ -423,10 +546,33 @@ public sealed class ThemeBrowser
     private void UpdateDialog(UiInput input, bool busy)
     {
         int last = DialogOptions.Count - 1;   // Cancel is always the last option
-        if (input.Cancel) { Dialog = DialogKind.None; return; }
+        if (input.Cancel)
+        {
+            if (Dialog == DialogKind.Reapply) _action = ThemeAction.ReapplyLater;
+            Dialog = DialogKind.None;
+            return;
+        }
         if (input.Confirm && Dialog == DialogKind.ApplyParts && DialogFocus < _dialogParts.Count)
         {
             ApplyParts ^= _dialogParts[DialogFocus];   // a part is ticked or unticked; the dialog stays
+            return;
+        }
+        if (input.Confirm && Dialog == DialogKind.RestoreParts && DialogFocus < _dialogParts.Count)
+        {
+            // The system icons and the UI sounds share one file, so they are ticked and unticked together.
+            ThemePart part = _dialogParts[DialogFocus];
+            if ((part & (ThemePart.Icons | ThemePart.Sounds)) != 0) part = (ThemePart.Icons | ThemePart.Sounds) & _restorable;
+            RestoreParts = (RestoreParts & part) != 0 ? RestoreParts & ~part : RestoreParts | part;
+            return;
+        }
+        if (input.Confirm && Dialog == DialogKind.RestoreParts && DialogFocus < last)
+        {
+            // Restore defaults: nothing happens with nothing ticked; everything the console shows is the full restore.
+            if (RestoreParts == ThemePart.None) return;
+            Dialog = DialogKind.None;
+            if (busy) { _action = ThemeAction.Busy; return; }
+            if (RestoreParts == _restorable) RestoreParts = ThemePart.All;
+            _action = ThemeAction.RestoreOriginals;
             return;
         }
         if (input.Confirm && Dialog == DialogKind.ApplyParts && DialogFocus < last)
@@ -450,10 +596,21 @@ public sealed class ThemeBrowser
             DialogKind kind = Dialog;
             int chosen = DialogFocus;
             Dialog = DialogKind.None;
-            if (chosen >= last) return;   // Cancel
+            if (chosen >= last)   // Cancel
+            {
+                if (kind == DialogKind.Reapply) _action = ThemeAction.ReapplyLater;
+                return;
+            }
             if (busy) { _action = ThemeAction.Busy; return; }
             switch (kind)
             {
+                case DialogKind.Reapply:
+                    _action = ThemeAction.Reapply;
+                    break;
+                case DialogKind.FirmwareReport:
+                    SendReport = chosen == 1;
+                    _action = ThemeAction.FirmwareReport;
+                    break;
                 case DialogKind.Apply:
                     ApplyAsksScope = false;
                     ApplyAllApps = false;
@@ -465,6 +622,7 @@ public sealed class ThemeBrowser
                     _action = ThemeAction.Apply;
                     break;
                 case DialogKind.Restore:
+                    RestoreParts = ThemePart.All;
                     _action = ThemeAction.RestoreOriginals;
                     break;
                 case DialogKind.Remove:

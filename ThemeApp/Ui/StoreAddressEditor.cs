@@ -15,12 +15,14 @@ public readonly record struct EditorKey(string Label, string? Text, int Width = 
 }
 
 /// <summary>
-/// The text and keyboard focus behind the store-address screen. Plain state with no drawing or I/O, like
-/// <see cref="ThemeBrowser"/>, so the PC tests cover it. Lowercase only: store addresses need no capitals.
+/// The text and keyboard focus behind the store-address screen, and behind the Community search
+/// (<see cref="ForSearch"/>, with its own keys). Plain state with no drawing or I/O, like <see cref="ThemeBrowser"/>, so
+/// the PC tests cover it. Lowercase only: store addresses need no capitals, and the store's search ignores case.
 /// </summary>
 public sealed class StoreAddressEditor
 {
     public const int MaxLength = 200;
+    public const int SearchMaxLength = 60;
     public const int Columns = 10;
 
     /// <summary>Rows of keys from the top; the last one is made of wide keys.</summary>
@@ -33,19 +35,43 @@ public sealed class StoreAddressEditor
         [new("http://", "http://", 2), new("https://", "https://", 2), new(":8080", ":8080", 2), new("Default", AppSettings.DefaultStoreUrl, 2, Replaces: true), new("Clear all", null, 2)],
     ];
 
+    /// <summary>The keys of the search: digits, letters, a few signs that appear in theme names, and a wide space bar.</summary>
+    public static readonly IReadOnlyList<IReadOnlyList<EditorKey>> SearchLayout =
+    [
+        Characters("1234567890"),
+        Characters("abcdefghij"),
+        Characters("klmnopqrst"),
+        Characters("uvwxyz-'&."),
+        [new("Space", " ", 6), new("Clear all", null, 4)],
+    ];
+
     private int _preferred;   // grid column vertical moves aim for, so up and down return to where they began
 
     /// <summary>Focus starts on "http://" for an empty address, since that is what comes first; otherwise on the digits.</summary>
-    public StoreAddressEditor(string text = "")
+    public StoreAddressEditor(string text = "") : this(text, Layout, MaxLength)
     {
-        Text = text.Length > MaxLength ? text[..MaxLength] : text;
         if (Text.Length == 0) Row = Layout.Count - 1;
     }
 
+    private StoreAddressEditor(string text, IReadOnlyList<IReadOnlyList<EditorKey>> keys, int limit)
+    {
+        Keys = keys;
+        Limit = limit;
+        Text = text.Length > limit ? text[..limit] : text;
+    }
+
+    /// <summary>The keyboard of the Community search, with <paramref name="text"/>; the focus starts on the letters.</summary>
+    public static StoreAddressEditor ForSearch(string text = "") => new(text, SearchLayout, SearchMaxLength) { Row = 1 };
+
+    /// <summary>The rows of keys this keyboard shows: <see cref="Layout"/>, or <see cref="SearchLayout"/> for the search.</summary>
+    public IReadOnlyList<IReadOnlyList<EditorKey>> Keys { get; }
+    /// <summary>The longest text it takes.</summary>
+    public int Limit { get; }
+    public bool IsSearch => ReferenceEquals(Keys, SearchLayout);
     public string Text { get; private set; }
     public int Row { get; private set; }
     public int Column { get; private set; }
-    public EditorKey Focused => Layout[Row][Column];
+    public EditorKey Focused => Keys[Row][Column];
 
     /// <summary>A message for the person typing (why the last save failed); gone as soon as the text changes.</summary>
     public string Notice { get; set; } = "";
@@ -55,33 +81,35 @@ public sealed class StoreAddressEditor
     {
         if (dx != 0)
         {
-            Column = Math.Clamp(Column + dx, 0, Layout[Row].Count - 1);
-            _preferred = StartColumn(Row, Column);
+            Column = Math.Clamp(Column + dx, 0, Keys[Row].Count - 1);
+            _preferred = StartOf(Keys[Row], Column);
         }
         if (dy != 0)
         {
-            Row = Math.Clamp(Row + dy, 0, Layout.Count - 1);
-            Column = KeyAt(Row, _preferred);
+            Row = Math.Clamp(Row + dy, 0, Keys.Count - 1);
+            Column = KeyAt(Keys[Row], _preferred);
         }
     }
 
-    /// <summary>Grid column where a key begins.</summary>
-    public static int StartColumn(int row, int column)
+    /// <summary>Grid column where a key of the store-address keyboard begins.</summary>
+    public static int StartColumn(int row, int column) => StartOf(Layout[row], column);
+
+    private static int StartOf(IReadOnlyList<EditorKey> row, int column)
     {
         int start = 0;
-        for (int i = 0; i < column; i++) start += Layout[row][i].Width;
+        for (int i = 0; i < column; i++) start += row[i].Width;
         return start;
     }
 
-    private static int KeyAt(int row, int gridColumn)
+    private static int KeyAt(IReadOnlyList<EditorKey> row, int gridColumn)
     {
         int start = 0;
-        for (int i = 0; i < Layout[row].Count; i++)
+        for (int i = 0; i < row.Count; i++)
         {
-            start += Layout[row][i].Width;
+            start += row[i].Width;
             if (gridColumn < start) return i;
         }
-        return Layout[row].Count - 1;
+        return row.Count - 1;
     }
 
     /// <summary>Types the focused key (or clears everything). Returns false when the text is full.</summary>
@@ -91,11 +119,11 @@ public sealed class StoreAddressEditor
         if (key.IsClear) { Clear(); return true; }
         if (key.Replaces)
         {
-            Text = key.Text!.Length > MaxLength ? key.Text[..MaxLength] : key.Text;
+            Text = key.Text!.Length > Limit ? key.Text[..Limit] : key.Text;
             Notice = "";
             return true;
         }
-        if (Text.Length + key.Text!.Length > MaxLength) return false;
+        if (Text.Length + key.Text!.Length > Limit) return false;
         Text += key.Text;
         Notice = "";
         return true;

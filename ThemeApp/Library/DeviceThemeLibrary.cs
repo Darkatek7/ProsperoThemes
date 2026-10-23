@@ -6,7 +6,8 @@ using ProsperoThemes.Shared;
 
 namespace ProsperoThemes.App.Library;
 
-public sealed record LibrarySnapshot(IReadOnlyList<ThemeLibraryEntry> Entries, string Message);
+/// <summary>The packs, the scan's message, and when each library pack came in (see <see cref="LibraryOrder"/>).</summary>
+public sealed record LibrarySnapshot(IReadOnlyList<ThemeLibraryEntry> Entries, string Message, IReadOnlyDictionary<string, long>? Added = null);
 
 /// <summary>
 /// Device file access, called on a worker rather than the frame thread. The library goes through
@@ -50,7 +51,7 @@ public static class DeviceThemeLibrary
         entries.Sort((a, b) => string.Compare(a.Manifest.Name, b.Manifest.Name, StringComparison.OrdinalIgnoreCase));
         string message = errors.Count > 0 ? string.Join(" | ", errors) : entries.Count >= MaxPacks ?
             "Library shows the first 128 valid packs." : "Packs checked. Ready to preview.";
-        return new LibrarySnapshot(entries, message);
+        return new LibrarySnapshot(entries, message, RecordAdded(entries));
     }
 
     public static LibrarySnapshot ImportUsb()
@@ -149,6 +150,23 @@ public static class DeviceThemeLibrary
         for (int n = 2; Files.Exists(target); n++) target = Attic + "/" + stem + "-" + n + extension;
         Files.Move(path, target);
         return Scan() with { Message = "Removed “" + name + "” from your library." };
+    }
+
+    /// <summary>
+    /// When each library pack came in: read from <see cref="LibraryOrder.AddedPath"/>, with the time of this scan for the
+    /// packs it does not know yet (so packs from before the file existed start in the order of their first scan).
+    /// </summary>
+    private static Dictionary<string, long> RecordAdded(List<ThemeLibraryEntry> entries)
+    {
+        Dictionary<string, long> added;
+        try { added = LibraryOrder.ParseAdded(Files.Exists(LibraryOrder.AddedPath) ? Files.ReadAllText(LibraryOrder.AddedPath) : null); }
+        catch { added = new Dictionary<string, long>(StringComparer.Ordinal); }
+        if (LibraryOrder.Record(added, entries, HelperDeviceFiles.UnixSeconds()))
+        {
+            try { Files.WriteAllText(LibraryOrder.AddedPath, LibraryOrder.SerializeAdded(added)); }
+            catch { /* the order by date lasts until the app quits */ }
+        }
+        return added;
     }
 
     private static bool IsPack(string name) => name.EndsWith(".p5theme", StringComparison.OrdinalIgnoreCase) ||

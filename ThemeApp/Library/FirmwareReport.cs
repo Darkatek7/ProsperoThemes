@@ -63,6 +63,28 @@ public static class FirmwareReport
     }
 
     /// <summary>"firmware-13.000.000.json"; anything but digits, letters and dots becomes "_".</summary>
+    /// <summary>Where the store takes a report (POST); it answers with a short code to post in a GitHub issue.</summary>
+    public static string UploadUrl(string baseUrl) => baseUrl.TrimEnd('/') + "/api/firmware-reports";
+
+    /// <summary>The code in the store's answer (<c>{"code":"K7Q2MX"}</c>), or null when it holds none.</summary>
+    public static string? ParseCode(string? json)
+    {
+        if (json is null || !JsonValue.TryParse(json, out JsonValue root)) return null;
+        string code = root.GetString("code");
+        if (code.Length is < 4 or > 12) return null;
+        foreach (char c in code)
+            if (c is not ((>= 'A' and <= 'Z') or (>= '0' and <= '9'))) return null;
+        return code;
+    }
+
+    /// <summary>Why the store did not take a report, from its status and its <c>{"error": ...}</c> answer.</summary>
+    public static string SendProblem(int status, string? json)
+    {
+        if (status == 429) return "the store takes only a few reports an hour from one network; try again later";
+        string error = json is not null && JsonValue.TryParse(json, out JsonValue root) ? root.GetString("error") : "";
+        return error.Length > 0 ? $"the store answered {status}: {error}" : $"the store answered {status}";
+    }
+
     public static string FileName(string? firmware)
     {
         string name = string.IsNullOrEmpty(firmware) ? "unknown" : firmware;

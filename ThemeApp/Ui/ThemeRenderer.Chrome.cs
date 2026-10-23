@@ -27,6 +27,8 @@ public sealed partial class ThemeRenderer
     // The time the notice was posted: set by the first Draw after Notify, since only Draw knows the time.
     private double _noticeAt;
     private bool _noticeFresh;
+    // How far the running job is (0 to 1), drawn as a bar in the toast while Busy; below 0 for no bar.
+    private float _noticeProgress = -1f;
 
     /// <summary>
     /// Shows one toast in the footer band, replacing the one on screen. It stays while <see cref="Busy"/> is true and
@@ -40,6 +42,17 @@ public sealed partial class ThemeRenderer
         _noticeTextWidth = widest;
         _noticeLevel = level;
         _noticeFresh = true;
+        _noticeProgress = -1f;
+    }
+
+    /// <summary>
+    /// The toast of a running job with how far it is: <paramref name="fraction"/> from 0 to 1, shown as a bar under the
+    /// text while <see cref="Busy"/> is true. The next <see cref="Notify"/> removes the bar.
+    /// </summary>
+    public void ShowProgress(string text, float fraction)
+    {
+        Notify(text, NoticeLevel.Info);
+        _noticeProgress = Math.Clamp(fraction, 0f, 1f);
     }
 
     /// <summary>Removes the toast at once.</summary>
@@ -62,21 +75,33 @@ public sealed partial class ThemeRenderer
             return;
         }
 
-        const int padX = 32, padY = 12, dot = 16, gap = 16;
+        const int padX = 32, padY = 12, dot = 16, gap = 16, bar = 6, barGap = 10, barMinWidth = 560;
+        bool progress = Busy && _noticeProgress >= 0f;
         int lineHeight = _body.LineHeight;
         int width = padX + dot + gap + _noticeTextWidth + padX;
-        int height = Math.Max(56, _noticeLines.Count * lineHeight + 2 * padY);
-        // One line is a pill; two lines are a panel (a pill that tall would look swollen).
-        int radius = _noticeLines.Count > 1 ? Theme.RadiusPanel : Theme.RadiusPill(height);
+        // With a bar the toast keeps one width while the counts in its text change.
+        if (progress) width = Math.Max(width, padX + dot + gap + barMinWidth + padX);
+        int textHeight = _noticeLines.Count * lineHeight + (progress ? barGap + bar : 0);
+        int height = Math.Max(56, textHeight + 2 * padY);
+        // One line is a pill; two lines or a bar are a panel (a pill that tall would look swollen).
+        int radius = _noticeLines.Count > 1 || progress ? Theme.RadiusPanel : Theme.RadiusPill(height);
         int x = Theme.SafeX;
         int y = (x + width + 2 * Theme.Unit <= _hintBarLeft ? NoticeBottom : NoticeBottomAbove) - height;
         Paint.FillRoundedRect(s, x, y, width, height, radius, Faded(Ink.WithAlpha(250), k));
         Paint.StrokeRoundedRect(s, x, y, width, height, radius, 1, Faded(Theme.PanelStroke, k));
         Color level = _noticeLevel switch { NoticeLevel.Success => Theme.Success, NoticeLevel.Error => Theme.Danger, _ => Accent };
-        Paint.FillCircle(s, x + padX + dot / 2f, y + height / 2f, dot / 2f, Faded(level, k));
-        int textTop = y + (height - _noticeLines.Count * lineHeight) / 2;
+        int textTop = y + (height - textHeight) / 2;
+        // Next to the text: with a bar under it, the middle of the toast is lower than the line.
+        float dotY = progress ? textTop + lineHeight / 2f : y + height / 2f;
+        Paint.FillCircle(s, x + padX + dot / 2f, dotY, dot / 2f, Faded(level, k));
         for (int i = 0; i < _noticeLines.Count; i++)
             DrawLeft(_body, s, _noticeLines[i], x + padX + dot + gap, textTop + i * lineHeight, Faded(White, k));
+        if (!progress) return;
+        int barX = x + padX + dot + gap, barY = textTop + _noticeLines.Count * lineHeight + barGap;
+        int barWidth = width - (barX - x) - padX;
+        Paint.FillRoundedRect(s, barX, barY, barWidth, bar, bar / 2, White.WithAlpha(50));
+        int filled = (int)(barWidth * _noticeProgress);
+        if (filled >= bar) Paint.FillRoundedRect(s, barX, barY, filled, bar, bar / 2, Accent);
     }
 
     private static Color Faded(Color color, float k) => k >= 1f ? color : color.WithAlpha((byte)(color.A * k));
@@ -84,37 +109,50 @@ public sealed partial class ThemeRenderer
     // ---- Dialogs ----------------------------------------------------------------------------------------------------
 
     // The wrapped body text of each dialog; it does not depend on the pack, so it is wrapped once.
-    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[5];
+    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[8];
+    private string _reapplyText = "";
+
+    /// <summary>The text of the Reapply question (it names the system software and the themes; see SystemUpdate.Text).</summary>
+    public string ReapplyText
+    {
+        get => _reapplyText;
+        set { _reapplyText = value; _dialogBody[(int)DialogKind.Reapply - 1] = null; }
+    }
     private const int DialogWidth = 900, DialogPad = 48, DialogRow = 72, DialogGap = 16;
     // The ticked parts of the ApplyParts dialog are lower rows, so six of them and the two buttons fit on the screen.
     private const int DialogPartRow = 56, DialogPartGap = 8, DialogCheck = 30;
 
     private static string DialogTitle(DialogKind kind) => kind switch
     {
-        DialogKind.Restore => "Restore defaults?",
+        DialogKind.Restore or DialogKind.RestoreParts => "Restore defaults?",
+        DialogKind.Reapply => "Apply your theme again?",
+        DialogKind.FirmwareReport => "Firmware report",
         DialogKind.Remove => "Remove this theme?",
         _ => "Apply this theme?",
     };
 
-    private static string DialogText(DialogKind kind) => kind switch
+    private string DialogText(DialogKind kind) => kind switch
     {
+        DialogKind.Reapply => _reapplyText,
+        DialogKind.FirmwareReport => "Lists the console’s theme files (names, sizes, checksums), the system software and the app version; nothing personal. Save and send also gives it to the store, which answers with a code to post in your GitHub issue.",
         DialogKind.Restore => "Puts the original backgrounds, icons and sounds back on this console. Your theme library stays as it is.",
         DialogKind.ApplyScope => "This theme has a background for apps. Choose where it goes: only apps without their own image, or all apps.",
         DialogKind.Remove => "Takes it out of your library; the file is kept in /data/prospero-themes/attic. If it is applied, it stays on the console until another theme replaces it or you restore the defaults.",
         DialogKind.ApplyParts => "Tick the parts to apply. Icons and sounds change after the next restart.",
+        DialogKind.RestoreParts => "Tick the parts to put back. System icons and sounds share one file, so they go back together. Your library stays as it is.",
         _ => "This changes the backgrounds, icons and sounds on this console. Restore defaults on the System tab puts the originals back.",
     };
 
     // What is on screen under a dialog, as it looks once dimmed. The screen behind a dialog is still, so it is dimmed
     // once (a full-screen pass is several milliseconds) and copied on every later frame, until something it shows changes.
     private readonly record struct DialogBase(ThemeView View, string? Path, bool Applied, bool Busy, bool AllApps, bool Replace, bool Sounds,
-        int Row, string StoreUrl, string Firmware, int Count);
+        int Row, string StoreUrl, string Firmware, int Count, string NewerVersion, string ReportCode);
     private PixelBuffer? _dialogBase;
     private DialogBase _dialogKey;
 
     private DialogBase DialogBaseKey(ThemeBrowser browser, ThemeLibraryEntry? selected, int count) =>
         new(browser.View, selected?.Path, selected is not null && IsApplied(selected), Busy, AllAppsBackgrounds, ReplaceEarlierThemes,
-            Sounds, browser.SystemSelected, browser.StoreUrl, Firmware, count);
+            Sounds, browser.SystemSelected, browser.StoreUrl, Firmware, count, NewerVersion, ReportCode);
 
     private void ReleaseDialogBase()
     {
@@ -141,7 +179,7 @@ public sealed partial class ThemeRenderer
         IReadOnlyList<ThemePart> parts = browser.DialogParts;
         int bodyWidth = DialogWidth - 2 * DialogPad;
         IReadOnlyList<string> body = _dialogBody[(int)kind - 1] ??= _body.Wrap(DialogText(kind), bodyWidth, 5);
-        bool named = kind != DialogKind.Restore && entry is not null;
+        bool named = kind is not (DialogKind.Restore or DialogKind.RestoreParts or DialogKind.Reapply or DialogKind.FirmwareReport) && entry is not null;
 
         int height = DialogPad + _screenHeading.LineHeight + 16;
         if (named) height += _label.LineHeight + 8 + _small.LineHeight + 16;
@@ -171,7 +209,7 @@ public sealed partial class ThemeRenderer
         for (int i = 0; i < parts.Count; i++)
         {
             // A part: a check box and its name, on a lower row; X ticks it.
-            bool focus = i == browser.DialogFocus, on = (browser.ApplyParts & parts[i]) != 0;
+            bool focus = i == browser.DialogFocus, on = (browser.DialogTicked & parts[i]) != 0;
             Paint.FillRoundedRect(s, tx, ty, bodyWidth, DialogPartRow, Theme.RadiusKey, focus ? SysRowFocusFill : KeyFill);
             if (focus) Paint.FocusRing(s, tx, ty, bodyWidth, DialogPartRow, Theme.RadiusKey, Accent);
             int bx = tx + 20, by = ty + (DialogPartRow - DialogCheck) / 2;
@@ -190,9 +228,9 @@ public sealed partial class ThemeRenderer
         {
             bool focus = i == browser.DialogFocus;
             bool cancel = i == options.Count - 1;
-            bool destructive = kind is DialogKind.Restore or DialogKind.Remove && i == 0;
-            // Apply theme with nothing ticked does nothing, so it looks switched off.
-            bool off = kind == DialogKind.ApplyParts && !cancel && browser.ApplyParts == ThemePart.None;
+            bool destructive = kind is DialogKind.Restore or DialogKind.Remove or DialogKind.RestoreParts && i == parts.Count;
+            // Apply theme or Restore defaults with nothing ticked does nothing, so it looks switched off.
+            bool off = kind is DialogKind.ApplyParts or DialogKind.RestoreParts && !cancel && browser.DialogTicked == ThemePart.None;
             Paint.FillRoundedRect(s, tx, ty, bodyWidth, DialogRow, Theme.RadiusKey, focus && !off ? White : KeyFill);
             if (focus) Paint.FocusRing(s, tx, ty, bodyWidth, DialogRow, Theme.RadiusKey, Accent);
             Color ink = off ? Muted : focus ? PillInk : cancel ? Muted : destructive ? Theme.Danger : White;
@@ -250,7 +288,7 @@ public sealed partial class ThemeRenderer
         DrawLeft(_small, s, "T H E M E S", wordX + _heading.MeasureText("prospero") + 12, baseline - Ascent(_small), Muted);
 
         if (_tabX is null || _tabWidth is null) LayoutTabs();
-        int active = view switch { ThemeView.Community => 1, ThemeView.Import => 2, ThemeView.System or ThemeView.StoreAddress => 3, _ => 0 };
+        int active = view switch { ThemeView.Community or ThemeView.Search => 1, ThemeView.Import => 2, ThemeView.System or ThemeView.StoreAddress => 3, _ => 0 };
         for (int i = 0; i < TabNames.Length; i++)
         {
             bool on = i == active;
@@ -259,7 +297,7 @@ public sealed partial class ThemeRenderer
             DrawMid(font, s, TabNames[i], _tabX![i] + _tabWidth![i] / 2, HeaderCenterY - font.LineHeight / 2, on ? White : Muted);
         }
         // L1 and R1 flank the tabs; on the keyboard the tabs do not switch, so the glyphs stay away.
-        if (view != ThemeView.StoreAddress)
+        if (view is not (ThemeView.StoreAddress or ThemeView.Search))
         {
             int glyphTop = HeaderCenterY - GlyphSize / 2;
             ButtonGlyph.Draw(s, PadButton.L1, _tabsLeft - TabGlyphGap - ButtonGlyph.Width(PadButton.L1, GlyphSize), glyphTop, GlyphSize, Ink, Muted, _small);
@@ -322,7 +360,7 @@ public sealed partial class ThemeRenderer
             ThemeView.Detail => DetailHints(browser),
             ThemeView.Community => CommunityHints(browser),
             ThemeView.Import => ImportHints(browser),
-            ThemeView.StoreAddress => StoreAddressHints(browser),
+            ThemeView.StoreAddress or ThemeView.Search => StoreAddressHints(browser),
             _ => SystemHints(browser),
         };
         HintBar(s, hints, Theme.ContentRight, Theme.FooterY + (Theme.FooterHeight - _small.LineHeight) / 2);

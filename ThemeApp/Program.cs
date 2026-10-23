@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using ProsperoThemes.App.Library;
 using ProsperoThemes.App.Ui;
@@ -21,6 +22,23 @@ internal sealed class ThemeApp : ProsperoApp
     private readonly ThemeBrowser _browser = new();
     private readonly Dispatcher _results = new();
     private IReadOnlyList<ThemeLibraryEntry> _entries = Array.Empty<ThemeLibraryEntry>();
+    // The themes the console shows now (look.json), read after every scan and every job; the library's last card saves it.
+    private List<LookLayer>? _look;
+    // The pack a scan should focus once it is done (the look just saved), by manifest id; set on the worker.
+    private volatile string? _focusAfterScan;
+    // Whether the first scan looked for a system update since the theme was applied; the plan the question was about.
+    private bool _updateChecked;
+    private SystemUpdate.Plan? _reapply;
+    // The parts Restore defaults offers, from the last scan or job (ReadRestorable); none known lists no parts.
+    private ThemePart _restorable;
+    // The worker runs a fit check (CheckFit). It is short and the user did not ask for it, so questions still open and
+    // a job confirmed meanwhile waits in _afterFit and starts when the check is done.
+    private bool _fitChecking;
+    private Action? _afterFit;
+    // Library packs whose fit was asked for since the helper last started (CheckFit); each one is asked once.
+    private readonly HashSet<string> _fitAsked = new(StringComparer.Ordinal);
+    // When each library pack came in (LibraryOrder.AddedPath), for the "newest" order; from the last scan.
+    private IReadOnlyDictionary<string, long> _added = new Dictionary<string, long>(StringComparer.Ordinal);
     private ThemeRenderer _renderer = null!;
     // The preview's pictures, icons and sounds, read on workers of its own (they do not make the app busy), and its sound.
     private PreviewController _preview = null!;
@@ -35,9 +53,13 @@ internal sealed class ThemeApp : ProsperoApp
     /// <summary>The system software version ("13.000.000"), null when it could not be read.</summary>
     private string? _firmware;
     // The community store: the list on screen and one HTTP client (Http/Ssl resolved at run time, see
-    // StoreHttpClient), created on first use by the worker.
+    // StoreHttpClient), created on first use (Http) by the worker or the update check. Each request has its own
+    // connection, so the two can use it at once.
     private IReadOnlyList<CommunityTheme> _community = Array.Empty<CommunityTheme>();
     private StoreHttpClient? _http;
+    private readonly object _httpLock = new();
+    // The notice that a later release is out (CheckAppVersion), until the app is idle to show it.
+    private string? _updateNotice;
     // Set by a finished download: the library is scanned again as soon as the worker is free.
     private bool _rescanAfterWork;
     // Store id -> pack hash of every theme downloaded here (CommunityList.DownloadsPath), for the badges.
@@ -45,9 +67,10 @@ internal sealed class ThemeApp : ProsperoApp
     // Store ids this console has liked (CommunityList.LikesPath), for the hearts and for choosing like or unlike.
     // Changed on the frame thread only; the renderer reads the same set.
     private readonly HashSet<string> _liked = new(StringComparer.Ordinal);
-    // The sort and the category (an index into CommunityCategories.List, -1 for all) the last list load was started with,
-    // to notice a sort or a chip pressed while the app was busy (see StartCommunityWork).
+    // The sort, the category (an index into CommunityCategories.List, -1 for all) and the search term the last list load
+    // was started with, to notice a sort, a chip or a search made while the app was busy (see StartCommunityWork).
     private int _listSort, _listCategory = -1;
+    private string _listQuery = "";
     // A list load (or a load of the pictures it still lacks) is running (frame thread only). Another sort or chip, a
     // download or a like asks it to stop (_stopList, read by the worker between pictures); the worker sets _listStopped
     // when it did, and _listPosted once the list it loads is on screen. What comes next: the queued download or like,
@@ -81,6 +104,7 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.AllAppsBackgrounds = _allAppsBackgrounds;
         _renderer.ReplaceEarlierThemes = _settings.ReplaceEarlierThemes;
         _renderer.Sounds = _settings.Sounds;
+        _renderer.LibrarySort = _settings.LibrarySort;
         try { _firmware = SharpProspero.Platform.SystemInfo.SystemSoftwareVersion; }
         catch { _firmware = null; }
         _renderer.Firmware = _firmware ?? "";
@@ -127,21 +151,45 @@ internal sealed class ThemeApp : ProsperoApp
     /// </summary>
     private void StartWork(Func<LibrarySnapshot> work, bool announce = false, bool notify = false)
     {
+        if (_fitChecking) { _afterFit = () => StartWork(work, announce, notify); return; }
         if (_busy) { Wait(); return; }
         _busy = true;
         _renderer.Busy = true;
         _renderer.Status = "Loading library…";
+        // The first scan also looks for a system update since the theme was applied (SystemUpdate).
+        bool checkUpdate = !_updateChecked;
+        _updateChecked = true;
+        string? firmware = _firmware, skipped = _settings.ReapplySkipped;
+        bool sounds = _settings.Sounds;
         _worker = new Thread(() =>
         {
             try
             {
                 var snapshot = work();
                 string? applied = ReadApplied();
+                ThemePart restorable = ReadRestorable();
+                List<LookLayer>? look = ReadLook();
+                SystemUpdate.Plan? update = checkUpdate ? ReadUpdatePlan(snapshot.Entries, firmware, skipped, sounds) : null;
                 _results.Post(() =>
                 {
+                    _restorable = restorable;
                     _renderer.ResetCovers();
-                    _entries = snapshot.Entries;
-                    _browser.SetCount(_entries.Count);
+                    _added = snapshot.Added ?? _added;
+                    OrderLibrary(snapshot.Entries, applied, scanned: true);
+                    ShowLook(look);
+                    if (_focusAfterScan is { } focus)
+                    {
+                        _focusAfterScan = null;
+                        for (int i = 0; i < _entries.Count; i++)
+                            if (_entries[i].Manifest.Id == focus) _browser.Select(i);
+                    }
+                    if (update is not null && firmware is not null)
+                    {
+                        _reapply = update;
+                        _renderer.ReapplyText = SystemUpdate.Text(update, firmware);
+                        _browser.AskReapply();
+                    }
+                    if (checkUpdate) CheckAppVersion();
                     _renderer.AppliedId = applied;
                     RefreshCommunityBadges();
                     // The USB Import screen shows the last import's result; a plain scan has nothing to say there.
@@ -172,11 +220,157 @@ internal sealed class ThemeApp : ProsperoApp
         _worker.Start();
     }
 
+    /// <summary>The look the console shows now (<see cref="Look"/>), or null; on the worker, /data may be the helper's.</summary>
+    private static List<LookLayer>? ReadLook()
+    {
+        try { return AppData.Files.Exists(AppData.Root + "/" + Look.FileName) ? Look.Parse(AppData.Files.ReadAllText(AppData.Root + "/" + Look.FileName)) : null; }
+        catch { return null; }
+    }
+
+    /// <summary>The look for the library's "Save current look" card, which shows when it combines packs of the library.</summary>
+    private void ShowLook(List<LookLayer>? look)
+    {
+        _look = look;
+        _renderer.Look = look;
+        _browser.LookSavable = LookPack.Savable(look, _entries.Select(e => e.Path));
+    }
+
+    /// <summary>
+    /// Saves the look as a pack of the library (<see cref="LookPack"/>) and focuses it. The same look saved before is
+    /// found by its id and not stored twice.
+    /// </summary>
+    private void SaveLook(List<LookLayer> look)
+    {
+        string name = LookPack.NextName(_entries.Select(e => e.Manifest.Name));
+        var saved = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (ThemeLibraryEntry entry in _entries) saved.TryAdd(entry.Manifest.Id, entry.Manifest.Name);
+        _renderer.Notify("Saving your look…", NoticeLevel.Info);
+        StartWork(() =>
+        {
+            LookPack.Mix mix = LookPack.Build(look, layer => ThemeArchive.Open(AppData.Files.ReadAllBytes(layer.Pack)), name);
+            _focusAfterScan = mix.Manifest.Id;
+            if (saved.TryGetValue(mix.Manifest.Id, out string? existing))
+                return DeviceThemeLibrary.Scan() with { Message = "This look is already in your library as “" + existing + "”." };
+            DeviceThemeLibrary.AddToLibrary(mix.Archive, name);
+            return DeviceThemeLibrary.Scan() with { Message = "Saved your look as “" + name + "” in your library." };
+        }, notify: true);
+    }
+
     /// <summary>The manifest id of the theme the console shows now (state.json, see <see cref="AppliedTheme"/>), or null.</summary>
     private static string? ReadApplied()
     {
         try { return AppData.Files.Exists(AppliedTheme.Path) ? AppliedTheme.Read(AppData.Files.ReadAllText(AppliedTheme.Path)) : null; }
         catch { return null; }
+    }
+
+    /// <summary>Whether to ask to apply the theme again after a system update (<see cref="SystemUpdate.Check"/>); on the worker.</summary>
+    private static SystemUpdate.Plan? ReadUpdatePlan(IReadOnlyList<ThemeLibraryEntry> library, string? firmware, string? skipped, bool sounds)
+    {
+        static string? Text(string path) => AppData.Files.Exists(path) ? AppData.Files.ReadAllText(path) : null;
+        try { return SystemUpdate.Check(Text(AppliedTheme.Path), Text(AppData.Root + "/" + Look.FileName), firmware, skipped, library, sounds); }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Applies the layers of <paramref name="plan"/> again, bottom first: the first one from the defaults, the others on
+    /// top of it, so the look is what it was before the update. Stops at the first that fails.
+    /// </summary>
+    private ApplyResult ReapplyLook(SystemUpdate.Plan plan, string busyText)
+    {
+        ApplyResult? result = null;
+        for (int i = 0; i < plan.Layers.Count; i++)
+        {
+            LookLayer layer = plan.Layers[i];
+            var applier = new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
+            {
+                IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = i > 0, Firmware = _firmware, Parts = layer.Parts,
+                Progress = new WorkProgress(this, busyText), SourcePath = layer.Pack,
+            };
+            result = applier.Apply(ThemeArchive.Open(AppData.Files.ReadAllBytes(layer.Pack)));
+            if (!result.Success) return new ApplyResult(false, "“" + layer.Name + "”: " + result.Message, result.Written);
+        }
+        string gone = plan.Missing.Count == 0 ? "" : " Left out, no longer in the library: " + string.Join(", ", plan.Missing) + ".";
+        string count = plan.Layers.Count > 1 ? "Applied " + plan.Layers.Count + " themes again. " : "";
+        return new ApplyResult(true, count + result!.Message + gone, result.Written);
+    }
+
+    /// <summary>"Not now" after a system update: not asked again until the next one.</summary>
+    private void SkipReapply()
+    {
+        _reapply = null;
+        if (_firmware is null) return;
+        _settings = _settings with { ReapplySkipped = _firmware };
+        try { WriteSettings(); }
+        catch { /* asked again on the next start */ }
+    }
+
+    /// <summary>The parts Restore defaults offers (<see cref="Look.Restorable"/>); read on the worker, /data may be the helper's.</summary>
+    private static ThemePart ReadRestorable()
+    {
+        static string? Text(string path) => AppData.Files.Exists(path) ? AppData.Files.ReadAllText(path) : null;
+        try { return Look.Restorable(Text(AppData.Root + "/" + Look.FileName), Text(AppData.Root + "/" + ThemeApplier.BackupIndex)); }
+        catch { return ThemePart.None; }
+    }
+
+    /// <summary>
+    /// Puts <paramref name="entries"/> in the library's order (the applied theme first, then <see cref="AppSettings.LibrarySort"/>).
+    /// The focus stays on the pack it was on; a scan (<paramref name="scanned"/>) also passes the new count on.
+    /// </summary>
+    private void OrderLibrary(IReadOnlyList<ThemeLibraryEntry> entries, string? applied, bool scanned = false)
+    {
+        string? focused = _browser.Selected >= 0 && _browser.Selected < _entries.Count ? _entries[_browser.Selected].Path : null;
+        List<ThemeLibraryEntry> ordered = LibraryOrder.Sort(entries, applied, _settings.LibrarySort, _added);
+        _entries = ordered;
+        if (scanned) _browser.SetCount(ordered.Count);
+        int index = focused is null ? -1 : ordered.FindIndex(e => e.Path == focused);
+        if (index >= 0) _browser.Select(index);
+        _renderer.LibraryReordered();
+    }
+
+    /// <summary>Triangle in the library: name or newest first. The applied theme stays in front either way.</summary>
+    private void ToggleLibrarySort()
+    {
+        LibrarySort sort = _settings.LibrarySort == LibrarySort.Name ? LibrarySort.Newest : LibrarySort.Name;
+        _settings = _settings with { LibrarySort = sort };
+        _renderer.LibrarySort = sort;
+        OrderLibrary(_entries, _renderer.AppliedId);
+        try { WriteSettings(); }
+        catch { /* the order lasts until the app quits */ }
+    }
+
+    /// <summary>
+    /// The theme open in Detail: which of its files this console lacks, asked once per pack in the background. Only when
+    /// the helper already runs (the check never starts it) and nothing else is running; it holds the worker for a moment,
+    /// without a notice. The answer shows in the list of Detail (<see cref="ThemeRenderer.PackFits"/>).
+    /// </summary>
+    private void CheckFit()
+    {
+        if (_busy || _browser.View != ThemeView.Detail || _browser.Selected < 0 || _browser.Selected >= _entries.Count) return;
+        ThemeLibraryEntry entry = _entries[_browser.Selected];
+        if (_renderer.PackFits.ContainsKey(entry.Path) || !_fitAsked.Add(entry.Path)) return;
+        _busy = _fitChecking = true;
+        bool allApps = _allAppsBackgrounds;
+        _worker = new Thread(() =>
+        {
+            PackFit? fit = null;
+            try
+            {
+                if (ThemeHelperClient.IsRunning())
+                    fit = new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds) { IncludeAllApps = allApps }
+                        .CheckFit(entry.Manifest);
+            }
+            catch { /* no fit shown; the apply reports what it skips */ }
+            _results.Post(() =>
+            {
+                if (fit is not null && allApps == _allAppsBackgrounds) _renderer.PackFits[entry.Path] = fit;
+                else if (fit is not null) _fitAsked.Remove(entry.Path);   // the scope changed meanwhile: ask again
+                _busy = _fitChecking = false;
+                Action? next = _afterFit;
+                _afterFit = null;
+                next?.Invoke();
+            });
+        }) { IsBackground = true, Name = "ThemeFit" };
+        _worker.Start();
     }
 
     /// <summary>A press that needs the app idle came while a job runs.</summary>
@@ -186,9 +380,35 @@ internal sealed class ThemeApp : ProsperoApp
     /// Runs a system-changing job on the worker: starts ThemeHelper if it is not running yet, then hands the
     /// job an applier whose theme-root writes go through it. The result is shown as a notice.
     /// </summary>
-    private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work, ThemePart parts = ThemePart.All) =>
+    private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work, ThemePart parts = ThemePart.All, string? source = null) =>
         StartHelperWork(busyText, needsHelper: true, _ => work(new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
-            { IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware, Parts = parts }));
+        {
+            IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware, Parts = parts,
+            Progress = new WorkProgress(this, busyText), SourcePath = source,
+        }));
+
+    /// <summary>
+    /// Passes an apply's or restore's progress from the worker to the toast, at most about ten times a second (each
+    /// step's first file always), so a job of many small files does not flood the frame thread.
+    /// </summary>
+    private sealed class WorkProgress(ThemeApp app, string busyText) : IApplyProgress
+    {
+        private const long MinGapMs = 100;
+        private long _last = long.MinValue / 2;
+
+        public void Report(string step, int index, int total)
+        {
+            long now = Environment.TickCount64;
+            if (index > 1 && now - _last < MinGapMs) return;
+            _last = now;
+            // "Restoring defaults… 3 of 12", not "Restoring defaults… Restoring 3 of 12".
+            string label = busyText.StartsWith(step, StringComparison.Ordinal) ? "" : step + " ";
+            string text = busyText + " " + label + index + " of " + total;
+            float fraction = total > 0 ? (index - 1f) / total : 0f;
+            // Ignored once the job's result is in: it is posted after the last report, but a toast must not come back.
+            app._results.Post(() => { if (app._busy) app._renderer.ShowProgress(text, fraction); });
+        }
+    }
 
     /// <summary>
     /// Starts the helper, then runs <paramref name="work"/> on the worker with the helper's problem (null when it
@@ -196,6 +416,12 @@ internal sealed class ThemeApp : ProsperoApp
     /// </summary>
     private void StartHelperWork(string busyText, bool needsHelper, Func<string?, ApplyResult> work)
     {
+        if (_fitChecking)
+        {
+            _afterFit = () => StartHelperWork(busyText, needsHelper, work);
+            _renderer.Notify(busyText, NoticeLevel.Info);
+            return;
+        }
         if (_busy) { Wait(); return; }
         _busy = true;
         _renderer.Busy = true;
@@ -224,13 +450,21 @@ internal sealed class ThemeApp : ProsperoApp
                 (status, message) = ("Error", ex.Message);
             }
             string? applied = ReadApplied();
+            ThemePart restorable = ReadRestorable();
+            List<LookLayer>? look = ReadLook();
             _results.Post(() =>
             {
+                _restorable = restorable;
+                ShowLook(look);
                 _renderer.Status = status;
+                // The theme now on the console leads the row; the focus stays on the pack it was on.
+                if (applied != _renderer.AppliedId) OrderLibrary(_entries, applied);
                 _renderer.AppliedId = applied;
                 _renderer.Notify(message, ok ? NoticeLevel.Success : NoticeLevel.Error);
                 _renderer.Busy = false;
                 _busy = false;
+                // The helper may run now: packs that could not be checked before are asked again.
+                _fitAsked.Clear();
             });
         }) { IsBackground = true, Name = "ThemeApply" };
         _worker.Start();
@@ -244,19 +478,27 @@ internal sealed class ThemeApp : ProsperoApp
             _rescanAfterWork = false;
             StartWork(DeviceThemeLibrary.Scan);
         }
+        // A job's notice keeps the toast; the update notice waits until the app is idle.
+        if (_updateNotice is not null && !_busy)
+        {
+            _renderer.Notify(_updateNotice, NoticeLevel.Info);
+            _updateNotice = null;
+        }
+        CheckFit();
         _preview.BeforeUpdate(_entries);
         _browser.Update(UiInput.From(context.Input, context.PreviousInput),
             preview: context.Pressed(ScePadButton.Square), options: context.Pressed(ScePadButton.Options),
             triangle: context.Pressed(ScePadButton.Triangle), asksScope: SelectedHasAllAppsBackground(),
-            allAppsScope: _allAppsBackgrounds, busy: _busy,
+            allAppsScope: _allAppsBackgrounds, busy: _busy && !_fitChecking,
             removable: _browser.Selected >= 0 && _browser.Selected < _entries.Count && !_entries[_browser.Selected].Bundled,
-            parts: SelectedParts(), sounds: _settings.Sounds);
+            parts: SelectedParts(), sounds: _settings.Sounds, restorable: _restorable);
         switch (_browser.TakeAction())
         {
             case ThemeAction.Busy: Wait(); break;
             case ThemeAction.ToggleBackgroundScope: ToggleBackgroundScope(); break;
             case ThemeAction.ToggleEarlierThemes: ToggleEarlierThemes(); break;
             case ThemeAction.ToggleSounds: ToggleSounds(); break;
+            case ThemeAction.ToggleLibrarySort: ToggleLibrarySort(); break;
             case ThemeAction.PreviewMusic: _preview.ToggleMusic(); break;
             case ThemeAction.ImportUsb: StartWork(DeviceThemeLibrary.ImportUsb, announce: true); break;
             case ThemeAction.Reload: StartWork(DeviceThemeLibrary.Scan); break;
@@ -265,17 +507,29 @@ internal sealed class ThemeApp : ProsperoApp
                 // uses it even when settings.json cannot be written; only the next start would not know it.
                 if (_browser.ApplyAsksScope) SetBackgroundScope(_browser.ApplyAllApps);
                 string path = _entries[_browser.Selected].Path;
-                StartSystemWork("Applying theme…", applier => applier.Apply(ThemeArchive.Open(AppData.Files.ReadAllBytes(path))), _browser.ApplyParts);
+                StartSystemWork("Applying theme…", applier => applier.Apply(ThemeArchive.Open(AppData.Files.ReadAllBytes(path))), _browser.ApplyParts, path);
                 break;
+            case ThemeAction.Reapply when _reapply is { } plan:
+                _reapply = null;
+                StartHelperWork("Applying your theme again…", needsHelper: true, _ => ReapplyLook(plan, "Applying your theme again…"));
+                break;
+            case ThemeAction.ReapplyLater: SkipReapply(); break;
+            case ThemeAction.SaveLook when _look is { Count: > 1 } look: SaveLook(look); break;
             case ThemeAction.RestoreOriginals:
-                StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals());
+                ThemePart restoreParts = _browser.RestoreParts;
+                StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals(restoreParts));
                 break;
             case ThemeAction.RemoveTheme when _browser.Selected >= 0 && !_entries[_browser.Selected].Bundled:
                 ThemeLibraryEntry removed = _entries[_browser.Selected];
                 StartWork(() => DeviceThemeLibrary.Remove(removed.Path, removed.Manifest.Name), notify: true);
                 break;
             case ThemeAction.SaveStoreUrl: SaveStoreAddress(); break;
-            case ThemeAction.FirmwareReport: StartHelperWork("Saving firmware report…", needsHelper: false, SaveFirmwareReport); break;
+            case ThemeAction.FirmwareReport:
+                // "Save and send" also gives it to the store; without a store address it is only saved.
+                string? reportStore = _browser.SendReport ? _settings.StoreUrl : null;
+                StartHelperWork(reportStore is null ? "Saving firmware report…" : "Sending firmware report…", needsHelper: false,
+                    problem => SaveFirmwareReport(problem, reportStore));
+                break;
             case ThemeAction.CommunityRefresh: StartCommunityList(); break;
             case ThemeAction.CommunityDownload when SelectedCommunity() is { } theme: StartCommunityDownload(theme); break;
             case ThemeAction.CommunityLike when SelectedCommunity() is { } theme: StartCommunityLike(theme); break;
@@ -291,9 +545,10 @@ internal sealed class ThemeApp : ProsperoApp
     /// <summary>
     /// Writes the firmware report to <see cref="FirmwareReport.Folder"/> and, when a USB drive is connected, next to
     /// it on the drive. Reads only, and works without the helper too: then it records why the helper did not
-    /// start and reads what the app itself may read.
+    /// start and reads what the app itself may read. With <paramref name="store"/> it is also sent there, and the code
+    /// the store answers with is shown (the notice and the System row).
     /// </summary>
-    private ApplyResult SaveFirmwareReport(string? helperProblem)
+    private ApplyResult SaveFirmwareReport(string? helperProblem, string? store)
     {
         string? catalog = null;
         try { catalog = FileSystem.ReadAllText(FirmwareReport.BundledCatalog); }
@@ -324,7 +579,26 @@ internal sealed class ThemeApp : ProsperoApp
         }
         catch { /* the copy in /data is enough */ }
         string helper = helperProblem is null ? "" : " The theme helper did not start; the report says why.";
-        return new ApplyResult(true, $"Firmware report ({paths.Count} files) saved to {where}.{helper}", Array.Empty<string>());
+        if (store is null)
+            return new ApplyResult(true, $"Firmware report ({paths.Count} files) saved to {where}.{helper}", Array.Empty<string>());
+        if (store.Length == 0)
+            return new ApplyResult(false, $"Firmware report saved to {where}, but not sent: no store address is set.", Array.Empty<string>());
+
+        string? code = null, problem = null;
+        try
+        {
+            HttpResponse answer = Http().Send(SharpProspero.Platform.HttpMethod.Post, FirmwareReport.UploadUrl(store), report,
+                ["Content-Type: application/json"]);
+            string text = System.Text.Encoding.UTF8.GetString(answer.Body);
+            code = answer.IsSuccess ? FirmwareReport.ParseCode(text) : null;
+            if (code is null) problem = FirmwareReport.SendProblem(answer.StatusCode, text);
+        }
+        catch (Exception ex) { problem = "can’t reach the store: " + ex.Message; }
+        if (code is null)
+            return new ApplyResult(false, $"Firmware report saved to {where}, but not sent: {problem}.", Array.Empty<string>());
+        _results.Post(() => _renderer.ReportCode = code);
+        return new ApplyResult(true, $"Firmware report sent. Your code is {code}: post it in your GitHub issue. Also saved to {where}.{helper}",
+            Array.Empty<string>());
     }
 
     private void ToggleBackgroundScope()
@@ -392,6 +666,12 @@ internal sealed class ThemeApp : ProsperoApp
     /// </summary>
     private string? SetBackgroundScope(bool allApps)
     {
+        if (allApps != _allAppsBackgrounds)
+        {
+            // Whether the all-apps background fits depends on the scope: every pack is checked again.
+            _renderer.PackFits.Clear();
+            _fitAsked.Clear();
+        }
         _allAppsBackgrounds = allApps;
         _renderer.AllAppsBackgrounds = allApps;
         try
@@ -504,8 +784,7 @@ internal sealed class ThemeApp : ProsperoApp
             StoreResult result;
             try
             {
-                _http ??= StoreHttpClient.Create("ProsperoThemes/1.0");
-                result = work(_http);
+                result = work(Http());
             }
             catch (Exception ex) { result = new StoreResult("Can’t reach the store: " + ex.Message, NoticeLevel.Error); }
             _results.Post(() =>
@@ -521,6 +800,7 @@ internal sealed class ThemeApp : ProsperoApp
                 _renderer.Busy = false;
                 _busy = false;
                 _listLoading = false;
+                _renderer.CommunityPicturesLoading = false;
                 if (_listStopped)
                 {
                     if (_listPosted) _previewsMissing = true;
@@ -537,7 +817,8 @@ internal sealed class ThemeApp : ProsperoApp
                 // A sort or a category chip pressed while this job ran moved the pills and chips but not the list (another
                 // job refused it with "Please wait"; a list load stopped early for it). Load it now, with the sort and
                 // category they show. A list stopped before it arrived is loaded again even when the pills went back to it.
-                if (_browser.CommunitySort != _listSort || _browser.CommunityCategory != _listCategory || _reloadList) StartCommunityList();
+                if (_browser.CommunitySort != _listSort || _browser.CommunityCategory != _listCategory || _browser.CommunityQuery != _listQuery
+                    || _reloadList) StartCommunityList();
                 else if (_previewsMissing) StartCommunityPreviews();
             });
         }) { IsBackground = true, Name = "Community" };
@@ -545,22 +826,54 @@ internal sealed class ThemeApp : ProsperoApp
         return true;
     }
 
+    private StoreHttpClient Http()
+    {
+        lock (_httpLock) return _http ??= StoreHttpClient.Create("ProsperoThemes/1.0");
+    }
+
+    /// <summary>
+    /// Asks the store for the newest release (<see cref="AppUpdate"/>) on a thread of its own, so a slow or missing
+    /// network holds up nothing. A later one is shown on the System screen and, once the app is idle, as a notice. Any
+    /// failure says nothing; the next start asks again.
+    /// </summary>
+    private void CheckAppVersion()
+    {
+        string baseUrl = _settings.StoreUrl, current = _renderer.AppVersion;
+        if (baseUrl.Length == 0 || current.Length == 0) return;
+        new Thread(() =>
+        {
+            try
+            {
+                HttpResponse answer = Http().Get(AppUpdate.LatestUrl(baseUrl));
+                if (!answer.IsSuccess) return;
+                if (AppUpdate.Parse(System.Text.Encoding.UTF8.GetString(answer.Body)) is not { } latest ||
+                    !AppUpdate.IsNewer(latest.Version, current)) return;
+                _results.Post(() =>
+                {
+                    _renderer.NewerVersion = latest.Version;
+                    _updateNotice = AppUpdate.Text(latest.Version, current);
+                });
+            }
+            catch { /* no notice */ }
+        }) { IsBackground = true, Name = "AppUpdate" }.Start();
+    }
+
     private void StartCommunityList()
     {
         string baseUrl = _settings.StoreUrl;
         var sort = (CommunitySort)_browser.CommunitySort;
         int category = _browser.CommunityCategory;
+        string query = _browser.CommunityQuery;
         string? categoryId = CommunityCategories.IdAt(category);
-        // "Loading themes · Anime · Top rated…", or without the category for all themes.
-        string busyText = categoryId is null
-            ? $"Loading themes · {CommunityList.Label(sort)}…"
-            : $"Loading themes · {CommunityCategories.LabelAt(category)} · {CommunityList.Label(sort)}…";
+        // "Loading themes · Anime · Top rated…", or without the category for all themes; "Searching “kanto” · …" for a search.
+        string busyText = (query.Length > 0 ? $"Searching “{query}”" : "Loading themes")
+            + (categoryId is null ? "" : " · " + CommunityCategories.LabelAt(category)) + $" · {CommunityList.Label(sort)}…";
         // A list or its pictures are loading already: the pills or chips moved on, so it stops after the picture it is
         // fetching, and its end starts this one (StartCommunityWork). Back on the list that is loading, it simply goes on
         // (unless a queued download or like is waiting for it to stop).
         if (_busy && _listLoading)
         {
-            bool moved = (int)sort != _listSort || category != _listCategory;
+            bool moved = (int)sort != _listSort || category != _listCategory || query != _listQuery;
             _stopList = moved || _queuedJob is not null;
             if (moved)
             {
@@ -574,7 +887,7 @@ internal sealed class ThemeApp : ProsperoApp
         _listPosted = false;
         bool started = StartCommunityWork(busyText, http =>
         {
-            HttpResponse answer = http.GetWithRetry(CommunityList.ListUrl(baseUrl, sort, categoryId));
+            HttpResponse answer = http.GetWithRetry(CommunityList.ListUrl(baseUrl, sort, categoryId, query: query));
             if (!answer.IsSuccess) return new StoreResult("Store responded with status " + answer.StatusCode + ".", NoticeLevel.Error);
             List<CommunityTheme> list = CommunityList.Parse(System.Text.Encoding.UTF8.GetString(answer.Body), baseUrl);
             // Asked to stop while the list was on its way: the old list stays on screen until the new one is here.
@@ -592,19 +905,23 @@ internal sealed class ThemeApp : ProsperoApp
                 // The header names the sort and category this list came with, not the ones the pills and chips show now.
                 _renderer.CommunityListSort = (int)sort;
                 _renderer.CommunityListCategory = category;
+                _renderer.CommunityListQuery = query;
+                // The cards that wait for their picture shimmer until the pictures are in (StartCommunityWork ends it).
+                _renderer.CommunityPicturesLoading = true;
                 _browser.SetCommunityCount(list.Count);
                 RefreshCommunityBadges();
             });
             if (!LoadPreviews(http, list)) return new StoreResult("", NoticeLevel.Success);
             // A loaded list needs no toast: the screen shows the count, the category and the sort.
             return list.Count == 0
-                ? new StoreResult(categoryId is null ? "No themes in the store yet." : "No themes in this category yet.", NoticeLevel.Info)
+                ? new StoreResult(query.Length > 0 ? $"No themes match “{query}”." : categoryId is null ? "No themes in the store yet." : "No themes in this category yet.", NoticeLevel.Info)
                 : new StoreResult("", NoticeLevel.Success);
         }, loadsList: true);
         if (started)
         {
             _listSort = (int)sort;
             _listCategory = category;
+            _listQuery = query;
             _listLoading = true;
             _reloadList = false;
             _previewsMissing = false;
@@ -657,7 +974,7 @@ internal sealed class ThemeApp : ProsperoApp
             LoadPreviews(http, missing);
             return new StoreResult("", NoticeLevel.Success);
         });
-        if (started) _listLoading = true;
+        if (started) _listLoading = _renderer.CommunityPicturesLoading = true;
     }
 
     private void StartCommunityDownload(CommunityTheme theme)

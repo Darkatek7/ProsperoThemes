@@ -1,3 +1,4 @@
+using ProsperoThemes.App.Library;
 using ProsperoThemes.App.Ui;
 using SharpProspero.Ui;
 using Xunit;
@@ -26,6 +27,49 @@ public class ThemeBrowserTests
         browser.Update(Right);
         browser.Update(Right);
         Assert.Equal(1, browser.Selected);
+    }
+
+    [Fact]
+    public void The_look_card_follows_the_last_pack_only_while_the_look_can_be_saved()
+    {
+        var browser = new ThemeBrowser();
+        browser.SetCount(2);
+        Press(browser, Right, 3);
+        Assert.False(browser.LookCardFocused);                  // nothing to save: the row ends at the last pack
+        Assert.Equal(1, browser.Selected);
+
+        browser.LookSavable = true;
+        browser.Update(Right);
+        Assert.True(browser.LookCardFocused);
+        Assert.Equal(1, browser.Selected);                      // the pack under it stays selected
+        browser.Update(Right);
+        Assert.True(browser.LookCardFocused);                   // the card is the end of the row
+        browser.Update(UiInput.None, preview: true);
+        Assert.Equal(ThemeView.Library, browser.View);          // there is nothing to preview on it
+        browser.Update(X);
+        Assert.Equal(ThemeView.Library, browser.View);
+        Assert.Equal(ThemeAction.SaveLook, browser.TakeAction());
+        browser.Update(X, busy: true);
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
+
+        browser.Update(Left);
+        Assert.False(browser.LookCardFocused);
+        Assert.Equal(1, browser.Selected);
+        browser.Update(X);
+        Assert.Equal(ThemeView.Detail, browser.View);           // X on a pack opens it as before
+
+        // The look stops being savable (a restore, a pack removed): the focus goes back onto the packs.
+        browser.Update(O);
+        browser.Update(Right);
+        Assert.True(browser.LookCardFocused);
+        browser.LookSavable = false;
+        browser.Update(UiInput.None);
+        Assert.False(browser.LookCardFocused);
+        browser.LookSavable = true;
+        browser.Update(Right);
+        browser.Select(0);                                      // the app focuses the pack it just saved
+        Assert.False(browser.LookCardFocused);
+        Assert.Equal(0, browser.Selected);
     }
 
     [Fact]
@@ -142,7 +186,7 @@ public class ThemeBrowserTests
         browser.Update(Up);
         Assert.True(browser.CommunityChipFocused);
         Assert.Equal(1, browser.CommunitySelected);     // the card is remembered
-        Assert.Equal(0, browser.CommunityChip);         // the cursor starts on "All", the chosen chip
+        Assert.Equal(ThemeBrowser.AllChip, browser.CommunityChip);   // the cursor starts on "All", the chosen chip
         Assert.Equal(ThemeAction.None, browser.TakeAction());
         browser.Update(Up);                              // nothing above the chips
         Assert.True(browser.CommunityChipFocused);
@@ -173,14 +217,16 @@ public class ThemeBrowserTests
         var browser = OnCommunity(4);
         browser.Update(Up);
         browser.Update(Left);
+        Assert.Equal(ThemeBrowser.SearchChip, browser.CommunityChip);
+        browser.Update(Left);
         Assert.Equal(0, browser.CommunityChip);
-        Assert.Equal(13, ThemeBrowser.CommunityChipCount);   // All and the twelve categories
+        Assert.Equal(14, ThemeBrowser.CommunityChipCount);   // Search, All and the twelve categories
         Press(browser, Right, 5);
         Assert.Equal(5, browser.CommunityChip);
         Press(browser, Right, 40);
-        Assert.Equal(12, browser.CommunityChip);
+        Assert.Equal(13, browser.CommunityChip);
         Press(browser, Left, 3);
-        Assert.Equal(9, browser.CommunityChip);
+        Assert.Equal(10, browser.CommunityChip);
         Assert.Equal(0, browser.CommunitySelected);          // the cards did not move
         Assert.Equal(-1, browser.CommunityCategory);         // and nothing is chosen until X
     }
@@ -212,7 +258,58 @@ public class ThemeBrowserTests
         browser.TakeAction();
         browser.Update(Down);
         browser.Update(Up);
-        Assert.Equal(7, browser.CommunityChip);
+        Assert.Equal(ThemeBrowser.ChipOfCategory(6), browser.CommunityChip);
+    }
+
+    [Fact]
+    public void The_search_chip_opens_the_keyboard_and_options_searches_for_the_term()
+    {
+        var browser = OnCommunity(10);
+        Press(browser, Right, 2);
+        browser.Update(Up);
+        browser.Update(Left);                                // All -> Search
+        Assert.Equal(ThemeBrowser.SearchChip, browser.CommunityChip);
+        browser.Update(X);
+        Assert.Equal(ThemeView.Search, browser.View);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());   // the X only opened it
+        Assert.Equal("", browser.SearchEditor.Text);
+        Assert.Equal("a", browser.SearchEditor.Focused.Label);  // the focus starts on the letters
+        browser.Update(X);                                   // types "a"
+        browser.Update(UiInput.None, options: true);         // and searches
+        Assert.Equal(ThemeView.Community, browser.View);
+        Assert.Equal("a", browser.CommunityQuery);
+        Assert.Equal(0, browser.CommunitySelected);
+        Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
+        Assert.True(browser.CommunityChipFocused);
+
+        // X on the chip with the term takes the search off.
+        browser.Update(X);
+        Assert.Equal("", browser.CommunityQuery);
+        Assert.Equal(ThemeView.Community, browser.View);
+        Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
+    }
+
+    [Fact]
+    public void O_leaves_the_search_keyboard_without_searching_and_the_same_term_asks_nothing()
+    {
+        var browser = OnCommunity(4);
+        browser.Update(Up);
+        browser.Update(Left);
+        browser.Update(X);
+        browser.Update(X);
+        browser.Update(O);
+        Assert.Equal(ThemeView.Community, browser.View);
+        Assert.Equal("", browser.CommunityQuery);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+
+        // Only spaces is no term: nothing changes, so nothing is loaded.
+        browser.Update(X);
+        Press(browser, UiInput.None with { Down = true }, 3);  // the space bar
+        Assert.Equal("Space", browser.SearchEditor.Focused.Label);
+        browser.Update(X);
+        browser.Update(UiInput.None, options: true);
+        Assert.Equal("", browser.CommunityQuery);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
     }
 
     [Fact]
@@ -570,10 +667,24 @@ public class ThemeBrowserTests
         browser.Update(O);
 
         browser.Update(Down);
-        browser.Update(X);                                          // Firmware report
+        browser.Update(X);                                          // Firmware report asks: save, or save and send
+        Assert.Equal(DialogKind.FirmwareReport, browser.Dialog);
+        Assert.Equal(0, browser.DialogFocus);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+        browser.Update(X);                                          // Save
         Assert.Equal(ThemeAction.FirmwareReport, browser.TakeAction());
+        Assert.False(browser.SendReport);
         Assert.Equal(ThemeView.System, browser.View);
         Assert.Equal(DialogKind.None, browser.Dialog);
+        browser.Update(X);
+        browser.Update(Down);
+        browser.Update(X);                                          // Save and send
+        Assert.Equal(ThemeAction.FirmwareReport, browser.TakeAction());
+        Assert.True(browser.SendReport);
+        browser.Update(X);
+        browser.Update(O);                                          // O sends nothing
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
 
         browser.Update(Down);
         browser.Update(X);                                          // Restore defaults only asks
@@ -632,6 +743,79 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeAction.RestoreOriginals, browser.TakeAction());
         Assert.Equal(ThemeAction.None, browser.TakeAction());
         Assert.Equal(ThemeView.System, browser.View);
+    }
+
+    private const ThemePart Shown = ThemePart.Background | ThemePart.Icons | ThemePart.Tiles | ThemePart.Sounds;
+
+    [Fact]
+    public void With_several_parts_on_the_console_restore_lists_them_ticked_and_starts_on_cancel()
+    {
+        var browser = OnRestoreRow();
+        browser.Update(X, restorable: Shown);
+
+        Assert.Equal(DialogKind.RestoreParts, browser.Dialog);
+        Assert.Equal(new[] { ThemePart.Background, ThemePart.Icons, ThemePart.Tiles, ThemePart.Sounds }, browser.DialogParts);
+        Assert.Equal(new[] { "Background", "System icons", "Tile icons", "Music and sounds", "Restore defaults", "Cancel" }, browser.DialogOptions);
+        Assert.Equal(5, browser.DialogFocus);                       // Cancel
+        Assert.Equal(Shown, browser.DialogTicked);
+
+        browser.Update(X, restorable: Shown);                       // a reflex X closes it
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+    }
+
+    [Fact]
+    public void Everything_ticked_is_the_full_restore_and_a_part_left_out_is_kept()
+    {
+        var browser = OnRestoreRow();
+        browser.Update(X, restorable: Shown);
+        browser.Update(Up, restorable: Shown);                      // Restore defaults
+        browser.Update(X, restorable: Shown);
+        Assert.Equal(ThemeAction.RestoreOriginals, browser.TakeAction());
+        Assert.Equal(ThemePart.All, browser.RestoreParts);
+
+        browser.Update(X, restorable: Shown);
+        for (int i = 0; i < 5; i++) browser.Update(Up, restorable: Shown);   // Background
+        browser.Update(X, restorable: Shown);                       // unticked
+        for (int i = 0; i < 4; i++) browser.Update(Down, restorable: Shown); // Restore defaults
+        browser.Update(X, restorable: Shown);
+        Assert.Equal(ThemeAction.RestoreOriginals, browser.TakeAction());
+        Assert.Equal(ThemePart.Icons | ThemePart.Tiles | ThemePart.Sounds, browser.RestoreParts);
+    }
+
+    [Fact]
+    public void Icons_and_sounds_are_ticked_together_and_nothing_ticked_restores_nothing()
+    {
+        var browser = OnRestoreRow();
+        browser.Update(X, restorable: Shown);
+        for (int i = 0; i < 4; i++) browser.Update(Up, restorable: Shown);   // System icons
+        browser.Update(X, restorable: Shown);
+        Assert.Equal(ThemePart.Background | ThemePart.Tiles, browser.DialogTicked);
+        browser.Update(Down, restorable: Shown);
+        browser.Update(Down, restorable: Shown);                    // Music and sounds
+        browser.Update(X, restorable: Shown);
+        Assert.Equal(Shown, browser.DialogTicked);
+
+        browser.Update(X, restorable: Shown);                       // sounds off: the icons too
+        browser.Update(Up, restorable: Shown);
+        browser.Update(X, restorable: Shown);                       // tile icons off
+        for (int i = 0; i < 2; i++) browser.Update(Up, restorable: Shown);
+        browser.Update(X, restorable: Shown);                       // background off
+        Assert.Equal(ThemePart.None, browser.DialogTicked);
+        for (int i = 0; i < 4; i++) browser.Update(Down, restorable: Shown);   // Restore defaults
+        browser.Update(X, restorable: Shown);
+        Assert.Equal(DialogKind.RestoreParts, browser.Dialog);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+    }
+
+    [Fact]
+    public void Restorable_parts_come_from_the_look_or_else_from_the_backups()
+    {
+        string look = Look.Serialize(new[] { new LookLayer("a", "a", "A", ThemePart.Tiles) });
+        Assert.Equal(ThemePart.Tiles, Look.Restorable(look, "vsh_asset/bg_hub_default.dds.zst\n"));
+        Assert.Equal(ThemePart.Background | ThemePart.Icons | ThemePart.Sounds,
+            Look.Restorable(Look.Serialize(Array.Empty<LookLayer>()), "vsh_asset/bg_hub_default.dds.zst\nvsh_asset/Sce.PlayStation.PUI_UI3.rco\n"));
+        Assert.Equal(ThemePart.None, Look.Restorable(null, null));
     }
 
     [Fact]

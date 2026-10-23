@@ -49,6 +49,16 @@ public interface IDeviceFiles
 public sealed record ApplyResult(bool Success, string Message, IReadOnlyList<string> Written);
 
 /// <summary>
+/// What a running apply or restore is doing, for the app's progress notice. Called on the thread the applier runs on,
+/// once as each file of a step starts. An interface rather than a delegate, like the other worker hooks.
+/// </summary>
+public interface IApplyProgress
+{
+    /// <summary>File <paramref name="index"/> (from 1) of <paramref name="total"/> of <paramref name="step"/> starts.</summary>
+    void Report(string step, int index, int total);
+}
+
+/// <summary>
 /// Applies a theme pack to the console, or restores the on-console originals. Mirrors DevProbe/apply-pack.ps1:
 /// validate, resolve, remount, back up once, write <c>.tmp</c>, rename, read back and compare hashes, then
 /// record state.
@@ -109,6 +119,12 @@ public sealed class ThemeApplier
     public string? Firmware { get; init; }
 
     /// <summary>
+    /// The library path of the pack an apply or restore works on, recorded in <see cref="Look"/> so the look can be
+    /// applied again or saved as a theme. Null when not known (PC tests that do not ask).
+    /// </summary>
+    public string? SourcePath { get; init; }
+
+    /// <summary>
     /// Largest console file the applier reads or writes as a whole: ThemeHelper's write limit (MaxWrite, the same
     /// number). A larger file is left alone without being read; the app cannot have written it, so it still holds
     /// its original. The icon container is about 100 MB on firmware before 13.00: the applier holds one whole copy
@@ -116,6 +132,12 @@ public sealed class ThemeApplier
     /// holding several copies ran the app out of memory.
     /// </summary>
     public long MaxFileBytes { get; init; } = 160L * 1024 * 1024;
+
+    /// <summary>Told as each file of each step starts (backing up, resetting, writing, restoring). Null: nobody asks.</summary>
+    public IApplyProgress? Progress { get; init; }
+
+    /// <summary>Step names <see cref="Progress"/> reports.</summary>
+    public const string StepBackup = "Backing up", StepReset = "Resetting", StepWrite = "Writing", StepRestore = "Restoring";
 
     /// <summary>
     /// Targets the last plan could not place: a per-app background for a title without one, a file this console
@@ -150,7 +172,7 @@ public sealed class ThemeApplier
             if (report.HasErrors)
                 return Fail("pack is invalid, nothing was written: " + string.Join("; ", report.Errors.Select(e => e.Message)));
 
-            if (!TryPlan(pack, out List<Plan> plans, out string planError))
+            if (!TryPlan(pack.Manifest, out List<Plan> plans, out string planError))
                 return Fail(planError + ". Nothing was written.");
             Refreshed.Clear();
 
@@ -183,9 +205,13 @@ public sealed class ThemeApplier
             // replaced meanwhile.
             var planned = new HashSet<string>(plans.Select(p => p.Device), StringComparer.Ordinal);
             var reset = new List<string>();
-            foreach (var (device, backup, logical) in KeepEarlierThemes ? [] : BackedUp())
+            List<(string Device, string Backup, string Logical)> earlier =
+                KeepEarlierThemes ? [] : BackedUp().Where(b => !planned.Contains(b.Device)).ToList();
+            int resetIndex = 0;
+            foreach (var (device, backup, logical) in earlier)
             {
-                if (planned.Contains(device) || !_files.Exists(device) || _files.Length(device) > MaxFileBytes)
+                Progress?.Report(StepReset, ++resetIndex, earlier.Count);
+                if (!_files.Exists(device) || _files.Length(device) > MaxFileBytes)
                     continue;
                 try
                 {
@@ -214,8 +240,11 @@ public sealed class ThemeApplier
             Plan? current = null;
             try
             {
-                foreach (IGrouping<string, Plan> file in plans.GroupBy(p => p.Device, StringComparer.Ordinal))
+                List<IGrouping<string, Plan>> files = plans.GroupBy(p => p.Device, StringComparer.Ordinal).ToList();
+                for (int i = 0; i < files.Count; i++)
                 {
+                    IGrouping<string, Plan> file = files[i];
+                    Progress?.Report(StepWrite, i + 1, files.Count);
                     var patches = file.Where(p => ThemePack.IsPatchLayer(p.Target.Layer)).ToList();
                     foreach (Plan plan in file.Where(p => !ThemePack.IsPatchLayer(p.Target.Layer)))
                     {
@@ -257,7 +286,7 @@ public sealed class ThemeApplier
             var written = plans.Select(p => p.Device).ToList();
             try
             {
-                WriteState("apply", pack.Manifest, plans.Select(p => (p.Device, p.Backup)));
+                WriteState("apply", PackOf(pack.Manifest), plans.Select(p => (p.Device, p.Backup)));
             }
             catch (Exception ex)
             {
@@ -265,6 +294,8 @@ public sealed class ThemeApplier
                     $"Applied and verified {written.Count} target(s), but state.json could not be written: {ex.Message}",
                     written);
             }
+            var layer = new LookLayer(SourcePath ?? "", pack.Manifest.Id, pack.Manifest.Name, Parts & ThemeParts.In(pack.Manifest));
+            WriteLook(Look.Applied(ReadLook(), layer, combine: KeepEarlierThemes));
 
             string skipped = Skipped.Count == 0 ? "" : $" Skipped: {string.Join("; ", Skipped)}.";
             string defaults = reset.Count == 0 ? "" : $"Put {reset.Count} earlier change(s) back to default. ";
@@ -290,7 +321,7 @@ public sealed class ThemeApplier
             if (report.HasErrors)
                 return Fail("pack is invalid, nothing was written: " + string.Join("; ", report.Errors.Select(e => e.Message)));
 
-            if (!TryPlan(pack, out List<Plan> plans, out string planError))
+            if (!TryPlan(pack.Manifest, out List<Plan> plans, out string planError))
                 return Fail(planError + ". Nothing was written.");
             Refreshed.Clear();
 
@@ -312,8 +343,10 @@ public sealed class ThemeApplier
             }
 
             var restored = new List<string>();
-            foreach (Plan plan in plans)
+            for (int i = 0; i < plans.Count; i++)
             {
+                Plan plan = plans[i];
+                Progress?.Report(StepRestore, i + 1, plans.Count);
                 try
                 {
                     if (_files.Length(plan.Device) > MaxFileBytes) continue;   // never written by the app
@@ -331,7 +364,7 @@ public sealed class ThemeApplier
 
             try
             {
-                WriteState("restore", pack.Manifest, plans.Select(p => (p.Device, p.Backup)));
+                WriteState("restore", PackOf(pack.Manifest), plans.Select(p => (p.Device, p.Backup)));
             }
             catch (Exception ex)
             {
@@ -339,6 +372,7 @@ public sealed class ThemeApplier
                     $"Restored and verified {restored.Count} target(s), but state.json could not be written: {ex.Message}",
                     restored);
             }
+            if (SourcePath is { Length: > 0 } source && ReadLook() is { } look) WriteLook(Look.WithoutPack(look, source));
 
             return new ApplyResult(true, $"{RestartNote(restored)}{RefreshedNote()}Restored and verified {restored.Count} target(s).", restored);
         }
@@ -353,14 +387,29 @@ public sealed class ThemeApplier
     /// index rather than one pack's targets, so applying A, then B, then restoring leaves nothing of A.
     /// Backups whose path no longer maps to a theme root are skipped; one failure does not stop the rest.
     /// </summary>
-    public ApplyResult RestoreOriginals()
+    public ApplyResult RestoreOriginals() => RestoreOriginals(ThemePart.All);
+
+    /// <summary>
+    /// Puts back the backed-up files of <paramref name="parts"/> (by <see cref="ThemeParts.OfLogical"/>); with every part
+    /// the same as <see cref="RestoreOriginals()"/>. The system icons and the UI sounds share one container, so either of
+    /// them brings back both, the music too. Some parts leave the theme applied (state "restore-parts" keeps its pack)
+    /// unless the look shows nothing any more.
+    /// </summary>
+    public ApplyResult RestoreOriginals(ThemePart parts)
     {
+        bool all = (parts & ThemePart.All) == ThemePart.All;
+        if ((parts & (ThemePart.Icons | ThemePart.Sounds)) != 0) parts |= ThemePart.Icons | ThemePart.Sounds;
         try
         {
             List<(string Device, string Backup, string Logical)> plans = BackedUp();
+            if (!all) plans = plans.Where(p => (ThemeParts.OfLogical(p.Logical) & parts) != 0).ToList();
             if (plans.Count == 0)
-                return Fail("there are no on-console backups, so nothing was written.");
+                return Fail(all ? "there are no on-console backups, so nothing was written."
+                    : "nothing of the chosen parts has a backup, so nothing was written.");
             Refreshed.Clear();
+            // The pack the state names, read before the state is written again.
+            StatePack? kept = all ? null : ReadStatePack();
+            List<LookLayer>? look = ReadLook();
 
             try
             {
@@ -374,8 +423,10 @@ public sealed class ThemeApplier
             var restored = new List<string>();
             var errors = new List<string>();
             int missing = 0;
+            int index = 0;
             foreach (var (device, backup, logical) in plans)
             {
+                Progress?.Report(StepRestore, ++index, plans.Count);
                 try
                 {
                     // A per-app image of a title that was deleted since: nothing to put back.
@@ -390,18 +441,23 @@ public sealed class ThemeApplier
                 }
             }
 
+            List<LookLayer> left = all || look is null ? new List<LookLayer>() : Look.Without(look, parts);
             try
             {
-                WriteState("restore-originals", null, plans.Select(p => (p.Device, p.Backup)));
+                // Some parts: the theme stays applied with what is left of it, unless the look shows nothing any more.
+                if (all) WriteState("restore-originals", null, plans.Select(p => (p.Device, p.Backup)));
+                else WriteState("restore-parts", look is not null && left.Count == 0 ? null : kept, plans.Select(p => (p.Device, p.Backup)));
             }
             catch (Exception ex)
             {
                 errors.Add($"state.json: {ex.Message}");
             }
+            if (all || look is not null) WriteLook(left);
 
             string gone = missing == 0 ? "" : $" {missing} file(s) no longer exist on the console and were left out.";
+            string which = all ? "original(s)" : $"original(s) of {string.Join(", ", ThemeParts.List(parts & ThemePart.All).ConvertAll(ThemeParts.Label))}";
             return errors.Count == 0
-                ? new ApplyResult(true, $"{RestartNote(restored)}{RefreshedNote()}Restored and verified {restored.Count} original(s).{gone}", restored)
+                ? new ApplyResult(true, $"{RestartNote(restored)}{RefreshedNote()}Restored and verified {restored.Count} {which}.{gone}", restored)
                 : new ApplyResult(false,
                     $"{RestartNote(restored)}Restored {restored.Count} of {plans.Count} original(s); failed: {string.Join("; ", errors)}.", restored);
         }
@@ -409,6 +465,40 @@ public sealed class ThemeApplier
         {
             return Fail($"restore failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Which targets of <paramref name="manifest"/> have no file on this console, found the way an apply finds them (the
+    /// tile icons of the shipped apps, plain .dds backgrounds, a title's own background) but only by asking whether the
+    /// files exist: nothing is read whole and nothing is written. The payloads are not compared with the console's
+    /// files, so an apply may still skip a target this lets through. Every part counts, whatever <see cref="Parts"/> says.
+    /// The all-apps background without <see cref="IncludeAllApps"/> always fits: it then reaches the titles through
+    /// <c>bg_hub_default</c>.
+    /// </summary>
+    public PackFit CheckFit(ThemePackManifest manifest)
+    {
+        var fits = new HashSet<ThemePackTarget>(ReferenceEqualityComparer.Instance);
+        if (TryPlan(manifest, out List<Plan> plans, out _))
+        {
+            // Each file is asked once (the icons and sounds of a theme share one container); every question is a
+            // round trip to the helper. Length is -1 for a file the console does not have.
+            var present = new Dictionary<string, bool>(StringComparer.Ordinal);
+            foreach (Plan plan in plans)
+            {
+                if (fits.Contains(plan.Target)) continue;
+                if (!present.TryGetValue(plan.Device, out bool here))
+                    present[plan.Device] = here = _files.Length(plan.Device) is var size && size >= 0 && size <= MaxFileBytes;
+                if (here) fits.Add(plan.Target);
+            }
+        }
+        var missing = new List<ThemePackTarget>();
+        foreach (ThemePackTarget target in manifest.Targets)
+        {
+            if (!ThemePackManifest.KnownLayers.Contains(target.Layer) || fits.Contains(target)) continue;
+            if (target.Path == AssetRoots.AllAppsBackground && !IncludeAllApps) continue;
+            missing.Add(target);
+        }
+        return new PackFit(missing);
     }
 
     // ---- planning ---------------------------------------------------------
@@ -440,8 +530,11 @@ public sealed class ThemeApplier
         var containers = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var drop = new HashSet<Plan>();
         _slots.Clear();
-        foreach (IGrouping<string, Plan> file in plans.GroupBy(p => p.Device, StringComparer.Ordinal).ToList())
+        List<IGrouping<string, Plan>> files = plans.GroupBy(p => p.Device, StringComparer.Ordinal).ToList();
+        for (int i = 0; i < files.Count; i++)
         {
+            IGrouping<string, Plan> file = files[i];
+            Progress?.Report(StepBackup, i + 1, files.Count);
             Plan first = file.First();
             if (!_files.Exists(first.Device))
             {
@@ -668,13 +761,13 @@ public sealed class ThemeApplier
     internal static string OnDevice(IDeviceFiles files, string logical, string device) =>
         AssetRoots.Shipped(logical, out string liveApp, out string shipped) && !files.Exists(liveApp) ? shipped : device;
 
-    private bool TryPlan(ThemePack pack, out List<Plan> plans, out string error)
+    private bool TryPlan(ThemePackManifest manifest, out List<Plan> plans, out string error)
     {
         plans = new List<Plan>();
         var perApp = new List<Plan>();
         Skipped.Clear();
         _unpacked = null;
-        foreach (ThemePackTarget target in pack.Manifest.Targets)
+        foreach (ThemePackTarget target in manifest.Targets)
         {
             // An unknown layer is skipped, as ThemePack.Validate's warning promises.
             if (!ThemePackManifest.KnownLayers.Contains(target.Layer))
@@ -723,7 +816,7 @@ public sealed class ThemeApplier
         {
             foreach (string logical in AssetRoots.SystemTileBackgrounds)
             {
-                if (pack.Manifest.Targets.Any(t => t.Path == logical)) continue;
+                if (manifest.Targets.Any(t => t.Path == logical)) continue;
                 AssetRoots.TryResolve(logical, out string tile, out _);
                 Plan plan = Locate(hub.Target, logical, tile);
                 if (_files.Exists(plan.Device))
@@ -886,23 +979,79 @@ public sealed class ThemeApplier
 
     // ---- state ------------------------------------------------------------
 
-    private void WriteState(string action, ThemePackManifest? manifest, IEnumerable<(string Device, string Backup)> plans)
+    // The pack state.json names: the manifest's, or the one an earlier state named (a restore of some parts keeps it).
+    private readonly record struct StatePack(string Id, string Name, string Version);
+
+    private static StatePack PackOf(ThemePackManifest manifest) => new(manifest.Id, manifest.Name, manifest.Version);
+
+    /// <summary>The pack of the theme state.json says is applied (also after a restore of some parts), or null.</summary>
+    private StatePack? ReadStatePack()
+    {
+        try
+        {
+            string path = _dataRoot + "/state.json";
+            if (!_files.Exists(path)) return null;
+            string json = Encoding.UTF8.GetString(_files.ReadAllBytes(path));
+            if (AppliedTheme.Read(json) is null || !SharpProspero.Storage.JsonValue.TryParse(json, out var root)) return null;
+            var pack = root["pack"];
+            return new StatePack(pack.GetString("id"), pack.GetString("name"), pack.GetString("version"));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The look as the last operation left it; null when there is no look file (one made before 01.000.021).</summary>
+    private List<LookLayer>? ReadLook()
+    {
+        try
+        {
+            string path = _dataRoot + "/" + Look.FileName;
+            return _files.Exists(path) ? Look.Parse(Encoding.UTF8.GetString(_files.ReadAllBytes(path))) : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Saves the look. A failure is ignored: the files on the console are what matters, and the look only helps to
+    /// apply them again or save them as a theme.
+    /// </summary>
+    private void WriteLook(IReadOnlyList<LookLayer> look)
+    {
+        try
+        {
+            string path = _dataRoot + "/" + Look.FileName;
+            _files.CreateDirectoryRecursive(_dataRoot);
+            _files.WriteAllBytes(path + ".tmp", Encoding.UTF8.GetBytes(Look.Serialize(look)));
+            _files.Move(path + ".tmp", path);
+        }
+        catch
+        {
+            // see above
+        }
+    }
+
+    private void WriteState(string action, StatePack? pack, IEnumerable<(string Device, string Backup)> plans)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, NewLine = "\n" }))
         {
             writer.WriteStartObject();
 
-            if (manifest is null)
+            if (pack is not { } p)
             {
                 writer.WriteNull("pack");
             }
             else
             {
                 writer.WriteStartObject("pack");
-                writer.WriteString("id", manifest.Id);
-                writer.WriteString("name", manifest.Name);
-                writer.WriteString("version", manifest.Version);
+                writer.WriteString("id", p.Id);
+                writer.WriteString("name", p.Name);
+                writer.WriteString("version", p.Version);
                 writer.WriteEndObject();
             }
 

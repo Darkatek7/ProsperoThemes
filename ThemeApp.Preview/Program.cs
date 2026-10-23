@@ -72,11 +72,13 @@ browser.SetCommunityCount(store.Count);
 // and category it was loaded with, and the card count.
 void ReloadStore()
 {
-    List<CommunityTheme> shown = PreviewData.Listing(store, (CommunitySort)browser.CommunitySort, CommunityCategories.IdAt(browser.CommunityCategory));
+    string query = browser.CommunityQuery;
+    List<CommunityTheme> shown = PreviewData.Listing(store, (CommunitySort)browser.CommunitySort, CommunityCategories.IdAt(browser.CommunityCategory), query);
     renderer.Community = shown;
     renderer.CommunityListSort = browser.CommunitySort;
     renderer.CommunityListCategory = browser.CommunityCategory;
-    renderer.CommunityStatus = shown.Count == 0 ? "No themes in this category yet." : "";
+    renderer.CommunityListQuery = query;
+    renderer.CommunityStatus = shown.Count == 0 ? (query.Length > 0 ? $"No themes match “{query}”." : "No themes in this category yet.") : "";
     renderer.SelectedCommunityId = shown.Count > 0 ? shown[0].Id : null;
     browser.SetCommunityCount(shown.Count);
 }
@@ -207,6 +209,15 @@ if (args.Contains("--screenshots"))
     Save("library", ThemeView.Library);
     browser.Update(UiInput.None with { Right = true }); Save("library-second", ThemeView.Library);   // Selected moved right by one: the applied pack
     browser.Update(UiInput.None with { Right = true }); Save("library-applied", ThemeView.Library);   // the badge on a card that is not focused
+    renderer.LibrarySort = LibrarySort.Newest; Save("library-newest", ThemeView.Library);   // the order named next to the count
+    renderer.LibrarySort = LibrarySort.Name;
+    // Two themes combined: the row ends with the card that saves the look, and its hero says what goes in.
+    renderer.Look = [new LookLayer(entries[0].Path, entries[0].Manifest.Id, entries[0].Manifest.Name, ThemePart.Background),
+        new LookLayer(entries[1].Path, entries[1].Manifest.Id, entries[1].Manifest.Name, ThemePart.Sounds | ThemePart.Icons)];
+    browser.LookSavable = true;
+    browser.Update(UiInput.None with { End = true }); Save("library-look", ThemeView.Library);
+    browser.LookSavable = false;
+    browser.Select(2);   // back on the third pack, as before the card
     browser.Update(UiInput.None with { Left = true });
     // The rest of the sequence keeps the second pack selected, so detail and preview show a real pack.
     var press = new UiInput(false, false, false, false, true, false);
@@ -214,6 +225,15 @@ if (args.Contains("--screenshots"))
     var down = new UiInput(false, true, false, false, false, false);
     var up = new UiInput(true, false, false, false, false, false);
     browser.Update(press); Save("detail", ThemeView.Detail);
+    // What the console has of the pack, once the app checked it: everything, then a console without some of its files.
+    {
+        ThemeLibraryEntry open = entries[browser.Selected];
+        renderer.PackFits[open.Path] = new PackFit(Array.Empty<ThemePackTarget>()); Save("detail-fit", ThemeView.Detail);
+        var lacking = open.Manifest.Targets.Where(t => t.Path.StartsWith(AssetRoots.Rnps + "/", StringComparison.Ordinal)).Take(3).ToList();
+        if (lacking.Count == 0) lacking = open.Manifest.Targets.TakeLast(1).ToList();
+        renderer.PackFits[open.Path] = new PackFit(lacking); Save("detail-fit-missing", ThemeView.Detail);
+        renderer.PackFits.Clear();
+    }
     // Apply asks first: for a pack with an all-apps background it asks where that goes (focus on the saved answer).
     browser.Update(press, asksScope: true); Save("dialog-apply-scope", ThemeView.Detail, DialogKind.ApplyScope);
     browser.Update(back);
@@ -291,10 +311,66 @@ if (args.Contains("--screenshots"))
     for (int i = 0; i < 2; i++) browser.Update(right);   // Cartoon
     browser.StoreUrl = "http://192.168.0.5:8080";
     PickCategory(); Save("community-empty-category", ThemeView.Community);
-    // Back to all themes, then the empty store of the next shot.
+    // Back to all themes (the chip right of the search one), then the search and the empty store of the next shots.
     for (int i = 0; i < ThemeBrowser.CommunityChipCount; i++) browser.Update(left);
+    browser.Update(right);
     PickCategory();
-    browser.Update(down);
+    browser.StoreUrl = AppSettings.DefaultStoreUrl;
+
+    // The search: X on the chip at the start of the row opens the keyboard, Options searches for what was typed.
+    // Typing moves the focus to each key as a pad would.
+    void Type(string text)
+    {
+        foreach (char ch in text)
+        {
+            var keys = browser.SearchEditor.Keys;
+            int row = -1, column = -1;
+            for (int r = 0; r < keys.Count && row < 0; r++)
+                for (int c = 0; c < keys[r].Count; c++)
+                    if (keys[r][c].Text == ch.ToString()) { row = r; column = c; break; }
+            if (row < 0) throw new InvalidOperationException($"No key types '{ch}'");
+            while (browser.SearchEditor.Row != row) browser.Update(browser.SearchEditor.Row < row ? down : up);
+            while (browser.SearchEditor.Column != column) browser.Update(browser.SearchEditor.Column < column ? right : left);
+            browser.Update(press);
+        }
+    }
+    void Search()
+    {
+        browser.Update(UiInput.None, options: true);
+        if (browser.TakeAction() != ThemeAction.CommunityRefresh) throw new InvalidOperationException("Options did not ask for the search");
+        ReloadStore();
+    }
+    browser.Update(left);
+    Save("community-search-chip", ThemeView.Community);
+    browser.Update(press);
+    // A word from the first card's name, so the search finds it.
+    string word = new string(store[0].Name.ToLowerInvariant().Where(char.IsAsciiLetterLower).Take(4).ToArray());
+    Type(word);
+    Save("community-search-keyboard", ThemeView.Search);
+    Search();
+    Settle();
+    Save("community-search", ThemeView.Community);
+    // A term nothing matches.
+    browser.Update(press);                                   // takes the search off
+    if (browser.TakeAction() != ThemeAction.CommunityRefresh) throw new InvalidOperationException("X on the search chip did not take the term off");
+    browser.Update(press);
+    Type("qqxz");
+    Search();
+    Save("community-search-none", ThemeView.Community);
+    browser.Update(press);
+    browser.TakeAction();
+    ReloadStore();
+    // Cards whose pictures are still on their way: the picture area shimmers until they are in.
+    {
+        var loaded = renderer.Community;
+        renderer.Community = loaded.Select(t => t with { Id = t.Id + "-loading", PreviewUrl = "http://192.168.0.5:8080/p.png" }).ToList();
+        renderer.CommunityPicturesLoading = true;
+        browser.Update(down);
+        Save("community-loading", ThemeView.Community, frames: 40);
+        renderer.CommunityPicturesLoading = false;
+        renderer.Community = loaded;
+    }
+    browser.StoreUrl = "";
     browser.StoreUrl = "";
     // An empty store on the same tab, with the app's own message for a store that is not set up.
     renderer.ResetCommunity();
@@ -316,6 +392,10 @@ if (args.Contains("--screenshots"))
     browser.StoreUrl = AppSettings.DefaultStoreUrl;
     browser.Update(UiInput.None with { PageDown = true });
     browser.StoreUrl = "http://192.168.0.5:8080"; Save("system", ThemeView.System);
+    // The store knows of a later release (AppUpdate): the version row says so.
+    renderer.AppVersion = "01.000.021";
+    renderer.NewerVersion = "01.000.022"; Save("system-update", ThemeView.System);
+    renderer.NewerVersion = "";
     // Each row focused in turn; the last one asks before restoring, with the focus on Cancel.
     renderer.AllAppsBackgrounds = false;
     for (int row = 0; row < ThemeBrowser.SystemRowCount; row++)
@@ -326,12 +406,29 @@ if (args.Contains("--screenshots"))
     }
     browser.Update(press); Save("dialog-restore", ThemeView.System, DialogKind.Restore);
     browser.Update(back);
-    browser.Update(up); browser.Update(up);   // Store address: X opens the keyboard
+    // A console that shows every part: the parts to put back, all ticked, the focus on Cancel; then Background left out.
+    browser.Update(press, restorable: ThemePart.All); Save("dialog-restore-parts", ThemeView.System, DialogKind.RestoreParts);
+    for (int i = 0; i < 7; i++) browser.Update(up, restorable: ThemePart.All);
+    browser.Update(press, restorable: ThemePart.All); Save("dialog-restore-parts-untick", ThemeView.System, DialogKind.RestoreParts);
+    browser.Update(back);
+    // Firmware report: X asks whether to only save it or send it too; a sent one shows the store's code on its row.
+    browser.Update(up);
+    browser.Update(press); Save("dialog-firmware-report", ThemeView.System, DialogKind.FirmwareReport);
+    browser.Update(back);
+    renderer.ReportCode = "K7Q2MX"; Save("system-report-code", ThemeView.System);
+    renderer.ReportCode = "";
+    browser.Update(up);   // Store address: X opens the keyboard
     browser.Update(press); Save("store-address", ThemeView.StoreAddress);
     // The toast, on the library: progress while busy, then a success and a failure that needs two lines.
     browser.Update(back); browser.Update(back);   // keyboard -> system -> library
+    // After a system update the first scan asks to apply the look again (text as SystemUpdate.Text writes it).
+    renderer.ReapplyText = "The system software changed from 12.40 to 13.00, which puts the console’s own files back. " +
+        "Apply “Pokemon - Kanto Nights” again?";
+    browser.AskReapply(); Save("dialog-reapply", ThemeView.Library, DialogKind.Reapply);
+    browser.Update(back); browser.TakeAction();
     renderer.Busy = true;
     renderer.Notify("Applying theme…", NoticeLevel.Info); Save("toast-info", ThemeView.Library);
+    renderer.ShowProgress("Applying theme… Writing 5 of 12", 4 / 12f); Save("toast-progress", ThemeView.Library);
     renderer.Busy = false;
     renderer.Notify("Applied and verified 27 target(s).", NoticeLevel.Success); Save("toast-success", ThemeView.Library);
     renderer.Notify("Could not put /system_ex/vsh_asset/bg_hub_default.dds.zst back to its default (Operation not permitted), so the theme was not applied. " +

@@ -67,6 +67,16 @@ public static class ThemeHelperClient
             "with a firmware report (System tab, Firmware report).";
     }
 
+    /// <summary>
+    /// Whether the expected helper already answers. Never starts it: for checks that may only read when it runs
+    /// anyway. Blocks while it asks; call it from a worker thread.
+    /// </summary>
+    public static bool IsRunning()
+    {
+        if (!_netReady) { NetPool.sceNetInit(); _netReady = true; }
+        return TryPing(out _) is { } reply && CheckTag(reply) is null;
+    }
+
     private static string? CheckTag(string reply) =>
         reply == $"OK PONG {Port} v{ExpectedTag}"
             ? null

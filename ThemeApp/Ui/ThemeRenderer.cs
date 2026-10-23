@@ -174,7 +174,7 @@ public sealed partial class ThemeRenderer : IDisposable
         {
             // With no theme the placeholder art would only compete with the centred message, so it is blurred like the quiet views'.
             ThemeView.Library => selected is null ? BlurredBackdrop(null) : SharpBackdrop(selected, scrim: true),
-            ThemeView.StoreAddress => CalmBackdrop(selected),
+            ThemeView.StoreAddress or ThemeView.Search => CalmBackdrop(selected),
             _ => BlurredBackdrop(selected),
         };
         s.Blit(picture.AsSurface(), 0, 0);
@@ -275,6 +275,8 @@ public sealed partial class ThemeRenderer : IDisposable
 
     // The frame time of the current Draw, for the screens that ease without being handed it.
     private double _frameDelta = 1.0 / 60;
+    // The time of the frame being drawn, for the few animations drawn deep inside a screen (the store's shimmer).
+    private double _now;
 
     // The selected library entry of the current Draw, for the footer hints.
     private ThemeLibraryEntry? _selected;
@@ -282,6 +284,7 @@ public sealed partial class ThemeRenderer : IDisposable
     public void Draw(Surface surface, ThemeBrowser browser, IReadOnlyList<ThemeLibraryEntry> entries, double seconds, double delta = 1.0 / 60)
     {
         _frameDelta = delta;
+        _now = seconds;
         UpdateCreator(browser.StoreUrl);
         if (_noticeFresh) { _noticeAt = seconds; _noticeFresh = false; }
         if (browser.View != _previousView) { _previousView = browser.View; _viewStart = seconds; }
@@ -315,6 +318,7 @@ public sealed partial class ThemeRenderer : IDisposable
             case ThemeView.Import: DrawImport(surface, enter); break;
             case ThemeView.System: DrawSystem(surface, browser, entries.Count, enter); break;
             case ThemeView.StoreAddress: DrawStoreAddress(surface, browser.StoreEditor, enter, seconds); break;
+            case ThemeView.Search: DrawStoreAddress(surface, browser.SearchEditor, enter, seconds); break;
         }
         if (dialog) DrawDialogScrim(surface, browser, selected, entries.Count, seconds);
         else ReleaseDialogBase();

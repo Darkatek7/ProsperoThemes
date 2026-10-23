@@ -118,6 +118,63 @@ public class ThemeApplierTests
         Assert.Equal(expected, Encoding.UTF8.GetString(fake.Files[StatePath]));
     }
 
+    private sealed class RecordedProgress : IApplyProgress
+    {
+        public List<string> Steps { get; } = new();
+        public void Report(string step, int index, int total) => Steps.Add($"{step} {index}/{total}");
+    }
+
+    [Fact]
+    public void Apply_and_restore_report_each_file_of_each_step()
+    {
+        var fake = DeviceWithLive((Dev1, Live("one")), (Dev2, Live("two")));
+        var progress = new RecordedProgress();
+        var applier = new ThemeApplier(fake, () => FixedNow) { Progress = progress };
+
+        Assert.True(applier.Apply(MakePack(null, (Path1, Zst("a1")), (Path2, Zst("a2")))).Success);
+        Assert.Equal(new[] { "Backing up 1/2", "Backing up 2/2", "Writing 1/2", "Writing 2/2" }, progress.Steps);
+
+        // The second apply starts from the defaults: each backed-up file it does not write is looked at once.
+        progress.Steps.Clear();
+        Assert.True(applier.Apply(MakePack(null, (Path1, Zst("b1")))).Success);
+        Assert.Equal(new[] { "Backing up 1/1", "Resetting 1/1", "Writing 1/1" }, progress.Steps);
+
+        progress.Steps.Clear();
+        Assert.True(applier.RestoreOriginals().Success);
+        Assert.Equal(new[] { "Restoring 1/2", "Restoring 2/2" }, progress.Steps);
+    }
+
+    [Fact]
+    public void CheckFit_names_the_targets_the_console_has_no_file_for_and_writes_nothing()
+    {
+        var fake = DeviceWithLive((Dev1, Live("one")));
+        ThemePack pack = MakePack(null, (Path1, Zst("a1")), (Path2, Zst("a2")));
+        int files = fake.Files.Count;
+
+        PackFit fit = Applier(fake).CheckFit(pack.Manifest);
+
+        Assert.Equal(new[] { Path2 }, fit.Missing.Select(t => t.Path));
+        Assert.Same(pack.Manifest.Targets[1], fit.Missing[0]);
+        Assert.Empty(fake.Writes);
+        Assert.Equal(files, fake.Files.Count);
+        Assert.Equal(0, fake.Remounts);
+    }
+
+    [Fact]
+    public void CheckFit_counts_the_all_apps_background_as_fitting_unless_it_reaches_every_title()
+    {
+        var fake = DeviceWithLive((Dev1, Live("one")));
+        ThemePack pack = MakePack(null, (Path1, Zst("a1")), (AssetRoots.AllAppsBackground, Zst("all")), ("apps/PPSA01650/pic0.dds", Zst("app")));
+
+        // Without the all-apps scope it reaches titles through bg_hub_default; the title is not installed.
+        PackFit fit = Applier(fake).CheckFit(pack.Manifest);
+        Assert.Equal(new[] { "apps/PPSA01650/pic0.dds" }, fit.Missing.Select(t => t.Path));
+
+        // With it, it needs titles with their own background, and this console has none.
+        fit = new ThemeApplier(fake, () => FixedNow) { IncludeAllApps = true }.CheckFit(pack.Manifest);
+        Assert.Equal(new[] { AssetRoots.AllAppsBackground, "apps/PPSA01650/pic0.dds" }, fit.Missing.Select(t => t.Path));
+    }
+
     [Fact]
     public void The_state_file_names_the_applied_pack_until_a_restore()
     {

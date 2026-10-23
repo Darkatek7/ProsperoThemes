@@ -93,9 +93,12 @@ internal static class PreviewData
     /// What the store answers for a list request: the cards of <paramref name="store"/> (oldest first, as built above) in
     /// category <paramref name="categoryId"/> (all of them when null), in the order of <paramref name="sort"/>.
     /// </summary>
-    public static List<CommunityTheme> Listing(IReadOnlyList<CommunityTheme> store, CommunitySort sort, string? categoryId)
+    public static List<CommunityTheme> Listing(IReadOnlyList<CommunityTheme> store, CommunitySort sort, string? categoryId, string query = "")
     {
         IEnumerable<CommunityTheme> cards = categoryId is null ? store : store.Where(t => t.Categories.Contains(categoryId));
+        // The store's search: the term anywhere in the name, the author or the description.
+        if (query.Length > 0)
+            cards = cards.Where(t => (t.Name + "\n" + t.Author + "\n" + t.Description).Contains(query, StringComparison.OrdinalIgnoreCase));
         return (sort switch
         {
             CommunitySort.Downloads => cards.OrderByDescending(t => t.Downloads),

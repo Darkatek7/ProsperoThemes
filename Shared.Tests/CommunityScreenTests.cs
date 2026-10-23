@@ -121,32 +121,34 @@ public unsafe class CommunityScreenTests
         using var screen = new Screen(8);
         ThemeRenderer r = screen.Renderer;
         Surface s = screen.Settle();
-        // "All" is the chosen chip: white inside its capsule (left of the label), and it is the first chip of the viewport.
+        // "All" is the chosen chip: white inside its capsule (left of the label). The search chip is the first of the viewport.
+        const int all = ThemeBrowser.AllChip, games = all + 2;
         var (left, right) = r.CommunityChipViewport;
-        Assert.Equal(left, r.CommunityChipScreenX(0));
+        Assert.Equal(left, r.CommunityChipScreenX(ThemeBrowser.SearchChip));
         Assert.True(left > 700 && left < 1000, "the chips start after the sort pills and their hint");
-        Assert.True(Bright(Px(s, r.CommunityChipScreenX(0) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
-        Assert.False(Bright(Px(s, r.CommunityChipScreenX(2) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));   // Games: glass
-        Assert.False(RingOnChip(s, r, 0));                // a card has the focus
+        Assert.False(Bright(Px(s, r.CommunityChipScreenX(ThemeBrowser.SearchChip) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));   // no term: glass
+        Assert.True(Bright(Px(s, r.CommunityChipScreenX(all) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
+        Assert.False(Bright(Px(s, r.CommunityChipScreenX(games) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));   // Games: glass
+        Assert.False(RingOnChip(s, r, all));              // a card has the focus
         Assert.True(Bright(Px(s, CardX(0) + w() / 2, ThemeRenderer.CommunityGridTop - 5)));   // its ring
 
         screen.Browser.Update(Up);
         s = screen.Settle();
-        Assert.True(RingOnChip(s, r, 0));                 // the chip has it now
+        Assert.True(RingOnChip(s, r, all));               // the chip has it now
         Assert.False(Bright(Px(s, CardX(0) + w() / 2, ThemeRenderer.CommunityGridTop - 5)));   // and the card has not
 
         screen.Browser.Update(Right); screen.Browser.Update(Right);
         s = screen.Settle();
-        Assert.False(RingOnChip(s, r, 0));
-        Assert.True(RingOnChip(s, r, 2));
+        Assert.False(RingOnChip(s, r, all));
+        Assert.True(RingOnChip(s, r, games));
         // The cursor is on Games but nothing is chosen yet: "All" stays white, Games stays glass.
-        Assert.True(Bright(Px(s, r.CommunityChipScreenX(0) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
-        Assert.False(Bright(Px(s, r.CommunityChipScreenX(2) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
+        Assert.True(Bright(Px(s, r.CommunityChipScreenX(all) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
+        Assert.False(Bright(Px(s, r.CommunityChipScreenX(games) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
         screen.Browser.Update(Confirm);
         Assert.Equal(1, screen.Browser.CommunityCategory);
         s = screen.Settle();
-        Assert.False(Bright(Px(s, r.CommunityChipScreenX(0) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
-        Assert.True(Bright(Px(s, r.CommunityChipScreenX(2) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
+        Assert.False(Bright(Px(s, r.CommunityChipScreenX(all) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
+        Assert.True(Bright(Px(s, r.CommunityChipScreenX(games) + 10, ChipRowY + ThemeRenderer.CommunitySortH / 2)));
 
         static int w() => ThemeRenderer.CommunityCardW;
     }
@@ -162,8 +164,8 @@ public unsafe class CommunityScreenTests
         // Not every chip fits at first: that is what the scrolling is for.
         Assert.True(r.CommunityChipScreenX(last) + r.CommunityChipWidth(last) > right, "all the chips fit; the row needs no scroll");
 
-        screen.Browser.Update(Up);
-        for (int chip = 1; chip <= last; chip++)
+        screen.Browser.Update(Up);   // the cursor starts on "All"
+        for (int chip = ThemeBrowser.AllChip + 1; chip <= last; chip++)
         {
             screen.Browser.Update(Right);
             Surface s = screen.Settle();

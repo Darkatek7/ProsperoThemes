@@ -22,6 +22,14 @@ public sealed partial class ThemeRenderer
     /// cursor has moved to. Only read once <see cref="CommunityListSort"/> says a list was loaded.
     /// </summary>
     public int CommunityListCategory { get; set; } = -1;
+    /// <summary>The search term the list on screen was loaded with ("" for none), like <see cref="CommunityListCategory"/>.</summary>
+    public string CommunityListQuery { get; set; } = "";
+    /// <summary>
+    /// Whether the app is fetching the cards' pictures. Meanwhile a card still waiting for its picture shows a plain
+    /// picture area with a moving shimmer instead of the placeholder art; once loading ends, the ones still without
+    /// (failed, or none in the store) show the placeholder.
+    /// </summary>
+    public bool CommunityPicturesLoading { get; set; }
     /// <summary>Whether <see cref="CommunityStatus"/> reports a failed load (the empty state then says so and offers a retry).</summary>
     public bool CommunityError { get; set; }
 
@@ -88,7 +96,7 @@ public sealed partial class ThemeRenderer
     // ---- State ------------------------------------------------------------------------------------------------------------
 
     // What a baked card shows, besides the theme itself: the flags below.
-    private const byte CommunityFlagLiked = 1, CommunityFlagUpdate = 2, CommunityFlagInLibrary = 4, CommunityFlagPreview = 8;
+    private const byte CommunityFlagLiked = 1, CommunityFlagUpdate = 2, CommunityFlagInLibrary = 4, CommunityFlagPreview = 8, CommunityFlagWaiting = 16;
     private readonly record struct CommunityStamp(CommunityTheme Theme, byte Flags);
     private readonly Dictionary<string, CommunityStamp> _communityStamps = new();
     // Scroll in pixels of the grid (eased toward the row the focus needs), and the first visible row it eases toward.
@@ -113,6 +121,7 @@ public sealed partial class ThemeRenderer
     private string _communityCountText = "";
     private int _communityEyebrowWidth;
     private int _communityCountFor = -1, _communityCountSort = -1, _communityCountCategory = -2;
+    private string _communityCountQuery = "";
     private string? _communityStateHeading, _communityStateText;
     private IReadOnlyList<string> _communityStateBody = Array.Empty<string>();
     private readonly Dictionary<int, byte[]> _communityHeartMasks = new();
@@ -173,7 +182,15 @@ public sealed partial class ThemeRenderer
     // The sort pills' widths, then the filter chips (All and the twelve categories) after the Sort hint: all measured once.
     private const int CommunityChipPad = 20, CommunityChipsGap = 48, CommunityChipPeek = 80;
 
-    private static string CommunityChipLabel(int chip) => CommunityCategories.LabelAt(chip - 1);
+    // The search chip says "Search", or shows the term (cut when long) with a cross that says X removes it.
+    private string _communityChipQuery = "";
+    private string CommunityChipLabel(int chip)
+    {
+        if (chip != ThemeBrowser.SearchChip) return CommunityCategories.LabelAt(ThemeBrowser.CategoryOfChip(chip));
+        if (_communityChipQuery.Length == 0) return "Search";
+        string term = _communityChipQuery.Length > 20 ? _communityChipQuery[..19] + "…" : _communityChipQuery;
+        return "“" + term + "” ×";
+    }
 
     private void LayoutCommunityRow()
     {
@@ -224,7 +241,7 @@ public sealed partial class ThemeRenderer
 
     // The chip that has to stay in view: the one the cursor is on, or else the chosen one.
     private static int CommunityChipInView(ThemeBrowser browser) =>
-        Math.Clamp(browser.CommunityChipFocused ? browser.CommunityChip : browser.CommunityCategory + 1, 0, ThemeBrowser.CommunityChipCount - 1);
+        Math.Clamp(browser.CommunityChipFocused ? browser.CommunityChip : ThemeBrowser.ChipOfCategory(browser.CommunityCategory), 0, ThemeBrowser.CommunityChipCount - 1);
 
     // Moves the chips only when the chip in view would otherwise leave the viewport (keeping a neighbour peeking in), eased
     // like the grid; the first draw of a view starts in place.
@@ -254,17 +271,24 @@ public sealed partial class ThemeRenderer
     /// </summary>
     private void DrawCommunityChips(Surface s, ThemeBrowser browser, int top)
     {
+        // The search chip is as wide as its term, so the row is measured again when the term changes.
+        if (_communityChipQuery != browser.CommunityQuery)
+        {
+            _communityChipQuery = browser.CommunityQuery;
+            LayoutCommunityRow();
+        }
         UpdateCommunityChipScroll(browser);
         int left = _communityChipsLeft, viewWidth = Theme.ContentRight - left;
         Paint.FillRect(s, left - CommunityChipsGap / 2, top + 8, 1, CommunitySortH - 16, White.WithAlpha(36));
         Surface strip = s.Region(left, top, viewWidth, CommunitySortH);
         int scroll = (int)MathF.Round(_communityChipScroll);
-        int chosen = browser.CommunityCategory + 1, cursor = browser.CommunityChipFocused ? browser.CommunityChip : -1;
+        int chosen = ThemeBrowser.ChipOfCategory(browser.CommunityCategory), cursor = browser.CommunityChipFocused ? browser.CommunityChip : -1;
+        bool searching = browser.CommunityQuery.Length > 0;
         for (int i = 0; i < _communityChipX!.Length; i++)
         {
             int x = _communityChipX[i] - scroll, w = _communityChipW![i];
             if (x + w <= 0 || x >= viewWidth) continue;
-            DrawCommunityPill(strip, x, 0, w, i == chosen, i == cursor, CommunityChipLabel(i));
+            DrawCommunityPill(strip, x, 0, w, i == chosen || (searching && i == ThemeBrowser.SearchChip), i == cursor, CommunityChipLabel(i));
         }
         if (cursor < 0) return;
         // The ring and its glow reach 12 px past the chip, so they get a band a little wider than the viewport.
@@ -276,6 +300,7 @@ public sealed partial class ThemeRenderer
     // The category the list on screen was loaded with (-1 for all themes). Before the app has loaded any list (the tests
     // draw one directly) it is the chip that is chosen.
     private int CommunityLoadedCategory(ThemeBrowser browser) => CommunityListSort is >= 0 and <= 2 ? CommunityListCategory : browser.CommunityCategory;
+    private string CommunityLoadedQuery(ThemeBrowser browser) => CommunityListSort is >= 0 and <= 2 ? CommunityListQuery : browser.CommunityQuery;
 
     // "24 themes · Anime · Top rated" (without the category for all themes), from the sort and category the list was loaded
     // with; formatted again only when one of them or the count changes.
@@ -284,13 +309,15 @@ public sealed partial class ThemeRenderer
         int sort = CommunityListSort is >= 0 and <= 2 ? CommunityListSort : browser.CommunitySort;
         int category = CommunityLoadedCategory(browser);
         if (category < -1 || category >= CommunityCategories.Count) category = -1;
-        if (count != _communityCountFor || sort != _communityCountSort || category != _communityCountCategory)
+        string query = CommunityLoadedQuery(browser);
+        if (count != _communityCountFor || sort != _communityCountSort || category != _communityCountCategory || query != _communityCountQuery)
         {
             _communityCountFor = count;
             _communityCountSort = sort;
             _communityCountCategory = category;
-            _communityCountText = Plural(count, "theme") + (category >= 0 ? " · " + CommunityCategories.LabelAt(category) : "")
-                + " · " + CommunityList.Label((CommunitySort)sort);
+            _communityCountQuery = query;
+            _communityCountText = Plural(count, "theme") + (query.Length > 0 ? " · “" + query + "”" : "")
+                + (category >= 0 ? " · " + CommunityCategories.LabelAt(category) : "") + " · " + CommunityList.Label((CommunitySort)sort);
         }
         return _communityCountText;
     }
@@ -330,6 +357,7 @@ public sealed partial class ThemeRenderer
             int y = CommunityGridTop + index / CommunityColumns * CommunityRowStride - offset + enter;
             if (y + CommunityCardH <= CommunityBandTop || y >= CommunityBandBottom) continue;
             CommunityCard(items[index]).Draw(band, x - CommunityBandLeft, y - CommunityBandTop);
+            if (CommunityPicturesLoading && CommunityPictureWaiting(items[index])) DrawCommunityShimmer(band, x - CommunityBandLeft, y - CommunityBandTop);
             if (index == selected) { focusShown = true; focusX = x - CommunityBandLeft; focusY = y - CommunityBandTop; }
         }
         // After every card, so the glow lies over the neighbours instead of under them. Not while the filter chips have the focus.
@@ -352,6 +380,28 @@ public sealed partial class ThemeRenderer
         }
     }
 
+    // A card whose picture is on its way: the store has one, it has not arrived, and it did not fail to decode.
+    private bool CommunityPictureWaiting(CommunityTheme t) =>
+        t.PictureUrl is not null && !CommunityPreviews.ContainsKey(t.Id) && !_failedThumbs.Contains(t.Id);
+
+    // A soft light band that sweeps across the picture area of a waiting card, drawn over the baked card every frame. It
+    // is a few narrow slices of translucent white, kept clear of the rounded corners, so it costs little per card.
+    private const int ShimmerWidth = 160, ShimmerSlice = 8;
+    private const double ShimmerPeriod = 1.4;
+    private void DrawCommunityShimmer(Surface band, int x, int y)
+    {
+        int left = x + Theme.RadiusCard, right = x + CommunityCardW - Theme.RadiusCard;
+        double phase = _now % ShimmerPeriod / ShimmerPeriod;
+        int centre = left - ShimmerWidth / 2 + (int)(phase * (right - left + ShimmerWidth));
+        for (int sx = centre - ShimmerWidth / 2; sx < centre + ShimmerWidth / 2; sx += ShimmerSlice)
+        {
+            int x0 = Math.Max(sx, left), x1 = Math.Min(sx + ShimmerSlice, right);
+            if (x1 <= x0) continue;
+            float k = 1f - Math.Abs(sx + ShimmerSlice / 2 - centre) / (ShimmerWidth / 2f);
+            if (k > 0) Paint.FillRect(band, x0, y, x1 - x0, CommunityImageH, White.WithAlpha((byte)(30 * k)));
+        }
+    }
+
     // ---- States -----------------------------------------------------------------------------------------------------------
 
     // With no list there is one centred message: what is going on, and what to press.
@@ -362,6 +412,12 @@ public sealed partial class ThemeRenderer
         if (browser.StoreUrl.Length == 0) { heading = "No store set"; body = "Set the store address on the System tab."; }
         else if (Busy) { heading = "Loading themes…"; body = "Getting the list from the store."; }
         else if (CommunityError) { heading = "Can’t load the themes"; body = CommunityStatus; }
+        else if (CommunityStatus.Length > 0 && CommunityLoadedQuery(browser).Length > 0)
+        {
+            // A search that found nothing: the chip with the term is how to get every theme back.
+            heading = "No themes match “" + CommunityLoadedQuery(browser) + "”";
+            body = "Try other words, or press X on the search chip to see every theme.";
+        }
         else if (CommunityStatus.Length > 0 && CommunityLoadedCategory(browser) >= 0)
         {
             // A filtered list that came back empty: the store has themes, only none in this category.
@@ -404,6 +460,7 @@ public sealed partial class ThemeRenderer
         if (CommunityUpdates.Contains(t.Id)) flags |= CommunityFlagUpdate;
         if (CommunityInLibrary.Contains(t.Id)) flags |= CommunityFlagInLibrary;
         if (CommunityPreviews.ContainsKey(t.Id) && !_failedThumbs.Contains(t.Id)) flags |= CommunityFlagPreview;
+        else if (CommunityPicturesLoading && CommunityPictureWaiting(t)) flags |= CommunityFlagWaiting;
         return flags;
     }
 
@@ -436,7 +493,7 @@ public sealed partial class ThemeRenderer
         // that has to wait shows the placeholder meanwhile and (its stamp saying so) is made again on a later frame.
         bool wantPreview = (flags & CommunityFlagPreview) != 0 && _communityDecodes < CommunityDecodesPerFrame;
         if (wantPreview) _communityDecodes++;
-        bool preview = DrawCommunityPicture(c, t, wantPreview);
+        bool preview = DrawCommunityPicture(c, t, wantPreview, (flags & CommunityFlagWaiting) != 0);
 
         // Badges on the picture: the state of the pack at the right, the heart of a liked theme at the left.
         bool update = (flags & CommunityFlagUpdate) != 0;
@@ -497,9 +554,10 @@ public sealed partial class ThemeRenderer
         }
     }
 
-    // The picture: the store preview cropped to the picture's shape and scaled once, or the shared placeholder until it has
-    // arrived (or when it cannot be decoded). Returns whether the preview is what was drawn.
-    private bool DrawCommunityPicture(Surface card, CommunityTheme t, bool wantPreview)
+    // The picture: the store preview cropped to the picture's shape and scaled once; a plain area while it is on its way
+    // (the shimmer moves over it); the shared placeholder when it cannot be decoded or the store has none. Returns
+    // whether the preview is what was drawn.
+    private bool DrawCommunityPicture(Surface card, CommunityTheme t, bool wantPreview, bool waiting)
     {
         if (wantPreview && CommunityPreviews.TryGetValue(t.Id, out byte[]? png))
         {
@@ -512,6 +570,11 @@ public sealed partial class ThemeRenderer
                 return true;
             }
             catch { _failedThumbs.Add(t.Id); }
+        }
+        if (waiting && !_failedThumbs.Contains(t.Id))
+        {
+            card.FillRect(0, 0, CommunityCardW, CommunityImageH, KeyFill);
+            return false;
         }
         // Drawn right away: adding the next image to the cache may drop this one.
         (_communityImages.TryGet(FallbackKey, CommunityCardW, CommunityImageH) ?? AddCommunityPlaceholder()).Draw(card, 0, 0);

@@ -52,6 +52,11 @@ public sealed partial class ThemeRenderer
         public readonly PackReport Report = report;
         /// <summary>Name of the panel's picture in the image cache (see <see cref="ThemeRenderer.BuildDetailPanel"/>).</summary>
         public readonly string PanelKey = "detail-panel:" + path;
+        /// <summary>The fit the texts were made with; null while it is not known.</summary>
+        public PackFit? Fit;
+        public string Check = "";
+        public bool CheckWarn;
+        public bool[] RowShort = Array.Empty<bool>();
         public IReadOnlyList<string> Name = Array.Empty<string>(), Description = Array.Empty<string>();
         public string Meta = "";
         public bool Clean;
@@ -64,18 +69,27 @@ public sealed partial class ThemeRenderer
     }
 
     private DetailText? _detail;
+
+    /// <summary>
+    /// What the console lacks of each library pack (see <see cref="PackFit"/>), by pack path; set by the app when its
+    /// background check is done. A pack without an entry shows no fit.
+    /// </summary>
+    public Dictionary<string, PackFit> PackFits { get; } = new(StringComparer.Ordinal);
     // Width of the wider label of the Apply button ("Apply theme" or "Please wait…"), measured on first use.
     private int _detailApplyLabelWidth;
 
     internal DetailText DetailTextOf(ThemeLibraryEntry entry)
     {
+        PackFits.TryGetValue(entry.Path, out PackFit? fit);
         if (_detail is { } cached && cached.Path == entry.Path && ReferenceEquals(cached.Manifest, entry.Manifest)
-            && ReferenceEquals(cached.Report, entry.Report)) return cached;
+            && ReferenceEquals(cached.Report, entry.Report) && ReferenceEquals(cached.Fit, fit)) return cached;
         // The panel picture of the pack that was open before is of no use any more; keep the image cache free of it.
         if (_detail is { } previous) _libraryImages.Remove(previous.PanelKey);
 
-        var t = new DetailText(entry.Path, entry.Manifest, entry.Report);
+        var t = new DetailText(entry.Path, entry.Manifest, entry.Report) { Fit = fit };
         PackSummary summary = SummaryOf(entry);
+        // The rows of the targets this console has no file for: "12 of 16" instead of "16".
+        PackSummary? missing = fit is null ? null : PackSummary.Of(fit.Missing);
 
         t.Name = _screenHeading.Wrap(entry.Manifest.Name, DetailTextW, 2);
         t.Clean = entry.Report.Issues.Count == 0;
@@ -87,19 +101,27 @@ public sealed partial class ThemeRenderer
         int groups = summary.Groups.Count, rows = groups + (summary.Other > 0 ? 1 : 0);
         var labels = new string[rows];
         var counts = new string[rows];
+        var lacking = new bool[rows];
         for (int i = 0; i < groups; i++)
         {
             (string label, int count) = summary.Groups[i];
             labels[i] = label;
-            counts[i] = count > 1 ? count.ToString() : "";
+            (counts[i], lacking[i]) = FitCount(count, missing?.Count(summary.Kinds[i]) ?? 0);
         }
         if (summary.Other > 0)
         {
             labels[groups] = summary.Other == 1 ? "Other file" : "Other files";
-            counts[groups] = summary.Other > 1 ? summary.Other.ToString() : "";
+            (counts[groups], lacking[groups]) = FitCount(summary.Other, missing?.Other ?? 0);
         }
         t.RowLabels = labels;
         t.RowCounts = counts;
+        t.RowShort = lacking;
+
+        // The pack check, then what this console has of it once that is known.
+        string check = t.Clean ? "Pack checked" : "Pack checked · has warnings";
+        int gone = fit?.Missing.Count ?? 0;
+        t.Check = fit is null ? check : gone == 0 ? check + " · all files on this console" : $"{check} · {Plural(gone, "file")} not on this console";
+        t.CheckWarn = !t.Clean || gone > 0;
         t.Nothing = rows == 0;
 
         // The list matters more than the description: the description gives up lines (down to two) until every row
@@ -119,6 +141,12 @@ public sealed partial class ThemeRenderer
         }
         return _detail = t;
     }
+
+    // The count of a row: "16", or "12 of 16" in the warning colour when the console lacks files of it ("Missing" for a
+    // row without a number).
+    private static (string Text, bool Short) FitCount(int count, int missing) =>
+        missing <= 0 ? (count > 1 ? count.ToString() : "", false)
+        : count > 1 ? ($"{count - missing} of {count}", true) : ("Missing", true);
 
     // Wraps the description to the given number of lines and stacks the blocks of the panel from the top.
     private void PlaceDetail(DetailText t, string description, int lines)
@@ -201,14 +229,14 @@ public sealed partial class ThemeRenderer
         {
             int top = t.RowsTop + i * DetailRowStep + dy;
             DrawLeft(_body, s, t.RowLabels[i], x, top + DetailRowInset, White);
-            if (t.RowCounts[i].Length > 0) DrawRight(_label, s, t.RowCounts[i], right, top + DetailRowInset, Accent);
+            if (t.RowCounts[i].Length > 0) DrawRight(_label, s, t.RowCounts[i], right, top + DetailRowInset, t.RowShort[i] ? Warn : Accent);
             if (i < t.Rows - 1 || t.More.Length > 0) Paint.FillRect(s, x, top + DetailRowStep - 1, DetailTextW, 1, Theme.Hairline);
         }
         if (t.More.Length > 0) DrawLeft(_small, s, t.More, x, t.RowsTop + t.Rows * DetailRowStep + 8 + dy, Muted);
 
         // The pack check, with a dot in its colour, right above the buttons.
-        Color check = t.Clean ? Theme.Success : Warn;
+        Color check = t.CheckWarn ? Warn : Theme.Success;
         Paint.FillCircle(s, x + 5f, DetailCheckY + dy + 14f, 5f, check);
-        DrawLeft(_small, s, t.Clean ? "Pack checked" : "Pack checked · has warnings", x + 20, DetailCheckY + dy, check);
+        ClipLeft(_small, s, t.Check, x + 20, DetailCheckY + dy, check, DetailTextW - 20);
     }
 }
