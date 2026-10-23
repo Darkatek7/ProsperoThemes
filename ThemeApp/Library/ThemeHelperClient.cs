@@ -22,7 +22,7 @@ public static class ThemeHelperClient
     public const int Port = 9071;
     public const int LoaderPort = 9021;
     /// <summary>The build tag this app expects; ThemeHelper/Program.cs BuildTag.</summary>
-    public const int ExpectedTag = 7;
+    public const int ExpectedTag = 8;
     public const string ElfPath = DeviceThemeLibrary.AssetRoot + "/ThemeHelper.elf";
 
     private const uint ReplyTimeoutMicroseconds = 15_000_000;
@@ -231,6 +231,35 @@ public static class ThemeHelperClient
         string reply = Request($"RENAME {from} {to}", null, out _);
         if (reply != "RENAME rc=0") throw new InvalidOperationException($"rename {from} failed: {reply}");
     }
+
+    /// <summary>
+    /// Restarts the home screen (SceShellUI) so the icons and sounds just written show, and waits while the helper
+    /// watches it for about 30 seconds. When the restarted home screen keeps crashing, the helper copies each backup
+    /// of <paramref name="backups"/> over its file. Returns how many times the home screen started and how many
+    /// files went back; throws when the helper refuses or does not answer.
+    /// </summary>
+    public static (int Restarts, int Restored) RestartShell(IReadOnlyList<(string Backup, string Device)> backups)
+    {
+        var request = new StringBuilder("RESTARTSHELL ").Append(backups.Count).Append('\n');
+        foreach (var (backup, device) in backups) request.Append(backup).Append(' ').Append(device).Append('\n');
+        using var connection = TcpConnection.Connect(SocketAddress.Loopback(Port));
+        connection.SetReceiveTimeout(RestartTimeoutMicroseconds);
+        connection.SendAll(Encoding.ASCII.GetBytes(request.ToString()));
+        string reply = ReadLine(connection);
+        const string prefix = "RESTARTSHELL restarts=", restoredField = " restored=";
+        int split = reply.IndexOf(restoredField, StringComparison.Ordinal);
+        if (!reply.StartsWith(prefix, StringComparison.Ordinal) || split < 0
+            || !int.TryParse(reply.AsSpan(prefix.Length, split - prefix.Length), out int restarts)
+            || !int.TryParse(reply.AsSpan(split + restoredField.Length), out int restored))
+            throw new InvalidOperationException("restarting the home screen failed: " + (reply.Length == 0 ? "no answer" : reply));
+        return (restarts, restored);
+    }
+
+    /// <summary>ThemeHelper's LoopRestarts: this many starts within its watch count as a home screen that keeps crashing.</summary>
+    public const int ShellLoopRestarts = 3;
+
+    // The helper watches the restarted home screen for 30 seconds, and may then copy the icon container back.
+    private const uint RestartTimeoutMicroseconds = 120_000_000;
 
     /// <summary>Sends one command (plus an optional body), reads the status line and, for READ, the data.</summary>
     private static string Request(string command, byte[]? body, out byte[]? readData)

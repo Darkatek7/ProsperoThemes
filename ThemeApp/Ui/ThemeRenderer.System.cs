@@ -71,6 +71,8 @@ public sealed partial class ThemeRenderer
 
     private static readonly HintItem[] SystemChangeHints = [new(PadButton.Cross, "Change"), new(PadButton.Circle, "Back")];
     private static readonly HintItem[] SystemChooseHints = [new(PadButton.Cross, "Choose"), new(PadButton.Circle, "Back")];
+    private static readonly HintItem[] SystemVolumeHints =
+        [new(PadButton.DPad, "Change"), new(PadButton.Cross, "Apply now"), new(PadButton.Circle, "Back")];
     // The button on the screen already says "Import from USB", so the footer only adds the way out.
     private static readonly HintItem[] ImportHintItems = [new(PadButton.Circle, "Library")];
     private static readonly HintItem[] StoreAddressHintItems =
@@ -79,9 +81,12 @@ public sealed partial class ThemeRenderer
         [new(PadButton.Cross, "Type"), new(PadButton.Square, "Delete"), new(PadButton.Circle, "Cancel"), new(PadButton.Options, "Search")];
 
     /// <summary>The footer hints of the System list: a row that holds a value says "Change", the others "Choose".</summary>
-    private HintItem[] SystemHints(ThemeBrowser browser) =>
-        (SystemRow)browser.SystemSelected is SystemRow.Backgrounds or SystemRow.EarlierThemes or SystemRow.Sounds or SystemRow.StoreAddress
-            ? SystemChangeHints : SystemChooseHints;
+    private HintItem[] SystemHints(ThemeBrowser browser) => (SystemRow)browser.SystemSelected switch
+    {
+        SystemRow.SoundVolume or SystemRow.MusicVolume => SystemVolumeHints,
+        SystemRow.Backgrounds or SystemRow.EarlierThemes or SystemRow.Sounds or SystemRow.StoreAddress => SystemChangeHints,
+        _ => SystemChooseHints,
+    };
 
     private HintItem[] ImportHints(ThemeBrowser browser) => ImportHintItems;
 
@@ -161,22 +166,25 @@ public sealed partial class ThemeRenderer
 
     // ---- System -----------------------------------------------------------------------------------------------------
 
-    private static readonly string[] SystemLabels = ["App backgrounds", "Earlier themes", "Music and sounds", "Store address", "Firmware report", "Restore defaults"];
+    private static readonly string[] SystemLabels = ["App backgrounds", "Earlier themes", "Music and sounds", "Sound volume", "Music volume", "Store address", "Firmware report", "Restore defaults"];
     private static readonly string[] SystemDescriptions =
     [
         "Which apps show a theme’s background image",
         "Whether a new theme keeps what earlier themes changed",
         "Whether themes may change the music and sounds",
+        "How loud a theme’s system sounds play",
+        "How loud a theme’s home music plays",
         "Where the Community tab loads themes from",
         "Save or send a list of the console’s theme files",
         "Put every background, icon and sound back to the original",
     ];
 
-    internal const int SysRowsTop = SysBodyTop, SysRowH = 64, SysRowGap = 8;
+    // Eight rows of 52 leave the two-line info panel above the footer.
+    internal const int SysRowsTop = SysBodyTop, SysRowH = 52, SysRowGap = 8;
     private const int SysRowPad = 32, SysLabelWidth = 288;
     // Equal rows, then the info panel below them.
-    private const int SysInfoTop = SysRowsTop + ThemeBrowser.SystemRowCount * SysRowH + (ThemeBrowser.SystemRowCount - 1) * SysRowGap + 32, SysInfoPad = 28, SysInfoPitch = 40, SysInfoLabelWidth = 176;
-    private const int SysSegmentHeight = 48, SysSegmentInset = 4, SysSegmentPad = 20, SysUrlMaxWidth = 640;
+    private const int SysInfoTop = SysRowsTop + ThemeBrowser.SystemRowCount * SysRowH + (ThemeBrowser.SystemRowCount - 1) * SysRowGap + 24, SysInfoPad = 28, SysInfoPitch = 40, SysInfoLabelWidth = 176;
+    private const int SysSegmentHeight = 44, SysSegmentInset = 4, SysSegmentPad = 20, SysUrlMaxWidth = 640;
     // A focused row is lighter than the glass of the others; its text steps up a little with it.
     internal static readonly Color SysRowFocusFill = Color.FromRgb(46, 62, 84);
     private static readonly Color SysFocusText = Color.FromRgb(196, 208, 226);
@@ -187,6 +195,15 @@ public sealed partial class ThemeRenderer
     private const string SysSegmentOwn = "Without own image", SysSegmentAll = "All apps";
     private const string SysSegmentKeep = "Combine", SysSegmentReplace = "Replace", SysSegmentOn = "On", SysSegmentOff = "Off";
     private int _sysSegmentOwnWidth, _sysSegmentAllWidth, _sysSegmentKeepWidth, _sysSegmentReplaceWidth, _sysSegmentOnWidth, _sysSegmentOffWidth;
+    // The Sound volume row: one segment per volume, all as wide as the widest.
+    private static readonly string[] SysVolumeLabels = Array.ConvertAll(AppSettings.SoundVolumes, v => v + "%");
+    private int _sysVolumeWidth;
+
+    /// <summary>The UI sound volume in percent (<see cref="AppSettings.SoundVolume"/>), shown on its System row.</summary>
+    public int SoundVolume { get; set; } = AppSettings.DefaultSoundVolume;
+
+    /// <summary>The home music volume in percent (<see cref="AppSettings.MusicVolume"/>), shown on its System row.</summary>
+    public int MusicVolume { get; set; } = AppSettings.DefaultMusicVolume;
     // Texts of the info panel, rebuilt only when what they show changes.
     private string _sysCountText = "", _sysFirmwareText = "";
     private int _sysCountFor = -1;
@@ -207,6 +224,7 @@ public sealed partial class ThemeRenderer
             _sysSegmentReplaceWidth = _small.MeasureText(SysSegmentReplace) + 2 * SysSegmentPad;
             // On and Off are as wide as each other, so the thumb does not change size.
             _sysSegmentOnWidth = _sysSegmentOffWidth = Math.Max(_small.MeasureText(SysSegmentOn), _small.MeasureText(SysSegmentOff)) + 2 * SysSegmentPad + 16;
+            foreach (string label in SysVolumeLabels) _sysVolumeWidth = Math.Max(_sysVolumeWidth, _small.MeasureText(label) + 2 * SysSegmentPad);
         }
 
         // Every row first, then the one focus ring: its glow reaches past the gap into the neighbours.
@@ -238,6 +256,14 @@ public sealed partial class ThemeRenderer
                 case SystemRow.Sounds:
                     descriptionRight = DrawSysSegments(s, right, y, SysSegmentOn, _sysSegmentOnWidth,
                         SysSegmentOff, _sysSegmentOffWidth, !Sounds) - 24;
+                    break;
+                case SystemRow.SoundVolume:
+                    descriptionRight = DrawSysSteps(s, right, y, SysVolumeLabels, _sysVolumeWidth,
+                        Array.IndexOf(AppSettings.SoundVolumes, SoundVolume)) - 24;
+                    break;
+                case SystemRow.MusicVolume:
+                    descriptionRight = DrawSysSteps(s, right, y, SysVolumeLabels, _sysVolumeWidth,
+                        Array.IndexOf(AppSettings.SoundVolumes, MusicVolume)) - 24;
                     break;
                 case SystemRow.StoreAddress:
                     descriptionRight = DrawSysUrl(s, browser.StoreUrl, right, y, textY, focus) - 24;
@@ -279,6 +305,20 @@ public sealed partial class ThemeRenderer
         return x;
     }
 
+    // A control of several equal choices (the Sound volume row), drawn like DrawSysSegments. Returns its left edge.
+    private int DrawSysSteps(Surface s, int right, int rowY, string[] labels, int width, int active)
+    {
+        int trackW = labels.Length * width + 2 * SysSegmentInset;
+        int x = right - trackW, y = rowY + (SysRowH - SysSegmentHeight) / 2;
+        int thumbH = SysSegmentHeight - 2 * SysSegmentInset;
+        Paint.Capsule(s, x, y, trackW, SysSegmentHeight, SysSegmentTrack);
+        if (active >= 0) Paint.Capsule(s, x + SysSegmentInset + active * width, y + SysSegmentInset, width, thumbH, White);
+        int textY = y + SysSegmentInset + (thumbH - _small.LineHeight) / 2;
+        for (int i = 0; i < labels.Length; i++)
+            DrawMid(_small, s, labels[i], x + SysSegmentInset + i * width + width / 2, textY, i == active ? PillInk : Muted);
+        return x;
+    }
+
     // The store address (or that none is set), right-aligned in front of the chevron. Returns the left edge of what it drew.
     private int DrawSysUrl(Surface s, string url, int right, int rowY, int textY, bool focus)
     {
@@ -305,34 +345,32 @@ public sealed partial class ThemeRenderer
         return right - (int)depth - 3;
     }
 
-    // Library count, storage, pack format, firmware and the app's version, as caption rows in two columns of one glass panel.
+    // Library count, the app's version, firmware and storage, as caption rows in two columns of one glass panel.
     private void DrawSysInfo(Surface s, int count, int enter)
     {
         if (_sysCountFor != count) { _sysCountFor = count; _sysCountText = Plural(count, "theme"); }
         if (!ReferenceEquals(_sysFirmwareFor, Firmware)) { _sysFirmwareFor = Firmware; _sysFirmwareText = FirmwareLabel(Firmware); }
 
         int y = SysInfoTop + enter;
-        // The version row is only there when the app could read its version; the panel is as tall as its rows.
-        int rows = AppVersion.Length > 0 ? 3 : 2;
-        SysGlass(s, Theme.SafeX, y, Theme.ContentWidth, 2 * SysInfoPad + rows * SysInfoPitch - 8);
+        SysGlass(s, Theme.SafeX, y, Theme.ContentWidth, 2 * SysInfoPad + 2 * SysInfoPitch - 8);
         int leftX = Theme.SafeX + SysRowPad, rightX = Theme.ScreenWidth / 2;
         int rowY = y + SysInfoPad;
         SysInfoRow(s, "Library", _sysCountText, leftX, rowY, rightX - leftX - SysInfoLabelWidth - 32);
-        SysInfoRow(s, "Firmware", _sysFirmwareText, leftX, rowY + SysInfoPitch, rightX - leftX - SysInfoLabelWidth - 32);
+        // The version row is only there when the app could read its version.
         if (AppVersion.Length > 0)
         {
             int width = rightX - leftX - SysInfoLabelWidth - 32;
-            SysInfoRow(s, "App version", AppVersion, leftX, rowY + 2 * SysInfoPitch, width);
+            SysInfoRow(s, "App version", AppVersion, leftX, rowY + SysInfoPitch, width);
             // "01.000.021 · 01.000.022 available", the newer one in the accent colour.
             if (_newerText.Length > 0)
             {
                 int used = _small.MeasureText(AppVersion);
-                ClipLeft(_small, s, _newerText, leftX + SysInfoLabelWidth + used, rowY + 2 * SysInfoPitch, Accent, width - used);
+                ClipLeft(_small, s, _newerText, leftX + SysInfoLabelWidth + used, rowY + SysInfoPitch, Accent, width - used);
             }
         }
         int valueWidth = Theme.ContentRight - SysRowPad - rightX - SysInfoLabelWidth;
-        SysInfoRow(s, "Storage", "/data/prospero-themes/library", rightX, rowY, valueWidth);
-        SysInfoRow(s, "Pack format", "Format 2 · ZIP / TAR", rightX, rowY + SysInfoPitch, valueWidth);
+        SysInfoRow(s, "Firmware", _sysFirmwareText, rightX, rowY, valueWidth);
+        SysInfoRow(s, "Storage", "/data/prospero-themes/library", rightX, rowY + SysInfoPitch, valueWidth);
     }
 
     private void SysInfoRow(Surface s, string label, string value, int x, int y, int valueWidth)

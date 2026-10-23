@@ -15,8 +15,12 @@
 //   - THE APP'S FOLDER. Where the app's sandbox has no /data (10.01 with OnionHEN), the app keeps its library,
 //     backups and settings through the helper: inside /data/prospero-themes WRITE and RENAME take any name, and
 //     MKDIR, UNLINK and a LIST of files and folders are allowed. Nowhere else.
-//   - NARROW COMMAND SET. PING, REMOUNT, STAT, READ, WRITE, RENAME, LIST, MKDIR, UNLINK, QUIT. There is no
-//     RMDIR, SOTEST or any other diagnostic command.
+//   - NARROW COMMAND SET. PING, REMOUNT, STAT, READ, WRITE, RENAME, LIST, MKDIR, UNLINK, RESTARTSHELL, QUIT.
+//     There is no RMDIR, SOTEST, KILL or any other diagnostic command.
+//   - ONE PROCESS. RESTARTSHELL ends SceShellUI (the home screen) and nothing else, so it reloads the system
+//     icons, tile icons and sounds a theme wrote; the system starts it again within about a second. It
+//     then watches the restarted shell, and when it keeps crashing it copies the backups the app named back
+//     over the theme files (see ServeRestartShell).
 //
 // Requests are ASCII lines terminated by '\n'. ReadLine consumes exactly one byte past the newline and
 // never reads ahead, so a WRITE command's binary payload that follows its header line stays intact.
@@ -74,7 +78,7 @@ internal static unsafe class Program
     private const int SysNmount = 378;
 
     // Build tag announced on PING, so a client can tell which helper revision it is talking to.
-    private const int BuildTag = 7;
+    private const int BuildTag = 8;
 
     // /system_ex is remounted once per boot. A second MNT_UPDATE on the already writable mount was the
     // last thing before a console hang (2026-10-13), so it is not repeated: not within this helper's
@@ -100,6 +104,7 @@ internal static unsafe class Program
             if (client < 0)
                 continue;
             ClientTimeout.Apply(client);
+            NoSigPipe(client);
             Serve(client, line, scratch);
             PayloadTcpServer.Close(client);
         }
@@ -271,6 +276,14 @@ internal static unsafe class Program
                 continue;
             }
 
+            // "RESTARTSHELL <n>", then n lines "<backup> <target>". Like WRITE, a refused request ends the
+            // connection, so its pair lines are never read as commands.
+            if (StartsWith(line, "RESTARTSHELL "))
+            {
+                ServeRestartShell(client, ParseInt(line + 13), line, scratch);
+                return;
+            }
+
             if (StartsWith(line, "QUIT"))
                 return;
 
@@ -361,6 +374,194 @@ internal static unsafe class Program
             if (got <= 0) return;
             length -= got;
         }
+    }
+
+    // ---- home screen restart ----
+
+    // FreeBSD kill(2), nanosleep(2) and __sysctl(2): raw syscalls, so the helper imports nothing new that a
+    // firmware could fail to resolve.
+    private const int SysKill = 37;
+    private const int SysNanosleep = 240;
+    private const int SysSysctl = 202;
+    private const int SigKill = 9;
+
+    // struct kinfo_proc (FreeBSD 11, amd64), as DevProbe's PS reads it: the entry size is its first int.
+    private const int KiPid = 72;
+    private const int KiComm = 447;     // char[20]
+
+    // At most this many backups come with a restart (the icon container and the tile icons of one theme).
+    private const int MaxRestorePairs = 64;
+
+    // Measured on 13.00 (2026-10-23): one kill gives exactly one new SceShellUI about a second later, and it
+    // then runs steadily; three kills four seconds apart give three. A shell that crashes on its own after the
+    // restart starts again a few times within the watch, or the system stops starting it.
+    private const int WatchMilliseconds = 30_000;
+    private const int PollMilliseconds = 500;
+    private const int LoopRestarts = 3;
+    private const int GoneMilliseconds = 15_000;
+
+    // Allocated once: the process table is polled every half second during a watch, and the payload heap is small.
+    private const int ProcTableBytes = 1024 * 1024;
+    private static byte[]? _procTable;
+    private static byte[]? _pairs;
+
+    /// <summary>
+    /// Ends SceShellUI and watches it come back. Before anything happens, every pair is checked: the backup must
+    /// lie in the app's own folder and exist, the target in a theme root (not a .tmp). When the shell restarts
+    /// <see cref="LoopRestarts"/> times or more on its own, or stays gone for <see cref="GoneMilliseconds"/>, each
+    /// backup is copied back over its target (.tmp, then rename). The watch and the copies finish even when the app
+    /// is gone. Answers "RESTARTSHELL restarts=&lt;n&gt; restored=&lt;k&gt;" (restarts counts every new shell, the
+    /// first included) or "RESTARTSHELL rc=&lt;error&gt;".
+    /// </summary>
+    private static void ServeRestartShell(int client, int count, byte* line, byte* scratch)
+    {
+        if (count < 0 || count > MaxRestorePairs) { Send(client, "ERR badargs\n"u8); return; }
+        _pairs ??= new byte[MaxRestorePairs * 2 * MaxPath];
+        fixed (byte* pairs = _pairs)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                int length = ReadLine(client, line, MaxLine);
+                line[length] = 0;
+                byte* cursor = line;
+                while (*cursor != 0 && *cursor != (byte)' ') cursor++;
+                if (*cursor != (byte)' ') { Send(client, "ERR badpath\n"u8); return; }
+                *cursor = 0;
+                byte* backup = PathFrom(line, pairs + 2 * i * MaxPath);
+                byte* target = PathFrom(cursor + 1, pairs + (2 * i + 1) * MaxPath);
+                if (backup == null || target == null || !IsDataPath(backup) || IsDataPath(target)
+                    || !IsConfined(target) || EndsWithTmp(target))
+                {
+                    Send(client, "ERR badpath\n"u8);
+                    return;
+                }
+                SceKernelStat info = default;
+                if (KernelFile.stat(backup, &info) != 0
+                    && PayloadCrt.Syscall(PayloadCrt.SYS_stat, (long)(nint)backup, (long)(nint)(&info)) != 0)
+                {
+                    Send(client, "ERR nobackup\n"u8);
+                    return;
+                }
+            }
+
+            int shell = ShellPid();
+            if (shell <= 0) { SendResult(client, "RESTARTSHELL", "rc="u8, shell == 0 ? -1 : shell); return; }
+            PayloadCrt.Klog("sp:themehelper:restart shell\n\0"u8);
+            long rc = PayloadCrt.Syscall(SysKill, shell, SigKill);
+            if (rc != 0) { SendResult(client, "RESTARTSHELL", "rc="u8, (int)rc); return; }
+
+            int last = shell, restarts = 0, gone = 0;
+            bool looping = false;
+            for (int waited = 0; waited < WatchMilliseconds; waited += PollMilliseconds)
+            {
+                Sleep(PollMilliseconds);
+                int now = ShellPid();
+                if (now <= 0)
+                {
+                    gone += PollMilliseconds;
+                    if (gone >= GoneMilliseconds) { looping = true; break; }
+                    continue;
+                }
+                gone = 0;
+                if (now == last) continue;
+                last = now;
+                if (++restarts >= LoopRestarts) { looping = true; break; }
+            }
+
+            int restored = 0;
+            if (looping)
+            {
+                PayloadCrt.Klog("sp:themehelper:shell keeps crashing, restoring\n\0"u8);
+                for (int i = 0; i < count; i++)
+                    if (CopyBack(pairs + 2 * i * MaxPath, pairs + (2 * i + 1) * MaxPath, scratch)) restored++;
+            }
+            Send(client, "RESTARTSHELL restarts="u8);
+            SendInt(client, restarts);
+            Send(client, " restored="u8);
+            SendInt(client, restored);
+            Send(client, "\n"u8);
+        }
+    }
+
+    /// <summary>The pid of SceShellUI, 0 when none runs, a negative number when the process table cannot be read.</summary>
+    private static int ShellPid()
+    {
+        _procTable ??= new byte[ProcTableBytes];
+        int* mib = stackalloc int[3];
+        mib[0] = 1;     // CTL_KERN
+        mib[1] = 14;    // KERN_PROC
+        mib[2] = 8;     // KERN_PROC_PROC
+        nuint size = ProcTableBytes;
+        fixed (byte* table = _procTable)
+        {
+            if (PayloadCrt.Syscall(SysSysctl, (long)(nint)mib, 3, (long)(nint)table, (long)(nint)(&size), 0, 0) != 0)
+                return -2;
+            ReadOnlySpan<byte> name = "SceShellUI"u8;
+            byte* entry = table, end = table + size;
+            while (entry + KiComm + 20 <= end)
+            {
+                int structSize = *(int*)entry;
+                if (structSize <= 0) break;
+                bool match = entry[KiComm + name.Length] == 0;
+                for (int k = 0; match && k < name.Length; k++)
+                    if (entry[KiComm + k] != name[k]) match = false;
+                if (match) return *(int*)(entry + KiPid);
+                entry += structSize;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>Copies <paramref name="backup"/> to "<paramref name="target"/>.tmp" and renames it over the target.</summary>
+    private static bool CopyBack(byte* backup, byte* target, byte* scratch)
+    {
+        byte* tmp = stackalloc byte[MaxPath + 4];
+        int n = Length(target);
+        for (int i = 0; i < n; i++) tmp[i] = target[i];
+        tmp[n] = (byte)'.'; tmp[n + 1] = (byte)'t'; tmp[n + 2] = (byte)'m'; tmp[n + 3] = (byte)'p'; tmp[n + 4] = 0;
+
+        int from = KernelFile.sceKernelOpen(backup, OpenReadOnly, 0);
+        if (from < 0) from = (int)PayloadCrt.Syscall(PayloadCrt.SYS_open, (long)(nint)backup, OpenReadOnly, 0);
+        if (from < 0) return false;
+        int flags = OpenReadWrite | OpenCreate | OpenTruncate;
+        int to = KernelFile.sceKernelOpen(tmp, flags, Mode666);
+        if (to < 0) to = (int)PayloadCrt.Syscall(PayloadCrt.SYS_open, (long)(nint)tmp, flags, Mode666);
+        if (to < 0) { KernelFile.sceKernelClose(from); return false; }
+
+        bool ok = true;
+        while (true)
+        {
+            long got = KernelFile.sceKernelRead(from, scratch, StreamChunk);
+            if (got < 0) got = PayloadCrt.Syscall(PayloadCrt.SYS_read, from, (long)(nint)scratch, StreamChunk);
+            if (got == 0) break;
+            if (got < 0) { ok = false; break; }
+            long wrote = KernelFile.sceKernelWrite(to, scratch, (nuint)got);
+            if (wrote < 0) wrote = PayloadCrt.Syscall(PayloadCrt.SYS_write, to, (long)(nint)scratch, got);
+            if (wrote != got) { ok = false; break; }
+        }
+        KernelFile.sceKernelClose(from);
+        KernelFile.sceKernelClose(to);
+        if (!ok) return false;
+
+        int rc = KernelFile.sceKernelRename(tmp, target);
+        if (rc != 0) rc = (int)PayloadCrt.Syscall(PayloadCrt.SYS_rename, (long)(nint)tmp, (long)(nint)target);
+        return rc == 0;
+    }
+
+    private static void Sleep(int milliseconds)
+    {
+        KernelTimespec time = new() { Seconds = milliseconds / 1000, Nanoseconds = milliseconds % 1000 * 1_000_000L };
+        PayloadCrt.Syscall(SysNanosleep, (long)(nint)(&time), 0);
+    }
+
+    // SO_NOSIGPIPE: a reply to a client that went away (RESTARTSHELL answers after a 30 s watch) must fail, not
+    // end the helper with SIGPIPE.
+    private const int SoNoSigPipe = 0x0800;
+
+    private static void NoSigPipe(int client)
+    {
+        int on = 1;
+        PosixSocket.setsockopt(client, PosixSocket.SolSocket, SoNoSigPipe, &on, 4);
     }
 
     // MNT_RDONLY in statfs.f_flags.

@@ -1,0 +1,73 @@
+{
+  "samples": 120000,
+  "encode": {
+    "intro0": {
+      "sha256": "84c135548a1e0388bcc947968d1d535002b137694a01bec00c90ef1fec1080ea",
+      "length": 141768,
+      "samples": 120000,
+      "loop": {
+        "start": 30000,
+        "end": 149999
+      }
+    },
+    "intro30000": {
+      "sha256": "6717be93ba869437f1f67a8085f2366009064a3f524a9c6e86dbadcede4773ea",
+      "length": 112168,
+      "samples": 120000,
+      "loop": {
+        "start": 30000,
+        "end": 119999
+      }
+    },
+    "withFileProfile": {
+      "sha256": "17cf61cdc797edd728cccc1cd9e4e4dc283354134bf1b8fe6f202ea7e9db7a8e",
+      "length": 141768
+    }
+  },
+  "decode": {
+    "channels": [
+      {
+        "sha256": "b23b88a3d1ef6abbd6df614e8a3725387cdd8a0b5a1b754b9e64325f56ed63c5",
+        "length": 120832
+      },
+      {
+        "sha256": "0881d68c517502dcfa706269ba316c6e764e30322c8a43d5c9ac956089a0d868",
+        "length": 120832
+      },
+      {
+        "sha256": "4f6bffd3a23e37dc0d80c1f97a829fda9d2240cd940047550abb09b57e070769",
+        "length": 120832
+      },
+      {
+        "sha256": "3da54ee125ac6aa17ed2e05ef4f9ee7e71475c47905ebfbc22b0bee315ad51ce",
+        "length": 120832
+      },
+      {
+        "sha256": "090a39a1a7c2e2044e9cc0bae2a9bc19099cc8ae7f0508afff8ea2e752e825a0",
+        "length": 120832
+      },
+      {
+        "sha256": "0ac190bb43ef57ed88971b3bedd89d6d1db75d83bed1d3ed358a045cea1464c5",
+        "length": 120832
+      }
+    ]
+  },
+  "rescale": {
+    "0.5": {
+      "sha256": "4e7a5b343bf2d978acc88ab5b577ef5b40d75bc8a51d24bd2af09430b5b7ef3e",
+      "length": 94568
+    },
+    "0.1": {
+      "sha256": "628b77eb3e5364f790623b8bfe56a6e645800b364f452f41d094fc52ff003f4e",
+      "length": 94568
+    }
+  },
+  "rescaleStereo": {
+    "sha256": "1cc09fc0916afaae0c7db91aabd357ca062a1c05f43e565f1a702d6d72ed24b3",
+    "length": 141768
+  },
+  "sixChannels": {
+    "sha256": "552508a8c1b1a81071cd40440f882e15ebff19c6212bd41c2d51175825ca388b",
+    "length": 94568
+  }
+}

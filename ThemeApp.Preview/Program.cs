@@ -393,7 +393,7 @@ if (args.Contains("--screenshots"))
     browser.Update(UiInput.None with { PageDown = true });
     browser.StoreUrl = "http://192.168.0.5:8080"; Save("system", ThemeView.System);
     // The store knows of a later release (AppUpdate): the version row says so.
-    renderer.AppVersion = "01.000.021";
+    renderer.AppVersion = "01.000.022";
     renderer.NewerVersion = "01.000.022"; Save("system-update", ThemeView.System);
     renderer.NewerVersion = "";
     // Each row focused in turn; the last one asks before restoring, with the focus on Cancel.
@@ -425,6 +425,8 @@ if (args.Contains("--screenshots"))
     renderer.ReapplyText = "The system software changed from 12.40 to 13.00, which puts the console’s own files back. " +
         "Apply “Pokemon - Kanto Nights” again?";
     browser.AskReapply(); Save("dialog-reapply", ThemeView.Library, DialogKind.Reapply);
+    browser.Update(back); browser.TakeAction();
+    browser.AskRestartShell(); Save("dialog-restart-shell", ThemeView.Library, DialogKind.RestartShell);
     browser.Update(back); browser.TakeAction();
     renderer.Busy = true;
     renderer.Notify("Applying theme…", NoticeLevel.Info); Save("toast-info", ThemeView.Library);
@@ -508,6 +510,8 @@ app.MapPost("/input/{key}", (string key) =>
             renderer.Sounds = !renderer.Sounds;
             renderer.Notify("Takes effect on the next apply (PC preview only).", NoticeLevel.Success);
         }
+        if (action == ThemeAction.ChangeSoundVolume) renderer.SoundVolume = AppSettings.StepSoundVolume(renderer.SoundVolume, browser.SoundVolumeStep);
+        if (action == ThemeAction.ChangeMusicVolume) renderer.MusicVolume = AppSettings.StepMusicVolume(renderer.MusicVolume, browser.SoundVolumeStep);
         if (action == ThemeAction.FirmwareReport) renderer.Notify("The firmware report is written by the PS5 app. " + pcOnly, NoticeLevel.Info);
         if (action == ThemeAction.SaveStoreUrl)
         {

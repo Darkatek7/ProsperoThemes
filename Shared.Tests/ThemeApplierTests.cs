@@ -535,6 +535,26 @@ public class ThemeApplierTests
     }
 
     [Fact]
+    public void A_home_screen_restart_is_offered_only_for_tile_icons_and_the_icon_container_with_their_backups()
+    {
+        byte[] stock = PreviewKit.Png(4, 4, 0, 0, 255), theme = PreviewKit.Png(4, 4, 255, 0, 0);
+        var fake = DeviceWithLive((ShippedStoreTile, stock), (Dev1, Live("one")));
+        ThemeApplier applier = Applier(fake);
+
+        ApplyResult result = applier.Apply(MakePack(null, (StoreTile, theme), (Path1, Zst("one"))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.True(ThemeApplier.LoadsWithShell(ShippedStoreTile));
+        Assert.True(ThemeApplier.LoadsWithShell(LiveStoreTile));
+        Assert.True(ThemeApplier.LoadsWithShell("/system_ex/vsh_asset/Sce.PlayStation.PUI_UI3.rco"));
+        Assert.False(ThemeApplier.LoadsWithShell(Dev1));
+        Assert.False(ThemeApplier.LoadsWithShell("/system_ex/vsh_asset/bgm_home.at9"));
+        // The background shows without a restart, so only the tile icon's backup goes with it.
+        Assert.Equal(new[] { ("/data/prospero-themes/backup/original/" + StoreTile, ShippedStoreTile) }, applier.ShellBackups(result.Written));
+        Assert.Empty(applier.ShellBackups([Dev1]));
+    }
+
+    [Fact]
     public void A_console_with_the_live_rnps_copy_keeps_the_shipped_app_unchanged()
     {
         // 13.00: app.db points at /mnt/rnps/apps, a file written to /system_ex/rnps changes nothing.
@@ -667,6 +687,193 @@ public class ThemeApplierTests
         Assert.Empty(fake.Writes);
         Assert.Equal(0, fake.Remounts);
         Assert.Equal(Live("one"), fake.Files[Dev1]);
+    }
+
+    // ---- music volume -------------------------------------------------------
+
+    [Fact]
+    public void The_home_music_is_written_at_the_music_volume_and_other_files_as_they_are()
+    {
+        const string bgm = "/system_ex/vsh_asset/bgm_home.at9";
+        byte[] music = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "fixtures", "atrac9", "synth-6ch.at9"));
+        var fake = DeviceWithLive((bgm, music), (Dev1, Live("one")));
+
+        var applier = new ThemeApplier(fake, () => FixedNow) { MusicVolume = 0.5 };
+        ApplyResult result = applier.Apply(MakePack(null, ("vsh_asset/bgm_home.at9", music), (Path1, Zst("one"))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(Zst("one"), fake.Files[Dev1]);
+        byte[] written = fake.Files[bgm];
+        Assert.Equal(music.Length, written.Length);
+        Assert.NotEqual(music, written);
+        Assert.Equal(Atrac9Codec.ScaleVolume(music, 0.5), written);
+
+        var full = DeviceWithLive((bgm, Live("stock")));
+        Assert.True(Applier(full).Apply(MakePack(null, ("vsh_asset/bgm_home.at9", music))).Success);
+        Assert.Equal(music, full.Files[bgm]);
+    }
+
+    [Fact]
+    public void Music_the_codec_cannot_read_is_written_as_it_is_with_a_note()
+    {
+        const string bgm = "/system_ex/vsh_asset/bgm_home.at9";
+        byte[] broken = Encoding.ASCII.GetBytes("RIFF not really an at9 file");
+        var fake = DeviceWithLive((bgm, Live("stock")));
+
+        ApplyResult result = new ThemeApplier(fake, () => FixedNow) { MusicVolume = 0.1 }
+            .Apply(MakePack(null, ("vsh_asset/bgm_home.at9", broken)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(broken, fake.Files[bgm]);
+        Assert.Contains("the music is at its own volume", result.Message);
+    }
+
+    // ---- originals without a backup ----------------------------------------
+
+    private static StockCatalog CatalogWith(string logical, byte[] stock) => StockCatalog.Parse(
+        $$"""{"firmware":"13.00","assets":[{"path":"{{logical}}","stock_sha256":"{{Sha(stock)}}"}]}""");
+
+    [Fact]
+    public void A_deleted_backup_never_makes_the_themes_file_the_original()
+    {
+        byte[] original = Live("original");
+        var fake = DeviceWithLive((Dev1, original));
+        Assert.True(Applier(fake).Apply(MakePack(null, (Path1, Frame(1000, "one")))).Success);
+        fake.Files.Remove(Backup1);
+
+        ThemeApplier again = Applier(fake);
+        ApplyResult apply = again.Apply(MakePack(null, (Path1, Frame(1000, "two"))));
+
+        Assert.True(apply.Success, apply.Message);
+        Assert.Equal(Frame(1000, "two"), fake.Files[Dev1]);
+        Assert.False(fake.Files.ContainsKey(Backup1));
+        Assert.Equal(new[] { Path1 }, again.NoOriginal);
+        Assert.Contains("no original on this console", apply.Message);
+
+        ApplyResult restore = Applier(fake).RestoreOriginals();
+        Assert.Equal(Frame(1000, "two"), fake.Files[Dev1]);
+        Assert.Contains("1 changed file(s) have no original", restore.Message);
+    }
+
+    [Fact]
+    public void A_file_the_app_put_back_still_counts_as_the_original_after_its_backup_is_gone()
+    {
+        byte[] original = Live("original");
+        var fake = DeviceWithLive((Dev1, original));
+        Assert.True(Applier(fake).Apply(SingleTargetPack()).Success);
+        Assert.True(Applier(fake).RestoreOriginals().Success);
+        fake.Files.Remove(Backup1);
+
+        ThemeApplier again = Applier(fake);
+        Assert.True(again.Apply(SingleTargetPack()).Success);
+
+        Assert.Empty(again.NoOriginal);
+        Assert.Equal(original, fake.Files[Backup1]);
+    }
+
+    [Fact]
+    public void With_every_record_gone_the_catalog_tells_the_themes_file_from_the_original()
+    {
+        byte[] original = Live("original");
+        var fake = DeviceWithLive((Dev1, original));
+        Assert.True(Applier(fake).Apply(MakePack(null, (Path1, Frame(1000, "one")))).Success);
+        foreach (string path in fake.Files.Keys.Where(k => k.StartsWith("/data/prospero-themes/backup/", StringComparison.Ordinal)).ToList())
+            fake.Files.Remove(path);
+
+        var again = new ThemeApplier(fake, () => FixedNow) { Stock = CatalogWith(Path1, original) };
+        Assert.True(again.Apply(MakePack(null, (Path1, Frame(1000, "two")))).Success);
+
+        Assert.Equal(new[] { Path1 }, again.NoOriginal);
+        Assert.False(fake.Files.ContainsKey(Backup1));
+    }
+
+    [Fact]
+    public void A_backup_that_is_not_the_stock_file_is_never_put_back()
+    {
+        byte[] stock = Live("stock");
+        var fake = DeviceWithLive((Dev1, Zst("theme")));
+        fake.Files[Backup1] = Zst("older-theme");
+        fake.Files["/data/prospero-themes/backup/index.txt"] = Encoding.UTF8.GetBytes(Path1 + "\n");
+
+        var applier = new ThemeApplier(fake, () => FixedNow) { Stock = CatalogWith(Path1, stock) };
+        ApplyResult result = applier.RestoreOriginals();
+
+        Assert.Equal(Zst("theme"), fake.Files[Dev1]);
+        Assert.Equal(new[] { Path1 }, applier.NoOriginal);
+        Assert.Contains("no original", result.Message);
+
+        // Once the console has the stock file again, it becomes the backup.
+        fake.Files[Dev1] = stock;
+        Assert.True(new ThemeApplier(fake, () => FixedNow) { Stock = CatalogWith(Path1, stock) }.RestoreOriginals().Success);
+        Assert.Equal(stock, fake.Files[Backup1]);
+    }
+
+    [Fact]
+    public void A_tile_icon_without_a_backup_comes_back_from_the_shipped_app()
+    {
+        // 13.00: the tile icons live in /mnt/rnps/apps, the firmware keeps its own copy in /system_ex/rnps/apps.
+        byte[] stock = PreviewKit.Png(4, 4, 0, 0, 255), theme = PreviewKit.Png(4, 4, 255, 0, 0);
+        var fake = DeviceWithLive((LiveStoreTile, stock), (ShippedStoreTile, stock));
+        fake.Directories.Add("/mnt/rnps/apps/NPXS40047");
+        Assert.True(Applier(fake).Apply(MakePack(null, (StoreTile, theme))).Success);
+        foreach (string path in fake.Files.Keys.Where(k => k.StartsWith("/data/prospero-themes/backup/original/", StringComparison.Ordinal)).ToList())
+            fake.Files.Remove(path);
+
+        ApplyResult result = Applier(fake).RestoreOriginals();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(stock, fake.Files[LiveStoreTile]);
+        Assert.Equal(stock, fake.Files["/data/prospero-themes/backup/original/" + StoreTile]);
+        Assert.DoesNotContain("no original", result.Message);
+    }
+
+    [Fact]
+    public void A_tile_icon_applied_again_without_its_backup_backs_up_the_shipped_copy()
+    {
+        byte[] stock = PreviewKit.Png(4, 4, 0, 0, 255), theme = PreviewKit.Png(4, 4, 255, 0, 0), other = PreviewKit.Png(4, 4, 0, 255, 0);
+        var fake = DeviceWithLive((LiveStoreTile, stock), (ShippedStoreTile, stock));
+        fake.Directories.Add("/mnt/rnps/apps/NPXS40047");
+        Assert.True(Applier(fake).Apply(MakePack(null, (StoreTile, theme))).Success);
+        fake.Files.Remove("/data/prospero-themes/backup/original/" + StoreTile);
+
+        ThemeApplier again = Applier(fake);
+        Assert.True(again.Apply(MakePack(null, (StoreTile, other))).Success);
+
+        Assert.Empty(again.NoOriginal);
+        Assert.Equal(stock, fake.Files["/data/prospero-themes/backup/original/" + StoreTile]);
+    }
+
+    [Theory]
+    [InlineData("13.000.012", "13.00")]
+    [InlineData("9.600.004", "9.60")]
+    [InlineData("13.600.007", "13.60")]
+    [InlineData("13.00", null)]
+    [InlineData(null, null)]
+    public void The_catalog_of_a_firmware_is_named_like_theme_pack_names_it(string? version, string? name) =>
+        Assert.Equal(name, StockCatalog.FirmwareName(version));
+
+    [Fact]
+    public void The_stock_catalog_knows_the_assets_and_the_icon_container()
+    {
+        string json = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "catalog", "13.00.json"));
+        StockCatalog catalog = StockCatalog.Parse(json);
+        Assert.True(catalog.TryStock("vsh_asset/bgm_home.at9", out _));
+        Assert.True(catalog.TryStock("vsh_asset/Sce.PlayStation.PUI_UI3.rco", out string rco));
+        Assert.StartsWith("6050861c", rco);
+        Assert.Equal(0, StockCatalog.Parse("not json").Count);
+    }
+
+    [Theory]
+    [InlineData("/system_ex/vsh_asset/bgm_home.at9", "vsh_asset/bgm_home.at9")]
+    [InlineData("/mnt/rnps/apps/NPXS40047/appdb/default/icon0.png", "rnps/NPXS40047/appdb/default/icon0.png")]
+    [InlineData("/system_ex/rnps/apps/NPXS40047/appdb/default/icon0.png", "rnps/NPXS40047/appdb/default/icon0.png")]
+    [InlineData("/user/app/PPSA01650/sce_sys/pic0.dds", "userapp/PPSA01650/sce_sys/pic0.dds")]
+    [InlineData("/system_ex/vsh_asset/../x", null)]
+    [InlineData("/data/prospero-themes/state.json", null)]
+    public void TryLogical_is_the_inverse_of_TryResolve(string device, string? logical)
+    {
+        Assert.Equal(logical is not null, AssetRoots.TryLogical(device, out string found));
+        if (logical is not null) Assert.Equal(logical, found);
     }
 
     // ---- fake -------------------------------------------------------------

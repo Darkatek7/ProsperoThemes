@@ -31,20 +31,28 @@ public static class SystemUpdate
         string from = state.GetString("firmware");
         if (from.Length == 0 || from == firmware) return null;
 
+        if (Look.Parse(lookJson) is { Count: > 0 } look) return FromLook(look, library, from);
         var layers = new List<LookLayer>();
-        var missing = new List<string>();
-        if (Look.Parse(lookJson) is { Count: > 0 } look)
-        {
-            foreach (LookLayer layer in look)
-            {
-                if (FindByPath(library, layer.Pack) is not null) layers.Add(layer);
-                else missing.Add(layer.Name);
-            }
-        }
-        else if (FindById(library, appliedId) is { } entry)
+        if (FindById(library, appliedId) is { } entry)
         {
             ThemePart parts = ThemeParts.In(entry.Manifest) & (sounds ? ThemePart.All : ~ThemePart.Sounds);
             if (parts != ThemePart.None) layers.Add(new LookLayer(entry.Path, entry.Manifest.Id, entry.Manifest.Name, parts));
+        }
+        return layers.Count == 0 ? null : new Plan(layers, [], from);
+    }
+
+    /// <summary>
+    /// The plan that applies <paramref name="look"/> again: its layers whose pack is still in <paramref name="library"/>,
+    /// and the names of the others. Null when none is left.
+    /// </summary>
+    public static Plan? FromLook(IReadOnlyList<LookLayer> look, IReadOnlyList<ThemeLibraryEntry> library, string from = "")
+    {
+        var layers = new List<LookLayer>();
+        var missing = new List<string>();
+        foreach (LookLayer layer in look)
+        {
+            if (FindByPath(library, layer.Pack) is not null) layers.Add(layer);
+            else missing.Add(layer.Name);
         }
         return layers.Count == 0 ? null : new Plan(layers, missing, from);
     }

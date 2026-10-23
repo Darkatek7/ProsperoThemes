@@ -77,10 +77,11 @@ $helperElf = Join-Path $here '../ThemeHelper/out/ThemeHelper.elf'
 if (-not (Test-Path $helperElf)) { throw 'ThemeHelper.elf was not produced.' }
 Copy-Item -LiteralPath $helperElf -Destination (Join-Path $assetOutput 'ThemeHelper.elf') -Force
 
-# The measured asset catalog: the firmware report (System tab) looks at the files it lists.
+# The measured asset catalogs: the firmware report (System tab) looks at the files 13.00's lists, and the applier
+# tells the console's originals from a theme's files by the stock hashes of the console's firmware (StockCatalog).
 $catalogOutput = Join-Path $assetOutput 'catalog'
 New-Item -ItemType Directory -Force -Path $catalogOutput | Out-Null
-Copy-Item -LiteralPath (Join-Path $here '../catalog/13.00.json') -Destination $catalogOutput -Force
+Copy-Item -Path (Join-Path $here '../catalog/*.json') -Destination $catalogOutput -Force
 
 $fontLicenseOutput = Join-Path $assetOutput 'fonts'
 New-Item -ItemType Directory -Force -Path $fontLicenseOutput | Out-Null

@@ -113,4 +113,93 @@ public class SystemUpdateTests
         browser.Update(x);
         Assert.Equal(ThemeAction.ReapplyLater, browser.TakeAction());
     }
+
+    [Fact]
+    public void The_sound_volume_is_one_of_five_steps_25_by_default_and_left_and_right_on_its_row_change_it()
+    {
+        Assert.Equal(25, AppSettings.Parse("{}", () => "device-0001").SoundVolume);
+        Assert.Equal([10, 25, 50, 75, 100], AppSettings.SoundVolumes);
+        Assert.Equal(50, AppSettings.Parse("{\"sound_volume\":\"50\"}", () => "device-0001").SoundVolume);
+        Assert.Equal(25, AppSettings.Parse("{\"sound_volume\":\"60\"}", () => "device-0001").SoundVolume);
+        var settings = AppSettings.Parse("{}", () => "device-0001") with { SoundVolume = 10 };
+        Assert.Equal(10, AppSettings.Parse(settings.Serialize(), () => "x").SoundVolume);
+        Assert.Equal(75, AppSettings.StepSoundVolume(100, -1));
+        Assert.Equal(100, AppSettings.StepSoundVolume(100, 1));
+        Assert.Equal(10, AppSettings.StepSoundVolume(25, -1));
+        Assert.Equal(10, AppSettings.StepSoundVolume(10, -1));
+        Assert.Equal(50, AppSettings.StepSoundVolume(60, 1));
+
+        var browser = new ThemeBrowser();
+        while (browser.View != ThemeView.System) browser.Update(UiInput.None with { PageUp = true });
+        while (browser.SystemSelected != (int)SystemRow.SoundVolume) browser.Update(new UiInput(false, true, false, false, false, false));
+        browser.Update(new UiInput(false, false, true, false, false, false));
+        Assert.Equal(ThemeAction.ChangeSoundVolume, browser.TakeAction());
+        Assert.Equal(-1, browser.SoundVolumeStep);
+        browser.Update(new UiInput(false, false, false, true, false, false));
+        Assert.Equal(ThemeAction.ChangeSoundVolume, browser.TakeAction());
+        Assert.Equal(1, browser.SoundVolumeStep);
+        // X asks the app, which opens the question only when the look has sounds; busy answers Busy.
+        browser.Update(new UiInput(false, false, false, false, true, false));
+        Assert.Equal(ThemeAction.AskSoundVolume, browser.TakeAction());
+        browser.Update(new UiInput(false, false, false, false, true, false), busy: true);
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
+        browser.AskSoundVolume();
+        Assert.Equal(DialogKind.SoundVolume, browser.Dialog);
+        browser.Update(new UiInput(false, false, false, false, true, false));
+        Assert.Equal(ThemeAction.ApplySoundVolume, browser.TakeAction());
+    }
+
+    [Fact]
+    public void The_music_volume_is_10_by_default_and_left_and_right_on_its_row_change_it()
+    {
+        Assert.Equal(10, AppSettings.Parse("{}", () => "device-0001").MusicVolume);
+        Assert.Equal(10, AppSettings.Parse("{\"music_volume\":\"60\"}", () => "device-0001").MusicVolume);
+        var settings = AppSettings.Parse("{}", () => "device-0001") with { MusicVolume = 50 };
+        Assert.Equal(50, AppSettings.Parse(settings.Serialize(), () => "x").MusicVolume);
+        Assert.Equal(25, AppSettings.Parse(settings.Serialize(), () => "x").SoundVolume);
+        Assert.Equal(75, AppSettings.StepMusicVolume(100, -1));
+        Assert.Equal(10, AppSettings.StepMusicVolume(60, -1));
+        Assert.Equal(25, AppSettings.StepMusicVolume(60, 1));
+
+        var browser = new ThemeBrowser();
+        while (browser.View != ThemeView.System) browser.Update(UiInput.None with { PageUp = true });
+        while (browser.SystemSelected != (int)SystemRow.MusicVolume) browser.Update(new UiInput(false, true, false, false, false, false));
+        browser.Update(new UiInput(false, false, true, false, false, false));
+        Assert.Equal(ThemeAction.ChangeMusicVolume, browser.TakeAction());
+        Assert.Equal(-1, browser.SoundVolumeStep);
+    }
+
+    [Fact]
+    public void The_home_screen_restart_starts_on_show_now_and_later_or_o_do_nothing()
+    {
+        var x = new UiInput(false, false, false, false, true, false);
+        var o = new UiInput(false, false, false, false, false, true);
+        var right = new UiInput(false, false, false, true, false, false);
+
+        var browser = new ThemeBrowser();
+        browser.AskRestartShell();
+        Assert.Equal(DialogKind.RestartShell, browser.Dialog);
+        Assert.Equal(new[] { "Show now", "Later" }, browser.DialogOptions);
+        Assert.Equal(0, browser.DialogFocus);
+        browser.SetCount(3);   // a scan meanwhile keeps the offer
+        Assert.Equal(DialogKind.RestartShell, browser.Dialog);
+        browser.Update(x);
+        Assert.Equal(ThemeAction.RestartShell, browser.TakeAction());
+
+        browser.AskRestartShell();
+        browser.Update(right);
+        browser.Update(x);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+
+        browser.AskRestartShell();
+        browser.Update(o);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+
+        // Another question already open keeps the screen.
+        browser.AskReapply();
+        browser.AskRestartShell();
+        Assert.Equal(DialogKind.Reapply, browser.Dialog);
+    }
 }

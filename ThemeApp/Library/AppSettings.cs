@@ -23,6 +23,43 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     /// </summary>
     public bool Sounds { get; init; } = true;
 
+    /// <summary>The volumes the UI sound and music settings offer, in percent; 100 writes a theme's sounds as they were made.</summary>
+    public static readonly int[] SoundVolumes = [10, 25, 50, 75, 100];
+
+    /// <summary>
+    /// How loud a theme's UI sounds are written, in percent (one of <see cref="SoundVolumes"/>); "sound_volume" in
+    /// settings.json, 25 when missing or not one of them: theme sounds are usually much louder than the system's own.
+    /// </summary>
+    public int SoundVolume { get; init; } = DefaultSoundVolume;
+
+    /// <summary>The UI sound volume of a new settings file.</summary>
+    public const int DefaultSoundVolume = 25;
+
+    /// <summary>The volume one step (<paramref name="step"/> -1 or +1) from <paramref name="volume"/>, kept within <see cref="SoundVolumes"/>.</summary>
+    public static int StepSoundVolume(int volume, int step) => StepVolume(volume, step, DefaultSoundVolume);
+
+    /// <summary>
+    /// How loud a theme's home music is written, in percent (one of <see cref="SoundVolumes"/>); "music_volume" in
+    /// settings.json, 10 when missing or not one of them: a theme's music plays far louder than the system's own.
+    /// </summary>
+    public int MusicVolume { get; init; } = DefaultMusicVolume;
+
+    /// <summary>The home music volume of a new settings file.</summary>
+    public const int DefaultMusicVolume = 10;
+
+    /// <summary>Like <see cref="StepSoundVolume"/>, for <see cref="MusicVolume"/>.</summary>
+    public static int StepMusicVolume(int volume, int step) => StepVolume(volume, step, DefaultMusicVolume);
+
+    private static int StepVolume(int volume, int step, int fallback)
+    {
+        int index = Array.IndexOf(SoundVolumes, volume);
+        if (index < 0) index = Array.IndexOf(SoundVolumes, fallback);
+        return SoundVolumes[Math.Clamp(index + step, 0, SoundVolumes.Length - 1)];
+    }
+
+    private static int VolumeOf(string text, int fallback) =>
+        int.TryParse(text, out int percent) && Array.IndexOf(SoundVolumes, percent) >= 0 ? percent : fallback;
+
     /// <summary>The order of the library row after the applied theme; "library_sort": "newest" in settings.json.</summary>
     public LibrarySort LibrarySort { get; init; }
 
@@ -42,7 +79,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     public static AppSettings Parse(string? json, Func<string> newDeviceId)
     {
         bool all = false, replace = false, sounds = true, newest = false;
-        string url = DefaultStoreUrl, device = "", skipped = "";
+        string url = DefaultStoreUrl, device = "", skipped = "", volume = "", music = "";
         // The SDK's parser, not System.Text.Json: JsonDocument seeds its hashing from the BCL's crypto
         // random source, which pulls OpenSSL imports the console cannot link (see ThemePack.Hash).
         if (!string.IsNullOrWhiteSpace(json) && JsonValue.TryParse(json, out JsonValue root) && root.Type == JsonType.Object)
@@ -54,12 +91,15 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
             url = root.GetString("store_url", url).Trim();
             device = root.GetString("device_id");
             skipped = root.GetString("reapply_skipped");
+            volume = root.GetString("sound_volume");
+            music = root.GetString("music_volume");
         }
         if (!IsDeviceId(device)) device = newDeviceId();
         return new AppSettings(all, url, device)
         {
             ReplaceEarlierThemes = replace, Sounds = sounds, LibrarySort = newest ? LibrarySort.Newest : LibrarySort.Name,
             ReapplySkipped = skipped.Length > 0 ? skipped : null,
+            SoundVolume = VolumeOf(volume, DefaultSoundVolume), MusicVolume = VolumeOf(music, DefaultMusicVolume),
         };
     }
 
@@ -69,6 +109,8 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
         o["background_scope"] = AllAppsBackgrounds ? "all" : "default";
         o["earlier_themes"] = ReplaceEarlierThemes ? "replace" : "keep";
         o["sounds"] = Sounds ? "on" : "off";
+        o["sound_volume"] = SoundVolume.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        o["music_volume"] = MusicVolume.ToString(System.Globalization.CultureInfo.InvariantCulture);
         o["library_sort"] = LibrarySort == LibrarySort.Newest ? "newest" : "name";
         o["store_url"] = StoreUrl;
         o["device_id"] = DeviceId;

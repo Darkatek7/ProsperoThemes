@@ -15,7 +15,12 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
   library.
 - **What a theme can change:** the home-screen background, including behind the system tiles (Game Library,
   Media Gallery, All Apps and the rest), the backgrounds behind app tiles (only apps without their own image, or
-  all apps), system icons (top bar and control center) and the system tile icons.
+  all apps), system icons (top bar and control center), the system tile icons, the UI sounds and the home music.
+- **Volume:** the System tab sets how loud a theme's UI sounds (25 % to start) and its home music (10 % to start)
+  play. The app writes them again at that volume, from 10 % to 100 %.
+- **No console restart:** new icons and sounds show once the home screen restarts. After an apply or restore the
+  app offers that; it takes a few seconds and the app stays open. If the home screen does not come back steadily,
+  the helper puts the previous files back.
 
 ## Requirements
 
@@ -33,7 +38,9 @@ Install it from the homebrew catalog ([homebrew.page](https://homebrew.page/), P
 2. Extract it and copy the `PPSA90210` folder to `/data/homebrew/` on the console (FTP or USB).
 3. ShadowMountPlus registers it, and Prospero Themes appears on the home screen.
 
-Your library, backups and settings live in `/data/prospero-themes/`, so updating the app keeps them.
+Your library, backups and settings live in `/data/prospero-themes/`, so updating the app keeps them. A release with
+a new ThemeHelper (01.000.022 is one) needs one console restart after the update, because a running payload cannot
+be replaced; the app says so when it finds the old helper.
 
 ## Controls
 
@@ -46,7 +53,7 @@ Your library, backups and settings live in `/data/prospero-themes/`, so updating
 | Preview | X shows or hides the home overlay. Square or Circle goes back. |
 | Community | X downloads (or updates). Triangle likes, or removes your like. Square changes the sort. Options refreshes the list. D-pad up from the first row reaches the chips: Left and Right move, X filters, Down goes back to the themes. X on Search opens a keyboard; Options searches, and X on the chip with a term shows every theme again. |
 | USB Import | X imports from USB. |
-| System | D-pad picks a row, X acts on it. |
+| System | D-pad picks a row, X acts on it. On Sound volume and Music volume, Left and Right change the volume. |
 
 Results and progress ("Applying theme…", "Download failed (404).") appear as a short message at the bottom of the
 screen.
@@ -57,7 +64,8 @@ System tab, where X switches between the two. Themes without an app background g
 
 **Restore defaults** is the last row on the System tab. X opens a dialog that asks first. Cancel is selected at the
 start, so choose "Restore defaults" and press X to go ahead. It puts every changed file back from the backups the
-app made before the first change. Applying a theme starts from the defaults too: whatever an earlier theme changed
+app made before the first change. When a backup is gone, tile icons come back from the firmware's own copy; any
+other file the app can no longer find an original for is left as it is and named in the result. Applying a theme starts from the defaults too: whatever an earlier theme changed
 and the new one does not cover goes back to its original first, so themes never stack.
 
 ## Other firmware versions
@@ -132,6 +140,10 @@ sent with that question. A firmware report goes to the store only when you choos
 
 GPL-3.0, like the SharpProspero SDK it is built with. The Inter font is under the SIL Open Font License
 (`ThemeApp/assets/fonts/OFL.txt`).
+
+`Shared/Atrac9Codec.cs` and `Shared/Atrac9Tables.cs` (the home music volume) are a C# port of the ATRAC9 encoder by
+[Blaze414](https://github.com/Blaze414/ps5-theme), GPL-3.0-or-later, which in turn follows the MIT-licensed
+[LibAtrac9](https://github.com/Thealexbarney/LibAtrac9) by Alex Barney.
 
 The release ZIP contains a `libc.prx`, the system library every SharpProspero app has to carry, because the app
 does not start without it. That file is Sony's and is not covered by this repository's license.

@@ -17,7 +17,7 @@ public enum ThemeView { Library, Detail, Preview, Community, Import, System, Sto
 /// ToggleBackgroundScope: the System row for app backgrounds. ToggleSounds: the System row for music and sounds. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
 /// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
 /// </summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, Busy }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, RestartShell, ChangeSoundVolume, ChangeMusicVolume, AskSoundVolume, ApplySoundVolume, Busy }
 
 /// <summary>The two scenes of the preview: the home screen with its row of tiles, and the control centre's row of buttons.</summary>
 public enum PreviewScene { Home, ControlCentre }
@@ -29,12 +29,14 @@ public enum PreviewScene { Home, ControlCentre }
 /// <see cref="ThemeBrowser.DialogParts"/>, then Apply and Cancel); RestoreParts is Restore when the console shows more
 /// than one part, with the parts to put back ticked the same way; Reapply asks after a system update whether to apply
 /// the theme again (the app opens it, <see cref="ThemeBrowser.AskReapply"/>); FirmwareReport says what the report holds
-/// and whether to only save it or also send it to the store.
+/// and whether to only save it or also send it to the store; RestartShell offers to restart the home screen after a job
+/// wrote icons or sounds (the app opens it, <see cref="ThemeBrowser.AskRestartShell"/>); SoundVolume asks before the look
+/// is applied again at a new UI sound volume (the app opens it, <see cref="ThemeBrowser.AskSoundVolume"/>).
 /// </summary>
-public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts, RestoreParts, Reapply, FirmwareReport }
+public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts, RestoreParts, Reapply, FirmwareReport, RestartShell, SoundVolume }
 
 /// <summary>The focusable rows of the System screen, top to bottom.</summary>
-public enum SystemRow { Backgrounds, EarlierThemes, Sounds, StoreAddress, FirmwareReport, Restore }
+public enum SystemRow { Backgrounds, EarlierThemes, Sounds, SoundVolume, MusicVolume, StoreAddress, FirmwareReport, Restore }
 
 public sealed class ThemeBrowser
 {
@@ -44,9 +46,17 @@ public sealed class ThemeBrowser
     private static readonly string[] RemoveOptions = ["Remove from library", "Cancel"];
     private static readonly string[] ReapplyOptions = ["Apply again", "Not now"];
     private static readonly string[] ReportOptions = ["Save", "Save and send", "Cancel"];
+    private static readonly string[] RestartShellOptions = ["Show now", "Later"];
+    private static readonly string[] SoundVolumeOptions = ["Apply again", "Cancel"];
 
     /// <summary>Number of focusable rows on the System screen.</summary>
-    public const int SystemRowCount = 6;
+    public const int SystemRowCount = 8;
+
+    /// <summary>
+    /// The step Left (-1) or Right (+1) on the Sound volume or Music volume row asked for, with
+    /// <see cref="ThemeAction.ChangeSoundVolume"/> or <see cref="ThemeAction.ChangeMusicVolume"/>.
+    /// </summary>
+    public int SoundVolumeStep { get; private set; }
 
     public ThemeView View { get; private set; }
     public int Selected { get; private set; } = -1;
@@ -82,6 +92,8 @@ public sealed class ThemeBrowser
         DialogKind.Remove => RemoveOptions,
         DialogKind.Reapply => ReapplyOptions,
         DialogKind.FirmwareReport => ReportOptions,
+        DialogKind.RestartShell => RestartShellOptions,
+        DialogKind.SoundVolume => SoundVolumeOptions,
         DialogKind.ApplyParts or DialogKind.RestoreParts => _partsOptions,
         _ => Array.Empty<string>(),
     };
@@ -157,8 +169,8 @@ public sealed class ThemeBrowser
         Selected = _count == 0 ? -1 : Math.Clamp(Selected, 0, _count - 1);
         if (_count == 0 && View is ThemeView.Detail or ThemeView.Preview) View = ThemeView.Library;
         // The library changed under the question, so it may no longer be about the pack that is selected. The question
-        // after a system update is about the look, not the selection, so it stays.
-        if (Dialog != DialogKind.Reapply) Dialog = DialogKind.None;
+        // after a system update and the offer to restart the home screen are about the look, not the selection, so they stay.
+        if (Dialog is not (DialogKind.Reapply or DialogKind.RestartShell)) Dialog = DialogKind.None;
     }
 
     /// <summary>Puts the focus on the pack at <paramref name="index"/> (after the library was put in another order).</summary>
@@ -491,6 +503,13 @@ public sealed class ThemeBrowser
     {
         if (input.Up) SystemSelected = Math.Max(0, SystemSelected - 1);
         if (input.Down) SystemSelected = Math.Min(SystemRowCount - 1, SystemSelected + 1);
+        // Left and Right change the volume; it is only a setting, so it needs no idle app.
+        if ((SystemRow)SystemSelected is SystemRow.SoundVolume or SystemRow.MusicVolume && (input.Left || input.Right))
+        {
+            SoundVolumeStep = input.Right ? 1 : -1;
+            _action = (SystemRow)SystemSelected == SystemRow.MusicVolume ? ThemeAction.ChangeMusicVolume : ThemeAction.ChangeSoundVolume;
+            return;
+        }
         if (!input.Confirm) return;
         switch ((SystemRow)SystemSelected)
         {
@@ -502,6 +521,10 @@ public sealed class ThemeBrowser
                 break;
             case SystemRow.Sounds:
                 _action = busy ? ThemeAction.Busy : ThemeAction.ToggleSounds;
+                break;
+            case SystemRow.SoundVolume:
+            case SystemRow.MusicVolume:
+                _action = busy ? ThemeAction.Busy : ThemeAction.AskSoundVolume;
                 break;
             case SystemRow.StoreAddress:
                 // Typing starts on the next frame: this X only opens the keyboard.
@@ -534,6 +557,24 @@ public sealed class ThemeBrowser
     public void AskReapply()
     {
         if (Dialog == DialogKind.None) OpenDialog(DialogKind.Reapply, 0);
+    }
+
+    /// <summary>
+    /// Offers to restart the home screen so new icons and sounds show at once, unless another question is open. The
+    /// focus starts on "Show now"; "Later" and O just close it.
+    /// </summary>
+    public void AskRestartShell()
+    {
+        if (Dialog == DialogKind.None) OpenDialog(DialogKind.RestartShell, 0);
+    }
+
+    /// <summary>
+    /// Asks whether to apply the look again so its sounds play at the new volume, unless another question is open. The
+    /// focus starts on "Apply again".
+    /// </summary>
+    public void AskSoundVolume()
+    {
+        if (Dialog == DialogKind.None) OpenDialog(DialogKind.SoundVolume, 0);
     }
 
     private void OpenDialog(DialogKind kind, int focus)
@@ -606,6 +647,12 @@ public sealed class ThemeBrowser
             {
                 case DialogKind.Reapply:
                     _action = ThemeAction.Reapply;
+                    break;
+                case DialogKind.RestartShell:
+                    _action = ThemeAction.RestartShell;
+                    break;
+                case DialogKind.SoundVolume:
+                    _action = ThemeAction.ApplySoundVolume;
                     break;
                 case DialogKind.FirmwareReport:
                     SendReport = chosen == 1;

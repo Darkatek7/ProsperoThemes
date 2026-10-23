@@ -611,5 +611,10 @@
       "sample_rate": 48000,
       "bit_rate": 240000
     }
-  ]
+  ],
+  "icon_container": {
+    "path": "vsh_asset/Sce.PlayStation.PUI_UI3.rco",
+    "stock_bytes": 39250032,
+    "stock_sha256": "6050861c54fda5ce31dbacf076bec18f0cc13d9c6cd564ead214230ef035c689"
+  }
 }

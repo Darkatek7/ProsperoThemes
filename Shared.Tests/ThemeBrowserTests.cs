@@ -660,6 +660,14 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeAction.ToggleSounds, browser.TakeAction());
 
         browser.Update(Down);
+        browser.Update(X);                                          // Sound volume: the app asks before applying again
+        Assert.Equal(ThemeAction.AskSoundVolume, browser.TakeAction());
+
+        browser.Update(Down);
+        browser.Update(X);                                          // Music volume: the same question
+        Assert.Equal(ThemeAction.AskSoundVolume, browser.TakeAction());
+
+        browser.Update(Down);
         browser.Update(X);                                          // Store address
         Assert.Equal(ThemeView.StoreAddress, browser.View);
         Assert.Equal("http://x", browser.StoreEditor.Text);         // the X only opened it: nothing typed yet
@@ -859,6 +867,12 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeAction.Busy, browser.TakeAction());
         browser.Update(Down);
         browser.Update(X, busy: true);                              // Music and sounds
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
+        browser.Update(Down);
+        browser.Update(X, busy: true);                              // Sound volume
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
+        browser.Update(Down);
+        browser.Update(X, busy: true);                              // Music volume
         Assert.Equal(ThemeAction.Busy, browser.TakeAction());
         browser.Update(Down);
         browser.Update(Down);

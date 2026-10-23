@@ -29,13 +29,17 @@ public sealed partial class ThemeRenderer
     private bool _noticeFresh;
     // How far the running job is (0 to 1), drawn as a bar in the toast while Busy; below 0 for no bar.
     private float _noticeProgress = -1f;
+    // A held toast does not fade until ReleaseNotice: for a result that comes in while the app is not on screen.
+    private bool _noticeHeld;
 
     /// <summary>
     /// Shows one toast in the footer band, replacing the one on screen. It stays while <see cref="Busy"/> is true and
-    /// otherwise fades out about six seconds after it was posted. Text that does not fit in two lines is cut with "…".
+    /// otherwise fades out about six seconds after it was posted, or with <paramref name="hold"/> six seconds after
+    /// <see cref="ReleaseNotice"/>. Text that does not fit in two lines is cut with "…".
     /// </summary>
-    public void Notify(string text, NoticeLevel level)
+    public void Notify(string text, NoticeLevel level, bool hold = false)
     {
+        _noticeHeld = hold;
         _noticeLines = _body.Wrap(text, NoticeMaxText, 2);
         int widest = 0;
         foreach (string line in _noticeLines) widest = Math.Max(widest, _body.MeasureText(line));
@@ -55,9 +59,18 @@ public sealed partial class ThemeRenderer
         _noticeProgress = Math.Clamp(fraction, 0f, 1f);
     }
 
+    /// <summary>Lets a held toast fade out like any other, counting from now.</summary>
+    public void ReleaseNotice()
+    {
+        if (!_noticeHeld) return;
+        _noticeHeld = false;
+        _noticeFresh = true;
+    }
+
     /// <summary>Removes the toast at once.</summary>
     public void ClearNotice()
     {
+        _noticeHeld = false;
         _noticeLines = Array.Empty<string>();
         _noticeFresh = false;
     }
@@ -67,7 +80,7 @@ public sealed partial class ThemeRenderer
         if (_noticeLines.Count == 0) return;
         double age = seconds - _noticeAt;
         if (age < 0) { _noticeAt = seconds; age = 0; }   // the clock started over (the PC preview, tests)
-        float k = Busy ? 1f : (float)Math.Clamp((NoticeSeconds - age) / NoticeFade, 0, 1);
+        float k = Busy || _noticeHeld ? 1f : (float)Math.Clamp((NoticeSeconds - age) / NoticeFade, 0, 1);
         if (k <= 0f)
         {
             // Over for good: it must not come back when the next job starts.
@@ -109,7 +122,7 @@ public sealed partial class ThemeRenderer
     // ---- Dialogs ----------------------------------------------------------------------------------------------------
 
     // The wrapped body text of each dialog; it does not depend on the pack, so it is wrapped once.
-    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[8];
+    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[(int)DialogKind.SoundVolume];
     private string _reapplyText = "";
 
     /// <summary>The text of the Reapply question (it names the system software and the themes; see SystemUpdate.Text).</summary>
@@ -127,6 +140,8 @@ public sealed partial class ThemeRenderer
         DialogKind.Restore or DialogKind.RestoreParts => "Restore defaults?",
         DialogKind.Reapply => "Apply your theme again?",
         DialogKind.FirmwareReport => "Firmware report",
+        DialogKind.RestartShell => "Show the new look now?",
+        DialogKind.SoundVolume => "Apply your look again?",
         DialogKind.Remove => "Remove this theme?",
         _ => "Apply this theme?",
     };
@@ -134,6 +149,8 @@ public sealed partial class ThemeRenderer
     private string DialogText(DialogKind kind) => kind switch
     {
         DialogKind.Reapply => _reapplyText,
+        DialogKind.SoundVolume => "Your theme’s music and sounds are written again at the new volume, with the rest of your look. That takes a minute or two.",
+        DialogKind.RestartShell => "New icons and sounds show once the home screen restarts. That takes a few seconds; this app stays open. Later, they show after the next restart of the console.",
         DialogKind.FirmwareReport => "Lists the console’s theme files (names, sizes, checksums), the system software and the app version; nothing personal. Save and send also gives it to the store, which answers with a code to post in your GitHub issue.",
         DialogKind.Restore => "Puts the original backgrounds, icons and sounds back on this console. Your theme library stays as it is.",
         DialogKind.ApplyScope => "This theme has a background for apps. Choose where it goes: only apps without their own image, or all apps.",
@@ -179,7 +196,7 @@ public sealed partial class ThemeRenderer
         IReadOnlyList<ThemePart> parts = browser.DialogParts;
         int bodyWidth = DialogWidth - 2 * DialogPad;
         IReadOnlyList<string> body = _dialogBody[(int)kind - 1] ??= _body.Wrap(DialogText(kind), bodyWidth, 5);
-        bool named = kind is not (DialogKind.Restore or DialogKind.RestoreParts or DialogKind.Reapply or DialogKind.FirmwareReport) && entry is not null;
+        bool named = kind is not (DialogKind.Restore or DialogKind.RestoreParts or DialogKind.Reapply or DialogKind.FirmwareReport or DialogKind.RestartShell or DialogKind.SoundVolume) && entry is not null;
 
         int height = DialogPad + _screenHeading.LineHeight + 16;
         if (named) height += _label.LineHeight + 8 + _small.LineHeight + 16;

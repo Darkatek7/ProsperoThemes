@@ -186,6 +186,25 @@ public static class AssetRoots
     }
 
     /// <summary>
+    /// The logical <c>&lt;root&gt;/&lt;relative&gt;</c> path of a console file, the inverse of <see cref="TryResolve"/>. A
+    /// tile icon in <see cref="ShippedRnpsMount"/> is an <c>rnps/</c> path too. False for any other or unsafe path.
+    /// </summary>
+    public static bool TryLogical(string device, out string logical)
+    {
+        logical = string.Empty;
+        foreach (var (root, mount) in Mounts)
+            if (Under(device, mount, out string relative)) { logical = root + "/" + relative; return true; }
+        if (Under(device, ShippedRnpsMount, out string shipped)) { logical = Rnps + "/" + shipped; return true; }
+        return false;
+
+        static bool Under(string device, string mount, out string relative)
+        {
+            relative = device.StartsWith(mount + "/", StringComparison.Ordinal) ? device[(mount.Length + 1)..] : string.Empty;
+            return relative.Length > 0 && IsSafeRelative(relative, out _);
+        }
+    }
+
+    /// <summary>
     /// Whether a relative path is a plain descendant: no absolute form, no drive or backslash, no NUL, no
     /// empty segment and no <c>.</c> or <c>..</c> segment.
     /// </summary>

@@ -49,7 +49,14 @@ launch evidence are recorded separately below.
   `backup/written.txt` records what the app last wrote to each file: a live file that matches neither
   that nor its backup was replaced by the system (an update, or Sony's servers for `/mnt/rnps`); its old
   backup moves to `backup/replaced/<time>/` and the live file becomes the new default, so Restore
-  defaults never writes an old firmware's file back. The System tab shows the firmware
+  defaults never writes an old firmware's file back.
+  A file whose backup is gone (deleted from `/data`) is never taken for an original when it is a theme's:
+  `backup/originals.txt` keeps the hash of every original the app saved or put back, and the bundled
+  `catalog/<firmware>.json` (StockCatalog: 9.60, 10.01, 11.20, 13.00, 13.60) has the stock hash of each asset
+  and of the icon container. A tile icon then comes back from the firmware's own copy in
+  `/system_ex/rnps/apps` (on 13.00, 8 of the 9 icons are identical to it; Sony's servers updated NPXS40305).
+  Any other such file has no original left on the console: Restore defaults leaves it and names it. A backup that
+  does not match the catalog is never written back. The System tab shows the firmware
   (`SystemInfo.SystemSoftwareVersion`, "13.000.040" on the test console); `state.json` records it.
 - **Firmware report** (System tab, Firmware report row): writes `/data/prospero-themes/reports/firmware-<version>.json`
   (and a copy to `/mnt/usb0` when a drive is connected): for every file in the bundled

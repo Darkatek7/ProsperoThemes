@@ -81,6 +81,13 @@ public sealed class ThemeApplier
     /// </summary>
     public const string WrittenRecord = "backup/written.txt";
 
+    /// <summary>
+    /// "sha256 logical" per line: the hash of each original the app backed up or put back. It outlives a deleted
+    /// backup, so a file that still matches is known to be the original, also one the app wrote itself (a restore
+    /// records its write in <see cref="WrittenRecord"/> as well).
+    /// </summary>
+    public const string OriginalsRecord = "backup/originals.txt";
+
     /// <summary>Where a backup goes when the system replaced its file: <c>backup/replaced/&lt;time&gt;/&lt;logical&gt;</c>.</summary>
     public const string ReplacedFolder = "backup/replaced";
 
@@ -133,11 +140,42 @@ public sealed class ThemeApplier
     /// </summary>
     public long MaxFileBytes { get; init; } = 160L * 1024 * 1024;
 
+    /// <summary>
+    /// How loud the theme's UI sounds (<see cref="ThemePack.VagLayer"/> targets) play, as an amplitude from 0 (silent) to 1
+    /// (as the theme made them, which is written byte for byte). A lower value decodes each sound, scales it and
+    /// encodes it again (<see cref="VagCodec.ScaleVolume"/>) just before it is patched into the container. The
+    /// written and verified file is the container, so verification and <see cref="WrittenRecord"/> hold what was
+    /// really written. Sounds that are whole files (music) are not changed.
+    /// </summary>
+    public double UiSoundVolume { get; init; } = 1.0;
+
+    /// <summary>
+    /// The stock hashes of this firmware (<see cref="StockCatalog"/>): a file with a catalog hash is the console's
+    /// original only when it matches it. Empty: only <see cref="WrittenRecord"/> tells a theme's file from an original.
+    /// </summary>
+    public StockCatalog Stock { get; init; } = StockCatalog.Empty;
+
+    /// <summary>
+    /// How loud the theme's home music (a whole <c>bgm_*.at9</c> file) plays, as an amplitude from 0 to 1 (as the theme
+    /// made it, written byte for byte). A lower value decodes the music, scales it and encodes it again
+    /// (<see cref="Atrac9Codec.ScaleVolume"/>) just before it is written; that takes seconds per minute of music, reported
+    /// as <see cref="StepMusic"/>. Music the codec cannot read is written as it is, with a note.
+    /// </summary>
+    public double MusicVolume { get; init; } = 1.0;
+
+    /// <summary>
+    /// Logical paths of files this run found changed with no original on the console: the backup is gone and the
+    /// live file is a theme's (<see cref="WrittenRecord"/> or <see cref="Stock"/> says so), and there is no shipped
+    /// copy to take instead. An apply still writes them; a restore leaves them as they are and names them.
+    /// </summary>
+    public List<string> NoOriginal { get; } = new();
+
     /// <summary>Told as each file of each step starts (backing up, resetting, writing, restoring). Null: nobody asks.</summary>
     public IApplyProgress? Progress { get; init; }
 
     /// <summary>Step names <see cref="Progress"/> reports.</summary>
-    public const string StepBackup = "Backing up", StepReset = "Resetting", StepWrite = "Writing", StepRestore = "Restoring";
+    public const string StepBackup = "Backing up", StepReset = "Resetting", StepWrite = "Writing", StepRestore = "Restoring",
+        StepMusic = "Music volume";
 
     /// <summary>
     /// Targets the last plan could not place: a per-app background for a title without one, a file this console
@@ -152,6 +190,7 @@ public sealed class ThemeApplier
     public List<string> Refreshed { get; } = new();
 
     private Dictionary<string, string>? _written;
+    private Dictionary<string, string>? _originals;
     // Where each named icon or sound of the current apply sits in its container, found in the stock copy by Prepare.
     // Rate is a sound's sample rate (0 for an icon).
     private readonly Dictionary<(string Device, string Layer, string Resource), (int Offset, int Length, int Rate)> _slots = new();
@@ -175,6 +214,7 @@ public sealed class ThemeApplier
             if (!TryPlan(pack.Manifest, out List<Plan> plans, out string planError))
                 return Fail(planError + ". Nothing was written.");
             Refreshed.Clear();
+            NoOriginal.Clear();
 
             // Before anything on the system side is written: every target is backed up and its payload is checked
             // against the console's own file, so a target that does not fit is skipped instead of failing halfway.
@@ -250,7 +290,8 @@ public sealed class ThemeApplier
                     {
                         current = plan;
                         byte[] payload = PayloadFor(pack, plan);
-                        WriteVerified(plan.Device, payload, plan.Unpack ? ThemePack.Hash(payload) : plan.Target.Sha256,
+                        byte[] music = MusicAtVolume(plan, payload);
+                        WriteVerified(plan.Device, music, plan.Unpack || music != payload ? ThemePack.Hash(music) : plan.Target.Sha256,
                             () => touched.Add(plan));
                     }
                     if (patches.Count == 0)
@@ -268,7 +309,7 @@ public sealed class ThemeApplier
                     {
                         (int offset, int length, int rate) = _slots[(patch.Device, patch.Target.Layer, patch.Target.Resource!)];
                         byte[] fitted = patch.Target.Layer == ThemePack.VagLayer
-                            ? RcoVag.Fit(pack.Payload(patch.Target), container.AsSpan(offset, length), rate)
+                            ? RcoVag.Fit(SoundAtVolume(pack.Payload(patch.Target)), container.AsSpan(offset, length), rate)
                             : RcoSvg.Fit(pack.Payload(patch.Target), length);
                         fitted.CopyTo(container!, offset);
                     }
@@ -300,7 +341,7 @@ public sealed class ThemeApplier
             string skipped = Skipped.Count == 0 ? "" : $" Skipped: {string.Join("; ", Skipped)}.";
             string defaults = reset.Count == 0 ? "" : $"Put {reset.Count} earlier change(s) back to default. ";
             return new ApplyResult(true,
-                $"{ApplyRestartNote(plans, reset)}{RefreshedNote()}{defaults}Applied and verified {written.Count} target(s).{skipped}", written);
+                $"{ApplyRestartNote(plans, reset)}{RefreshedNote()}{defaults}Applied and verified {written.Count} target(s).{skipped} {NoOriginalNote()}".TrimEnd(), written);
         }
         catch (Exception ex)
         {
@@ -324,6 +365,7 @@ public sealed class ThemeApplier
             if (!TryPlan(pack.Manifest, out List<Plan> plans, out string planError))
                 return Fail(planError + ". Nothing was written.");
             Refreshed.Clear();
+            NoOriginal.Clear();
 
             // One plan per file: the icons of one container share it.
             plans = plans.GroupBy(p => p.Device, StringComparer.Ordinal).Select(g => g.First()).ToList();
@@ -402,11 +444,17 @@ public sealed class ThemeApplier
         try
         {
             List<(string Device, string Backup, string Logical)> plans = BackedUp();
-            if (!all) plans = plans.Where(p => (ThemeParts.OfLogical(p.Logical) & parts) != 0).ToList();
-            if (plans.Count == 0)
+            List<(string Device, string Logical)> orphans = WithoutBackup(plans);
+            if (!all)
+            {
+                plans = plans.Where(p => (ThemeParts.OfLogical(p.Logical) & parts) != 0).ToList();
+                orphans = orphans.Where(p => (ThemeParts.OfLogical(p.Logical) & parts) != 0).ToList();
+            }
+            if (plans.Count == 0 && orphans.Count == 0)
                 return Fail(all ? "there are no on-console backups, so nothing was written."
                     : "nothing of the chosen parts has a backup, so nothing was written.");
             Refreshed.Clear();
+            NoOriginal.Clear();
             // The pack the state names, read before the state is written again.
             StatePack? kept = all ? null : ReadStatePack();
             List<LookLayer>? look = ReadLook();
@@ -424,15 +472,31 @@ public sealed class ThemeApplier
             var errors = new List<string>();
             int missing = 0;
             int index = 0;
+            int total = plans.Count + orphans.Count;
             foreach (var (device, backup, logical) in plans)
             {
-                Progress?.Report(StepRestore, ++index, plans.Count);
+                Progress?.Report(StepRestore, ++index, total);
                 try
                 {
                     // A per-app image of a title that was deleted since: nothing to put back.
                     if (!_files.Exists(device)) { missing++; continue; }
                     if (_files.Length(device) > MaxFileBytes) continue;   // never written by the app
                     if (RestoreOne(device, backup, logical))
+                        restored.Add(device);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"{device}: {ex.Message}");
+                }
+            }
+            foreach (var (device, logical) in orphans)
+            {
+                Progress?.Report(StepRestore, ++index, total);
+                try
+                {
+                    if (!_files.Exists(device)) { missing++; continue; }
+                    if (_files.Length(device) > MaxFileBytes) continue;
+                    if (RestoreWithoutBackup(device, logical))
                         restored.Add(device);
                 }
                 catch (Exception ex)
@@ -457,9 +521,9 @@ public sealed class ThemeApplier
             string gone = missing == 0 ? "" : $" {missing} file(s) no longer exist on the console and were left out.";
             string which = all ? "original(s)" : $"original(s) of {string.Join(", ", ThemeParts.List(parts & ThemePart.All).ConvertAll(ThemeParts.Label))}";
             return errors.Count == 0
-                ? new ApplyResult(true, $"{RestartNote(restored)}{RefreshedNote()}Restored and verified {restored.Count} {which}.{gone}", restored)
+                ? new ApplyResult(true, $"{RestartNote(restored)}{NoOriginalNote()}{RefreshedNote()}Restored and verified {restored.Count} {which}.{gone}", restored)
                 : new ApplyResult(false,
-                    $"{RestartNote(restored)}Restored {restored.Count} of {plans.Count} original(s); failed: {string.Join("; ", errors)}.", restored);
+                    $"{RestartNote(restored)}{NoOriginalNote()}Restored {restored.Count} of {total} original(s); failed: {string.Join("; ", errors)}.", restored);
         }
         catch (Exception ex)
         {
@@ -502,6 +566,68 @@ public sealed class ThemeApplier
     }
 
     // ---- planning ---------------------------------------------------------
+
+    /// <summary>
+    /// Files the home screen reads only when it starts: the tile icons and the container of the system icons and UI
+    /// sounds. A restart of SceShellUI shows them without a restart of the console.
+    /// </summary>
+    public static bool LoadsWithShell(string device) =>
+        device.StartsWith("/mnt/rnps/", StringComparison.Ordinal)
+        || device.StartsWith(AssetRoots.ShippedRnpsMount + "/", StringComparison.Ordinal)
+        || device.EndsWith(".rco", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The backup of each of <paramref name="written"/> that <see cref="LoadsWithShell"/>, as (backup, device): what goes
+    /// back when the restarted home screen keeps crashing. Files without a backup are left out.
+    /// </summary>
+    public IReadOnlyList<(string Backup, string Device)> ShellBackups(IEnumerable<string> written)
+    {
+        var wanted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string device in written)
+            if (LoadsWithShell(device)) wanted.Add(device);
+        var pairs = new List<(string Backup, string Device)>();
+        if (wanted.Count == 0) return pairs;
+        foreach (var (device, backup, _) in BackedUp())
+            if (wanted.Contains(device)) pairs.Add((backup, device));
+        return pairs;
+    }
+
+    /// <summary>
+    /// Files the app changed whose backup is gone: named in the backup index or in <see cref="WrittenRecord"/>, without
+    /// a backup and not among <paramref name="backedUp"/>.
+    /// </summary>
+    private List<(string Device, string Logical)> WithoutBackup(List<(string Device, string Backup, string Logical)> backedUp)
+    {
+        var seen = new HashSet<string>(backedUp.Select(b => b.Logical), StringComparer.Ordinal);
+        var found = new List<(string Device, string Logical)>();
+        foreach (string logical in ReadIndex())
+            if (seen.Add(logical) && AssetRoots.TryResolve(logical, out string device, out _))
+                found.Add((OnDevice(_files, logical, device), logical));
+        foreach (string device in Written().Keys.OrderBy(k => k, StringComparer.Ordinal))
+            if (AssetRoots.TryLogical(device, out string logical) && seen.Add(logical)
+                && !_files.Exists($"{_dataRoot}/{BackupFolder}/{logical}"))
+                found.Add((device, logical));
+        return found;
+    }
+
+    /// <summary>
+    /// Puts a file whose backup is gone back to its original when the console still has one (<see cref="OriginalSource"/>:
+    /// the shipped copy of a tile icon, or the file already is the original); that original becomes its backup again.
+    /// Otherwise the file is listed in <see cref="NoOriginal"/> and left as it is.
+    /// </summary>
+    private bool RestoreWithoutBackup(string device, string logical)
+    {
+        if (OriginalSource(logical, device, _files.Hash(device), strict: true) is not { } source)
+        {
+            if (!NoOriginal.Contains(logical)) NoOriginal.Add(logical);
+            return false;
+        }
+        byte[] original = _files.ReadAllBytes(source);
+        if (source != device) WriteVerified(device, original, ThemePack.Hash(original));
+        WriteBackup(logical, $"{_dataRoot}/{BackupFolder}/{logical}", original);
+        AddToIndex(logical);
+        return true;
+    }
 
     /// <summary>
     /// Every file with an on-console backup, from the backup index. Backups whose path no longer maps to a
@@ -620,22 +746,56 @@ public sealed class ThemeApplier
     /// </summary>
     private byte[] PrepareBackup(Plan plan)
     {
+        string liveHash = _files.Hash(plan.Device);
         if (!_files.Exists(plan.Backup))
         {
-            byte[] first = _files.ReadAllBytes(plan.Device);
-            WriteBackup(plan.Backup, first);
+            // The first apply, or the backup was deleted: the live file is the original only when it is not a theme's.
+            if (OriginalSource(plan.Logical, plan.Device, liveHash, strict: false) is not { } source)
+            {
+                if (!NoOriginal.Contains(plan.Logical)) NoOriginal.Add(plan.Logical);
+                return _files.ReadAllBytes(plan.Device);
+            }
+            byte[] first = _files.ReadAllBytes(source);
+            WriteBackup(plan.Logical, plan.Backup, first);
             AddToIndex(plan.Logical);
             return first;
         }
         AddToIndex(plan.Logical);   // a backup made before the index existed
-        string liveHash = _files.Hash(plan.Device);
         byte[]? stock = _files.ReadAllBytes(plan.Backup);
-        if (liveHash == ThemePack.Hash(stock) || !IsReplaced(plan.Device, liveHash))
+        string stockHash = ThemePack.Hash(stock);
+        bool listed = Stock.TryStock(plan.Logical, out string catalog);
+        if (!listed || stockHash == catalog) RecordOriginal(plan.Logical, stockHash);   // a backup made before the record
+        // A backup that is not this firmware's original while the live file is: the live file becomes the backup.
+        bool wrongBackup = listed && stockHash != catalog && liveHash == catalog;
+        if (!wrongBackup && (liveHash == stockHash || !IsReplaced(plan.Device, liveHash)))
             return stock;
         stock = null;
         byte[] live = _files.ReadAllBytes(plan.Device);
-        Refresh(plan.Logical, plan.Backup, live);
+        Refresh(plan.Logical, plan.Backup, live, systemUpdate: !wrongBackup);
         return live;
+    }
+
+    /// <summary>
+    /// Where the original of a file is when its backup is gone: the file itself (<paramref name="liveHash"/>) when it is
+    /// not a theme's, else the shipped copy of a tile icon. Null when the console has none. A catalog hash
+    /// (<see cref="Stock"/>) and a recorded original (<see cref="OriginalsRecord"/>) decide; then the app's own record
+    /// (<see cref="WrittenRecord"/>) says what it wrote there. With nothing known the file counts as original unless
+    /// <paramref name="strict"/>: an apply may back it up as before, a restore does not claim it is the default.
+    /// </summary>
+    private string? OriginalSource(string logical, string device, string liveHash, bool strict)
+    {
+        bool known = Originals().TryGetValue(logical, out string? recorded);
+        if (known && recorded == liveHash) return device;
+        if (AssetRoots.Shipped(logical, out _, out string shipped) && shipped != device && _files.Exists(shipped))
+        {
+            // A tile icon with the firmware's own copy next to it. Sony's servers update the live bundles, so the live
+            // file is kept when the system replaced what the app wrote; otherwise the shipped copy is the original.
+            if (_files.Hash(shipped) == liveHash) return device;
+            return Written().TryGetValue(device, out string? wrote) && wrote != liveHash ? device : shipped;
+        }
+        if (Stock.TryStock(logical, out string stock)) return liveHash == stock ? device : null;
+        if (known || Written().TryGetValue(device, out string? last) && last == liveHash) return null;
+        return strict ? null : device;
     }
 
     /// <summary>
@@ -657,14 +817,14 @@ public sealed class ThemeApplier
         Written().TryGetValue(device, out string? last) && liveHash != last;
 
     /// <summary>Keeps the old backup under <see cref="ReplacedFolder"/> and makes the live file the new original.</summary>
-    private void Refresh(string logical, string backup, byte[] live)
+    private void Refresh(string logical, string backup, byte[] live, bool systemUpdate = true)
     {
         string stamp = FormatUtc(_clock()).Replace(":", "").Replace("-", "");
         string aside = $"{_dataRoot}/{ReplacedFolder}/{stamp}/{logical}";
         _files.CreateDirectoryRecursive(ParentOf(aside));
         _files.Move(backup, aside);
-        WriteBackup(backup, live);
-        Refreshed.Add(logical);
+        WriteBackup(logical, backup, live);
+        if (systemUpdate) Refreshed.Add(logical);
     }
 
     /// <summary>
@@ -678,8 +838,7 @@ public sealed class ThemeApplier
         bool icons = false;
         foreach (string d in devices)
         {
-            if (d.StartsWith("/mnt/rnps/", StringComparison.Ordinal) || d.StartsWith(AssetRoots.ShippedRnpsMount + "/", StringComparison.Ordinal)
-                || d.EndsWith(".rco", StringComparison.Ordinal)) icons = true;
+            if (LoadsWithShell(d)) icons = true;
             if (d.EndsWith(".at9", StringComparison.OrdinalIgnoreCase)) sounds = true;
         }
         return (icons, sounds) switch
@@ -701,6 +860,10 @@ public sealed class ThemeApplier
         return RestartNote(devices, sounds);
     }
 
+    private string NoOriginalNote() => NoOriginal.Count == 0 ? "" :
+        $"{NoOriginal.Count} changed file(s) have no original on this console any more and stay as they are " +
+        $"({string.Join(", ", NoOriginal.Take(2))}{(NoOriginal.Count > 2 ? ", …" : "")}). ";
+
     private string RefreshedNote() => Refreshed.Count == 0 ? "" :
         $"{Refreshed.Count} file(s) had been replaced by a system update; that version is now their default " +
         $"(the old backups are kept in {ReplacedFolder}). ";
@@ -714,6 +877,19 @@ public sealed class ThemeApplier
     {
         if (!_files.Exists(device)) return false;
         string liveHash = _files.Hash(device), originalHash = _files.Hash(backup);
+        if (Stock.TryStock(logical, out string stock) && originalHash != stock)
+        {
+            // Not this firmware's original (a backup made from a theme's file): it is never put back. When the live file
+            // is the original, it becomes the backup.
+            if (liveHash != stock)
+            {
+                if (!NoOriginal.Contains(logical)) NoOriginal.Add(logical);
+                return false;
+            }
+            Refresh(logical, backup, _files.ReadAllBytes(device), systemUpdate: false);
+            return true;
+        }
+        RecordOriginal(logical, originalHash);
         if (liveHash == originalHash) return true;
         if (IsReplaced(device, liveHash))
         {
@@ -867,7 +1043,7 @@ public sealed class ThemeApplier
     // ---- device primitives ------------------------------------------------
 
     /// <summary>Stores <paramref name="live"/> as a backup and reads it back (as a streamed hash).</summary>
-    private void WriteBackup(string backup, byte[] live)
+    private void WriteBackup(string logical, string backup, byte[] live)
     {
         _files.CreateDirectoryRecursive(ParentOf(backup));
 
@@ -876,9 +1052,39 @@ public sealed class ThemeApplier
         _files.WriteAllBytes(tmp, live);
         _files.Move(tmp, backup);
 
-        if (_files.Hash(backup) != ThemePack.Hash(live))
+        string sha256 = ThemePack.Hash(live);
+        if (_files.Hash(backup) != sha256)
             throw new InvalidOperationException($"backup {backup} does not match the live file");
+        RecordOriginal(logical, sha256);
     }
+
+    // The theme's home music at MusicVolume; the payload itself at full volume, for any other file, or when the codec
+    // cannot read it (then Skipped says so and the music plays as the theme made it).
+    private byte[] MusicAtVolume(Plan plan, byte[] payload)
+    {
+        string name = plan.Device[(plan.Device.LastIndexOf('/') + 1)..];
+        if (MusicVolume >= 1.0 || double.IsNaN(MusicVolume) || !name.StartsWith("bgm_", StringComparison.Ordinal)
+            || !name.EndsWith(".at9", StringComparison.Ordinal))
+            return payload;
+        try
+        {
+            int last = 0;
+            return Atrac9Codec.ScaleVolume(payload, Math.Max(0, MusicVolume), fraction =>
+            {
+                int percent = Math.Clamp((int)(fraction * 100), 1, 100);
+                if (percent != last) Progress?.Report(StepMusic, last = percent, 100);
+            });
+        }
+        catch (Exception ex) when (ex is ThemePackException or InvalidDataException or ArgumentException or IndexOutOfRangeException)
+        {
+            Skipped.Add($"{plan.Logical}: the music is at its own volume ({ex.Message})");
+            return payload;
+        }
+    }
+
+    // The theme's mono VAG at UiSoundVolume; at full volume the payload itself, not copied or re-encoded.
+    private byte[] SoundAtVolume(byte[] vag) =>
+        UiSoundVolume >= 1.0 || double.IsNaN(UiSoundVolume) ? vag : VagCodec.ScaleVolume(vag, UiSoundVolume);
 
     /// <summary>
     /// Writes to <c>{device}.tmp</c>, renames over the device path, then reads back (as a streamed hash) and
@@ -898,28 +1104,35 @@ public sealed class ThemeApplier
         RecordWritten(device, actual);
     }
 
-    private Dictionary<string, string> Written()
+    private Dictionary<string, string> Written() => _written ??= ReadRecord(WrittenRecord);
+
+    private void RecordWritten(string device, string sha256) => Record(WrittenRecord, Written(), device, sha256);
+
+    private Dictionary<string, string> Originals() => _originals ??= ReadRecord(OriginalsRecord);
+
+    private void RecordOriginal(string logical, string sha256) => Record(OriginalsRecord, Originals(), logical, sha256);
+
+    // A "sha256 path" record (WrittenRecord, OriginalsRecord), by path.
+    private Dictionary<string, string> ReadRecord(string name)
     {
-        if (_written is not null) return _written;
-        _written = new Dictionary<string, string>(StringComparer.Ordinal);
-        string path = $"{_dataRoot}/{WrittenRecord}";
-        if (!_files.Exists(path)) return _written;
+        var record = new Dictionary<string, string>(StringComparer.Ordinal);
+        string path = $"{_dataRoot}/{name}";
+        if (!_files.Exists(path)) return record;
         foreach (string line in Encoding.UTF8.GetString(_files.ReadAllBytes(path)).Split('\n'))
         {
             int space = line.IndexOf(' ');
-            if (space == 64) _written[line[(space + 1)..].TrimEnd('\r')] = line[..space];
+            if (space == 64) record[line[(space + 1)..].TrimEnd('\r')] = line[..space];
         }
-        return _written;
+        return record;
     }
 
-    private void RecordWritten(string device, string sha256)
+    private void Record(string name, Dictionary<string, string> record, string key, string sha256)
     {
-        Dictionary<string, string> written = Written();
-        if (written.TryGetValue(device, out string? known) && known == sha256) return;
-        written[device] = sha256;
-        string path = $"{_dataRoot}/{WrittenRecord}";
+        if (record.TryGetValue(key, out string? known) && known == sha256) return;
+        record[key] = sha256;
+        string path = $"{_dataRoot}/{name}";
         _files.CreateDirectoryRecursive(ParentOf(path));
-        string text = string.Concat(written.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => $"{e.Value} {e.Key}\n"));
+        string text = string.Concat(record.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => $"{e.Value} {e.Key}\n"));
         _files.WriteAllBytes(path + ".tmp", Encoding.UTF8.GetBytes(text));
         _files.Move(path + ".tmp", path);
     }

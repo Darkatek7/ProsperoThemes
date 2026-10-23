@@ -29,6 +29,8 @@ internal sealed class ThemeApp : ProsperoApp
     // Whether the first scan looked for a system update since the theme was applied; the plan the question was about.
     private bool _updateChecked;
     private SystemUpdate.Plan? _reapply;
+    // The backups of the icons and sounds the last job wrote, while the app offers to restart the home screen for them.
+    private IReadOnlyList<(string Backup, string Device)>? _shellBackups;
     // The parts Restore defaults offers, from the last scan or job (ReadRestorable); none known lists no parts.
     private ThemePart _restorable;
     // The worker runs a fit check (CheckFit). It is short and the user did not ask for it, so questions still open and
@@ -52,6 +54,7 @@ internal sealed class ThemeApp : ProsperoApp
     private bool _allAppsBackgrounds;
     /// <summary>The system software version ("13.000.000"), null when it could not be read.</summary>
     private string? _firmware;
+    private StockCatalog _stock = StockCatalog.Empty;
     // The community store: the list on screen and one HTTP client (Http/Ssl resolved at run time, see
     // StoreHttpClient), created on first use (Http) by the worker or the update check. Each request has its own
     // connection, so the two can use it at once.
@@ -104,10 +107,14 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.AllAppsBackgrounds = _allAppsBackgrounds;
         _renderer.ReplaceEarlierThemes = _settings.ReplaceEarlierThemes;
         _renderer.Sounds = _settings.Sounds;
+        _renderer.SoundVolume = _settings.SoundVolume;
+        _renderer.MusicVolume = _settings.MusicVolume;
         _renderer.LibrarySort = _settings.LibrarySort;
         try { _firmware = SharpProspero.Platform.SystemInfo.SystemSoftwareVersion; }
         catch { _firmware = null; }
         _renderer.Firmware = _firmware ?? "";
+        try { _stock = StockCatalog.Parse(StockCatalog.PathFor(_firmware) is { } catalog ? FileSystem.ReadAllText(catalog) : null); }
+        catch { /* a firmware without a catalog: only the app's own records tell a theme's file from an original */ }
         try { _renderer.AppVersion = JsonValue.Parse(FileSystem.ReadAllText("/app0/sce_sys/param.json")).GetString("contentVersion", ""); }
         catch { /* the System screen then shows no app version */ }
         _browser.StoreUrl = _settings.StoreUrl;
@@ -283,8 +290,8 @@ internal sealed class ThemeApp : ProsperoApp
             LookLayer layer = plan.Layers[i];
             var applier = new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
             {
-                IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = i > 0, Firmware = _firmware, Parts = layer.Parts,
-                Progress = new WorkProgress(this, busyText), SourcePath = layer.Pack,
+                IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = i > 0, Firmware = _firmware, Stock = _stock, Parts = layer.Parts,
+                Progress = new WorkProgress(this, busyText), SourcePath = layer.Pack, UiSoundVolume = _settings.SoundVolume / 100.0, MusicVolume = _settings.MusicVolume / 100.0,
             };
             result = applier.Apply(ThemeArchive.Open(AppData.Files.ReadAllBytes(layer.Pack)));
             if (!result.Success) return new ApplyResult(false, "“" + layer.Name + "”: " + result.Message, result.Written);
@@ -383,8 +390,8 @@ internal sealed class ThemeApp : ProsperoApp
     private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work, ThemePart parts = ThemePart.All, string? source = null) =>
         StartHelperWork(busyText, needsHelper: true, _ => work(new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
         {
-            IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware, Parts = parts,
-            Progress = new WorkProgress(this, busyText), SourcePath = source,
+            IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware, Stock = _stock, Parts = parts,
+            Progress = new WorkProgress(this, busyText), SourcePath = source, UiSoundVolume = _settings.SoundVolume / 100.0, MusicVolume = _settings.MusicVolume / 100.0,
         }));
 
     /// <summary>
@@ -414,11 +421,12 @@ internal sealed class ThemeApp : ProsperoApp
     /// Starts the helper, then runs <paramref name="work"/> on the worker with the helper's problem (null when it
     /// runs). With <paramref name="needsHelper"/> a problem ends the job before it starts.
     /// </summary>
-    private void StartHelperWork(string busyText, bool needsHelper, Func<string?, ApplyResult> work)
+    private void StartHelperWork(string busyText, bool needsHelper, Func<string?, ApplyResult> work, bool offerRestart = true,
+        bool holdResult = false)
     {
         if (_fitChecking)
         {
-            _afterFit = () => StartHelperWork(busyText, needsHelper, work);
+            _afterFit = () => StartHelperWork(busyText, needsHelper, work, offerRestart, holdResult);
             _renderer.Notify(busyText, NoticeLevel.Info);
             return;
         }
@@ -431,6 +439,7 @@ internal sealed class ThemeApp : ProsperoApp
         {
             string message, status;
             bool ok = false;
+            IReadOnlyList<(string Backup, string Device)>? shellBackups = null;
             try
             {
                 string? helperProblem = ThemeHelperClient.EnsureRunning();
@@ -443,6 +452,9 @@ internal sealed class ThemeApp : ProsperoApp
                     ApplyResult result = work(helperProblem);
                     (status, message) = (result.Success ? "Done" : "Not completed", result.Message);
                     ok = result.Success;
+                    // New icons or sounds show once the home screen restarts; the app offers that (RestartShell).
+                    if (offerRestart && helperProblem is null && result.Written.Any(ThemeApplier.LoadsWithShell))
+                        shellBackups = new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds).ShellBackups(result.Written);
                 }
             }
             catch (Exception ex)
@@ -460,11 +472,16 @@ internal sealed class ThemeApp : ProsperoApp
                 // The theme now on the console leads the row; the focus stays on the pack it was on.
                 if (applied != _renderer.AppliedId) OrderLibrary(_entries, applied);
                 _renderer.AppliedId = applied;
-                _renderer.Notify(message, ok ? NoticeLevel.Success : NoticeLevel.Error);
+                _renderer.Notify(message, ok ? NoticeLevel.Success : NoticeLevel.Error, holdResult);
                 _renderer.Busy = false;
                 _busy = false;
                 // The helper may run now: packs that could not be checked before are asked again.
                 _fitAsked.Clear();
+                if (shellBackups is not null)
+                {
+                    _shellBackups = shellBackups;
+                    _browser.AskRestartShell();
+                }
             });
         }) { IsBackground = true, Name = "ThemeApply" };
         _worker.Start();
@@ -485,6 +502,7 @@ internal sealed class ThemeApp : ProsperoApp
             _updateNotice = null;
         }
         CheckFit();
+        if (context.Input.Buttons != 0 && context.Input.Buttons != context.PreviousInput.Buttons) _renderer.ReleaseNotice();
         _preview.BeforeUpdate(_entries);
         _browser.Update(UiInput.From(context.Input, context.PreviousInput),
             preview: context.Pressed(ScePadButton.Square), options: context.Pressed(ScePadButton.Options),
@@ -498,6 +516,15 @@ internal sealed class ThemeApp : ProsperoApp
             case ThemeAction.ToggleBackgroundScope: ToggleBackgroundScope(); break;
             case ThemeAction.ToggleEarlierThemes: ToggleEarlierThemes(); break;
             case ThemeAction.ToggleSounds: ToggleSounds(); break;
+            case ThemeAction.ChangeSoundVolume: ChangeSoundVolume(_browser.SoundVolumeStep); break;
+            case ThemeAction.ChangeMusicVolume: ChangeMusicVolume(_browser.SoundVolumeStep); break;
+            case ThemeAction.AskSoundVolume:
+                if (LookHasSounds()) _browser.AskSoundVolume();
+                else _renderer.Notify("Your look has no theme music or sounds. The volume counts for the next theme with them.", NoticeLevel.Info);
+                break;
+            case ThemeAction.ApplySoundVolume when _look is { } volumeLook && SystemUpdate.FromLook(volumeLook, _entries) is { } volumePlan:
+                StartHelperWork("Applying your look again…", needsHelper: true, _ => ReapplyLook(volumePlan, "Applying your look again…"));
+                break;
             case ThemeAction.ToggleLibrarySort: ToggleLibrarySort(); break;
             case ThemeAction.PreviewMusic: _preview.ToggleMusic(); break;
             case ThemeAction.ImportUsb: StartWork(DeviceThemeLibrary.ImportUsb, announce: true); break;
@@ -514,6 +541,11 @@ internal sealed class ThemeApp : ProsperoApp
                 StartHelperWork("Applying your theme again…", needsHelper: true, _ => ReapplyLook(plan, "Applying your theme again…"));
                 break;
             case ThemeAction.ReapplyLater: SkipReapply(); break;
+            case ThemeAction.RestartShell when _shellBackups is { } backups:
+                _shellBackups = null;
+                // The home screen is in front meanwhile, so the result waits for the user to come back and press a button.
+                StartHelperWork("Restarting the home screen…", needsHelper: true, _ => RestartShell(backups), offerRestart: false, holdResult: true);
+                break;
             case ThemeAction.SaveLook when _look is { Count: > 1 } look: SaveLook(look); break;
             case ThemeAction.RestoreOriginals:
                 ThemePart restoreParts = _browser.RestoreParts;
@@ -540,6 +572,27 @@ internal sealed class ThemeApp : ProsperoApp
         _stats.Record((float)context.DeltaSeconds);
         if (context.Pressed(ScePadButton.R3)) _showStats = !_showStats;
         if (_showStats) _stats.Draw(context.Surface, 1500, 1060, scale: 1, Color.White);
+    }
+
+    /// <summary>
+    /// Restarts the home screen so the icons and sounds just written show. When the restarted home screen keeps
+    /// crashing, the helper has put the backups back; the restore then runs as usual for those parts, so state.json and
+    /// look.json say what the console shows.
+    /// </summary>
+    private ApplyResult RestartShell(IReadOnlyList<(string Backup, string Device)> backups)
+    {
+        var (restarts, restored) = ThemeHelperClient.RestartShell(backups);
+        if (restored > 0)
+        {
+            ApplyResult back = new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds) { Firmware = _firmware, Stock = _stock }
+                .RestoreOriginals(ThemePart.Icons | ThemePart.Tiles | ThemePart.Sounds);
+            return back with { Success = false, Message = "The home screen kept crashing with this theme, so the original icons and sounds were put back. " + back.Message };
+        }
+        if (restarts >= ThemeHelperClient.ShellLoopRestarts)
+            return new ApplyResult(false, "The home screen keeps crashing. Please restart the console; if it goes on, restore the defaults.", []);
+        return restarts > 0
+            ? new ApplyResult(true, "The home screen restarted with the new icons and sounds.", [])
+            : new ApplyResult(false, "The home screen did not restart. The new icons and sounds show after the next restart of the console.", []);
     }
 
     /// <summary>
@@ -614,6 +667,51 @@ internal sealed class ThemeApp : ProsperoApp
     }
 
     /// <summary>The Music and sounds row on the System tab: whether an apply takes a theme's music and sounds.</summary>
+    /// <summary>Whether the look on the console has a theme's music or sounds (only then is a new volume worth applying now).</summary>
+    private bool LookHasSounds()
+    {
+        if (_look is null) return false;
+        foreach (LookLayer layer in _look)
+            if ((layer.Parts & ThemePart.Sounds) != 0) return true;
+        return false;
+    }
+
+    /// <summary>Left or Right on the Sound volume row: saves the next volume; X there applies the look again with it.</summary>
+    private void ChangeSoundVolume(int step)
+    {
+        int volume = AppSettings.StepSoundVolume(_settings.SoundVolume, step);
+        if (volume == _settings.SoundVolume) return;
+        _settings = _settings with { SoundVolume = volume };
+        _renderer.SoundVolume = volume;
+        try { WriteSettings(); }
+        catch (Exception ex)
+        {
+            _renderer.Notify("Setting not saved: " + ex.Message, NoticeLevel.Error);
+            return;
+        }
+        _renderer.Notify(LookHasSounds()
+            ? "Theme sounds at " + volume + "% from the next apply. X applies your look again now."
+            : "Theme sounds at " + volume + "% from the next apply.", NoticeLevel.Info);
+    }
+
+    /// <summary>Left or Right on the Music volume row: saves the next volume; X there applies the look again with it.</summary>
+    private void ChangeMusicVolume(int step)
+    {
+        int volume = AppSettings.StepMusicVolume(_settings.MusicVolume, step);
+        if (volume == _settings.MusicVolume) return;
+        _settings = _settings with { MusicVolume = volume };
+        _renderer.MusicVolume = volume;
+        try { WriteSettings(); }
+        catch (Exception ex)
+        {
+            _renderer.Notify("Setting not saved: " + ex.Message, NoticeLevel.Error);
+            return;
+        }
+        _renderer.Notify(LookHasSounds()
+            ? "Theme music at " + volume + "% from the next apply. X applies your look again now."
+            : "Theme music at " + volume + "% from the next apply.", NoticeLevel.Info);
+    }
+
     private void ToggleSounds()
     {
         bool on = !_settings.Sounds;

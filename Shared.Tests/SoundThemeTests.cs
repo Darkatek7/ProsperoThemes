@@ -257,6 +257,85 @@ public class SoundThemeTests
         Assert.Equal(Container(), files.Files[RcoDevice]);
     }
 
+    // ---- UI sound volume ----------------------------------------------------
+
+    /// <summary>The samples one channel of a stereo clip plays (after the stock first pair, up to the last pair).</summary>
+    private static short[] ChannelSamples(byte[] container, string name, int channel)
+    {
+        Span<byte> clip = ClipData(container, name);
+        int pairs = clip.Length / 32 - 2;
+        var frames = new byte[pairs * 16];
+        for (int f = 0; f < pairs; f++)
+            clip.Slice((f + 1) * 32 + channel * 16, 16).CopyTo(frames.AsSpan(f * 16));
+        return VagCodec.Decode(frames);
+    }
+
+    private static double Rms(short[] samples)
+    {
+        double sum = 0;
+        foreach (short v in samples) sum += (double)v * v;
+        return Math.Sqrt(sum / samples.Length);
+    }
+
+    // A tone that fills the 8 sound pairs of psfx_focus_move in the stand-in container.
+    private static byte[] FocusTone() => VagCodecTests.MakeVag(VagCodecTests.Signal("tone", 8 * 28));
+
+    [Fact]
+    public void Full_volume_writes_the_theme_sound_as_it_is()
+    {
+        byte[] vag = FocusTone();
+        var expected = Container();
+        RcoVag.Replace(expected, "psfx_focus_move", vag);
+
+        var files = Console();
+        ApplyResult result = new ThemeApplier(files, () => 0) { UiSoundVolume = 1.0 }.Apply(Pack("loud", new Item(RcoPath, "vag", vag, "psfx_focus_move")));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(expected, files.Files[RcoDevice]);
+    }
+
+    [Theory]
+    [InlineData(0.5)]
+    [InlineData(0.25)]
+    public void A_lower_volume_writes_a_quieter_clip_and_still_verifies(double volume)
+    {
+        byte[] vag = FocusTone();
+        var files = Console();
+        var applier = new ThemeApplier(files, () => 0) { UiSoundVolume = volume };
+
+        ApplyResult result = applier.Apply(Pack("quiet", new Item(RcoPath, "vag", vag, "psfx_focus_move")));
+
+        Assert.True(result.Success, result.Message);                          // the read-back hash matched what was written
+        Assert.Contains("Applied and verified 1 target(s)", result.Message);
+        byte[] written = files.Files[RcoDevice];
+        Assert.Equal(Container().Length, written.Length);                     // the container keeps its size
+        short[] left = ChannelSamples(written, "psfx_focus_move", 0);
+        Assert.Equal(left, ChannelSamples(written, "psfx_focus_move", 1));    // both channels
+        double ratio = Rms(left) / Rms(VagCodecTests.SamplesOf(vag));
+        Assert.InRange(ratio, volume * 0.96, volume * 1.04);
+
+        // The other clips are untouched, and written.txt holds the hash of the container as written, not the pack's.
+        Assert.Equal(ClipData(Container(), "psfx_enter").ToArray(), ClipData(written, "psfx_enter").ToArray());
+        Assert.Contains($"{ThemePack.Hash(written)} {RcoDevice}", Text(files, "/data/prospero-themes/backup/written.txt"));
+
+        // Restoring brings the stock container back.
+        Assert.True(applier.RestoreOriginals().Success);
+        Assert.Equal(Container(), files.Files[RcoDevice]);
+    }
+
+    [Fact]
+    public void Volume_zero_writes_a_silent_clip_and_leaves_music_alone()
+    {
+        var files = Console();
+        var pack = Pack("mute", new Item(RcoPath, "vag", FocusTone(), "psfx_focus_move"), new Item(MusicPath, "sound", Music("fein")));
+
+        ApplyResult result = new ThemeApplier(files, () => 0) { UiSoundVolume = 0 }.Apply(pack);
+
+        Assert.True(result.Success, result.Message);
+        Assert.All(ChannelSamples(files.Files[RcoDevice], "psfx_focus_move", 0), v => Assert.Equal(0, v));
+        Assert.Equal(Music("fein"), files.Files[MusicDevice]);               // whole-file music has no volume here
+    }
+
     [Fact]
     public void Music_is_a_whole_file_and_says_it_changes_after_a_restart()
     {
