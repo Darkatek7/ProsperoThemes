@@ -817,7 +817,8 @@ def cmd_catalog_from_report(args: argparse.Namespace) -> int:
 
     catalog = {"firmware": firmware, "format": FORMAT_VERSION, "source": f"firmware report, system software {raw}",
                "assets": assets}
-    icons = next((f for f in report["files"] if f["path"].endswith("PUI_UI3.rco") and f.get("exists")), None)
+    # A container the app could not read has an "error" and no facts (13.60 report: its backup was unreadable).
+    icons = next((f for f in report["files"] if f["path"].endswith("PUI_UI3.rco") and f.get("exists") and "error" not in f), None)
     if icons:
         catalog["icon_container"] = {
             "path": icons["path"], "stock_bytes": icons["bytes"], "stock_sha256": icons["sha256"],

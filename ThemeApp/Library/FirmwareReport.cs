@@ -113,6 +113,13 @@ public static class FirmwareReport
             w.WriteString("error", reason);
             return;
         }
+        // A tile icon on a console without the live copy of its app (13.60, 10.01): the file the applier writes.
+        string resolved = ThemeApplier.OnDevice(files, logical, device);
+        if (resolved != device)
+        {
+            device = resolved;
+            w.WriteString("device", device);
+        }
         bool exists = files.Exists(device);
         w.WriteBoolean("exists", exists);
         if (!exists) return;

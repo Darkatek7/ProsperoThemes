@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
+using ProsperoThemes.Shared;
 using SharpProspero.Interop.Kernel;
 using SharpProspero.Interop.Net;
 using SharpProspero.Platform;
@@ -21,7 +22,7 @@ public static class ThemeHelperClient
     public const int Port = 9071;
     public const int LoaderPort = 9021;
     /// <summary>The build tag this app expects; ThemeHelper/Program.cs BuildTag.</summary>
-    public const int ExpectedTag = 6;
+    public const int ExpectedTag = 7;
     public const string ElfPath = DeviceThemeLibrary.AssetRoot + "/ThemeHelper.elf";
 
     private const uint ReplyTimeoutMicroseconds = 15_000_000;
@@ -294,6 +295,7 @@ public sealed class HelperDeviceFiles : IDeviceFiles
         path.StartsWith("/system_ex/vsh_asset/", StringComparison.Ordinal) ||
         path.StartsWith("/user/appmeta/", StringComparison.Ordinal) ||
         path.StartsWith("/mnt/rnps/apps/", StringComparison.Ordinal) ||
+        path.StartsWith(AssetRoots.ShippedRnpsMount + "/", StringComparison.Ordinal) ||
         path.StartsWith("/user/app/", StringComparison.Ordinal);
 
     public bool Exists(string path) => IsThemeRoot(path) ? ThemeHelperClient.Exists(path) : _local.Exists(path);

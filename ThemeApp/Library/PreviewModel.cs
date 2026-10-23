@@ -55,7 +55,7 @@ public sealed class PreviewModel
     /// <summary>Most tiles for apps with their own background; the rest are left out.</summary>
     public const int MaxAppTiles = 12;
 
-    /// <summary>The system tiles with an icon the theme engine can replace (<c>rnps</c> is <c>/mnt/rnps/apps</c>).</summary>
+    /// <summary>The system tiles with an icon the theme engine can replace (<c>rnps</c> is <c>/mnt/rnps/apps</c>, or <c>/system_ex/rnps/apps</c> without the live copy).</summary>
     private static readonly (string Id, string Name, string Path, PreviewTab Tab, int Symbol)[] SystemTiles =
     [
         ("NPXS40047", "PlayStation Store", "rnps/NPXS40047/appdb/default/icon0.png", PreviewTab.Games, 4),

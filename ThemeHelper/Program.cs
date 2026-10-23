@@ -6,8 +6,9 @@
 //     can reach it. PayloadNetwork.Listen binds every address, so the socket is created here directly.
 //   - FIXED PORT 9071, SINGLE INSTANCE. No SO_REUSEADDR, so a second copy fails to bind and exits
 //     instead of silently sharing the port; the app pings first and only loads the helper when absent.
-//   - CONFINED PATHS. Every path must lie inside one of the three theme roots, /system_ex/vsh_asset/,
-//     /user/appmeta/ or /mnt/rnps/apps/ (the mounts in Shared/AssetRoots.cs), or the app's own folder
+//   - CONFINED PATHS. Every path must lie inside one of the theme roots, /system_ex/vsh_asset/,
+//     /user/appmeta/ or /mnt/rnps/apps/ (the mounts in Shared/AssetRoots.cs), the tile icons in
+//     /system_ex/rnps/apps/ (firmware without the /mnt/rnps copies) or the app's own folder
 //     /data/prospero-themes, with no "..", "//" or backslash. In a theme root WRITE may only create
 //     "<target>.tmp", and RENAME may only move "<target>.tmp" onto "<target>", so the helper can replace a
 //     theme asset atomically and do nothing else there.
@@ -51,6 +52,8 @@ internal static unsafe class Program
     private const string VshAssetPrefix = "/system_ex/vsh_asset/";
     private const string AppMetaPrefix = "/user/appmeta/";
     private const string RnpsPrefix = "/mnt/rnps/apps/";
+    // The shipped React Native apps (AssetRoots.ShippedRnpsMount): only their icon0.png, see IsShippedTileIcon.
+    private const string ShippedRnpsPrefix = "/system_ex/rnps/apps/";
     private const string UserAppPrefix = "/user/app/";
     // The app's own folder; the helper manages it only for an app that cannot reach /data itself.
     private const string DataRoot = "/data/prospero-themes";
@@ -71,7 +74,7 @@ internal static unsafe class Program
     private const int SysNmount = 378;
 
     // Build tag announced on PING, so a client can tell which helper revision it is talking to.
-    private const int BuildTag = 6;
+    private const int BuildTag = 7;
 
     // /system_ex is remounted once per boot. A second MNT_UPDATE on the already writable mount was the
     // last thing before a console hang (2026-10-13), so it is not repeated: not within this helper's
@@ -437,6 +440,7 @@ internal static unsafe class Program
         int prefix = StartsWith(path, VshAssetPrefix) ? VshAssetPrefix.Length
             : StartsWith(path, AppMetaPrefix) ? AppMetaPrefix.Length
             : StartsWith(path, RnpsPrefix) ? RnpsPrefix.Length
+            : StartsWith(path, ShippedRnpsPrefix) && IsShippedTileIcon(path) ? ShippedRnpsPrefix.Length
             : StartsWith(path, UserAppPrefix) && IsUserAppBackground(path) ? UserAppPrefix.Length : -1;
         if (prefix < 0 || path[prefix] == 0) return false;
         for (int i = 0; path[i] != 0; i++)
@@ -486,6 +490,23 @@ internal static unsafe class Program
         if (path[end] == 0) return true;
         return path[end] == (byte)'.' && path[end + 1] == (byte)'t' && path[end + 2] == (byte)'m'
             && path[end + 3] == (byte)'p' && path[end + 4] == 0;
+    }
+
+    /// <summary>
+    /// Under /system_ex/rnps/apps, next to the firmware's signed app bundles, the helper touches only tile icons: paths
+    /// that end in "/icon0.png" (or its ".tmp").
+    /// </summary>
+    private static bool IsShippedTileIcon(byte* path)
+    {
+        int end = Length(path);
+        if (end > 4 && path[end - 4] == (byte)'.' && path[end - 3] == (byte)'t' && path[end - 2] == (byte)'m'
+            && path[end - 1] == (byte)'p')
+            end -= 4;
+        ReadOnlySpan<byte> tail = "/icon0.png"u8;
+        if (end < ShippedRnpsPrefix.Length + tail.Length) return false;
+        for (int k = 0; k < tail.Length; k++)
+            if (path[end - tail.Length + k] != tail[k]) return false;
+        return true;
     }
 
     /// <summary>

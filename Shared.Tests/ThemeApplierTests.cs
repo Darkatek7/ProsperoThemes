@@ -453,6 +453,61 @@ public class ThemeApplierTests
         Assert.Equal(Dds(64, 32, "gallery"), fake.Files[gallery]);
     }
 
+    private const string StoreTile = "rnps/NPXS40047/appdb/default/icon0.png";
+    private const string LiveStoreTile = "/mnt/rnps/apps/NPXS40047/appdb/default/icon0.png";
+    private const string ShippedStoreTile = "/system_ex/rnps/apps/NPXS40047/appdb/default/icon0.png";
+
+    [Fact]
+    public void A_console_without_the_live_rnps_copy_gets_the_tile_icon_in_the_shipped_app()
+    {
+        // 13.60 and 10.01: /mnt/rnps/apps is empty, app.db points the tiles at /system_ex/rnps/apps (issue 8).
+        byte[] stock = PreviewKit.Png(4, 4, 0, 0, 255), theme = PreviewKit.Png(4, 4, 255, 0, 0);
+        var fake = DeviceWithLive((ShippedStoreTile, stock));
+        ThemeApplier applier = Applier(fake);
+
+        ApplyResult result = applier.Apply(MakePack(null, (StoreTile, theme)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.StartsWith("Icons change after the next restart", result.Message);
+        Assert.Equal(theme, fake.Files[ShippedStoreTile]);
+        Assert.False(fake.Files.ContainsKey(LiveStoreTile));
+        Assert.Equal(stock, fake.Files["/data/prospero-themes/backup/original/" + StoreTile]);
+
+        Assert.True(applier.RestoreOriginals().Success);
+        Assert.Equal(stock, fake.Files[ShippedStoreTile]);
+    }
+
+    [Fact]
+    public void A_console_with_the_live_rnps_copy_keeps_the_shipped_app_unchanged()
+    {
+        // 13.00: app.db points at /mnt/rnps/apps, a file written to /system_ex/rnps changes nothing.
+        byte[] stock = PreviewKit.Png(4, 4, 0, 0, 255), theme = PreviewKit.Png(4, 4, 255, 0, 0);
+        var fake = DeviceWithLive((LiveStoreTile, stock), (ShippedStoreTile, stock));
+        fake.Directories.Add("/mnt/rnps/apps/NPXS40047");
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (StoreTile, theme)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(theme, fake.Files[LiveStoreTile]);
+        Assert.Equal(stock, fake.Files[ShippedStoreTile]);
+    }
+
+    [Theory]
+    [InlineData("rnps/NPXS40047/appdb/default/icon0.png", "/mnt/rnps/apps/NPXS40047", "/system_ex/rnps/apps/NPXS40047/appdb/default/icon0.png")]
+    [InlineData("rnps/NPXS40047", null, null)]
+    [InlineData("rnps/NPXS40047/../x.png", null, null)]
+    [InlineData("vsh_asset/bg_hub_default.dds.zst", null, null)]
+    public void Shipped_maps_only_rnps_files(string logical, string? liveApp, string? shipped)
+    {
+        bool mapped = AssetRoots.Shipped(logical, out string app, out string file);
+        Assert.Equal(liveApp is not null, mapped);
+        if (mapped)
+        {
+            Assert.Equal(liveApp, app);
+            Assert.Equal(shipped, file);
+        }
+    }
+
     [Fact]
     public void A_plain_dds_in_another_size_is_skipped()
     {

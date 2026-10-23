@@ -424,7 +424,7 @@ public sealed class ThemeApplier
         {
             string backup = $"{_dataRoot}/{BackupFolder}/{logical}";
             if (AssetRoots.TryResolve(logical, out string device, out _) && _files.Exists(backup))
-                entries.Add((device, backup, logical));
+                entries.Add((OnDevice(_files, logical, device), backup, logical));
         }
         return entries;
     }
@@ -585,7 +585,8 @@ public sealed class ThemeApplier
         bool icons = false;
         foreach (string d in devices)
         {
-            if (d.StartsWith("/mnt/rnps/", StringComparison.Ordinal) || d.EndsWith(".rco", StringComparison.Ordinal)) icons = true;
+            if (d.StartsWith("/mnt/rnps/", StringComparison.Ordinal) || d.StartsWith(AssetRoots.ShippedRnpsMount + "/", StringComparison.Ordinal)
+                || d.EndsWith(".rco", StringComparison.Ordinal)) icons = true;
             if (d.EndsWith(".at9", StringComparison.OrdinalIgnoreCase)) sounds = true;
         }
         return (icons, sounds) switch
@@ -656,8 +657,16 @@ public sealed class ThemeApplier
         if (AssetRoots.Uncompressed(logical) is { } plain && !_files.Exists(device)
             && AssetRoots.TryResolve(plain, out string plainDevice, out _) && _files.Exists(plainDevice))
             return new Plan(target, plainDevice, $"{_dataRoot}/{BackupFolder}/{plain}", plain, Unpack: true);
-        return new Plan(target, device, $"{_dataRoot}/{BackupFolder}/{logical}", logical);
+        return new Plan(target, OnDevice(_files, logical, device), $"{_dataRoot}/{BackupFolder}/{logical}", logical);
     }
+
+    /// <summary>
+    /// The console file a logical path stands for. A tile icon (<c>rnps/&lt;app&gt;/…</c>) is in the shipped app
+    /// (<see cref="AssetRoots.ShippedRnpsMount"/>) when the console has no live copy of that app: 13.60 and 10.01
+    /// have none. Every other path is <paramref name="device"/>. The backup keeps the logical path either way.
+    /// </summary>
+    internal static string OnDevice(IDeviceFiles files, string logical, string device) =>
+        AssetRoots.Shipped(logical, out string liveApp, out string shipped) && !files.Exists(liveApp) ? shipped : device;
 
     private bool TryPlan(ThemePack pack, out List<Plan> plans, out string error)
     {

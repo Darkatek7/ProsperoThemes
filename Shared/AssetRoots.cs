@@ -34,9 +34,34 @@ public static class AssetRoots
     /// Root for <c>/mnt/rnps/apps</c>, the live copies of the shell's React Native apps. Each system tile on
     /// the home screen (Store, Game Library, Media Gallery, PS Plus…) takes its icon from
     /// <c>&lt;app&gt;/appdb/&lt;entry&gt;/icon0.png</c> here, e.g. <c>rnps/NPXS40047/appdb/default/icon0.png</c>
-    /// for the Store — proven on FW 13.00, read at shell start.
+    /// for the Store — proven on FW 13.00, read at shell start. A console without the live copy of an app reads the
+    /// shipped one instead, see <see cref="Shipped"/>.
     /// </summary>
     public const string Rnps = "rnps";
+
+    /// <summary>
+    /// <c>/system_ex/rnps/apps</c>, the React Native apps the firmware ships. On 13.00 app.db points the tiles at the
+    /// live copies in <c>/mnt/rnps/apps</c>, and a file written here changes nothing. On 13.60 (issue 8) and 10.01
+    /// <c>/mnt/rnps/apps</c> is empty and app.db points at this folder. Not a root a pack names: the applier writes
+    /// an <c>rnps/</c> target here when the console has no live copy of that app.
+    /// </summary>
+    public const string ShippedRnpsMount = "/system_ex/rnps/apps";
+
+    /// <summary>
+    /// For a logical <c>rnps/&lt;app&gt;/…</c> path: the live copy's app folder (<c>/mnt/rnps/apps/&lt;app&gt;</c>)
+    /// and the same file in <see cref="ShippedRnpsMount"/>. False for any other path or an unsafe one.
+    /// </summary>
+    public static bool Shipped(string logical, out string liveApp, out string shipped)
+    {
+        liveApp = shipped = string.Empty;
+        if (!logical.StartsWith(Rnps + "/", StringComparison.Ordinal)) return false;
+        string relative = logical[(Rnps.Length + 1)..];
+        int slash = relative.IndexOf('/');
+        if (slash <= 0 || !IsSafeRelative(relative, out _)) return false;
+        liveApp = Mounts[Rnps] + "/" + relative[..slash];
+        shipped = ShippedRnpsMount + "/" + relative;
+        return true;
+    }
 
     /// <summary>
     /// Root for <c>/user/app</c>, the installed titles' own folders. Only ever reached through

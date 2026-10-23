@@ -10,7 +10,7 @@ research payload (not part of the public repository), with the same low-level id
   `PayloadNetwork.Listen` binds every address.
 - **Single instance:** no `SO_REUSEADDR`; a second copy fails to bind and exits.
 - **Paths:** every path must lie inside `/system_ex/vsh_asset/`, `/user/appmeta/`, `/mnt/rnps/apps/`, or be exactly `/user/app/<TID>/sce_sys/pic0.dds` (the `AssetRoots`
-  mounts), or inside the app's own folder `/data/prospero-themes/`, and must not contain `..`, `//` or a
+  mounts) or a tile icon `/system_ex/rnps/apps/…/icon0.png` (v7, for firmware without the `/mnt/rnps` copies), or inside the app's own folder `/data/prospero-themes/`, and must not contain `..`, `//` or a
   backslash. Over-long paths are refused, never truncated. Anything else gets `ERR badpath`.
 - **The app's folder (v6):** some jailbreaks start the app without `/data` in its sandbox (10.01 with OnionHEN,
   ProsperoThemes issue #7). The app then keeps its library, backups and settings through the helper
