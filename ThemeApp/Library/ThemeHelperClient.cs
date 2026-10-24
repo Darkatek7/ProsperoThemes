@@ -436,10 +436,17 @@ public sealed class ReportDeviceFiles : IDeviceFiles
         }
     }
 
+    /// <summary>A theme-root file the app does not see reads as -1 locally, so the helper is asked then too.</summary>
     public long Length(string path)
     {
-        try { return _local.Length(path); }
-        catch when (_helper && HelperDeviceFiles.IsThemeRoot(path)) { return ThemeHelperClient.Size(path); }
+        bool themeRoot = HelperDeviceFiles.IsThemeRoot(path);
+        try
+        {
+            long length = _local.Length(path);
+            if (length >= 0 || !themeRoot || !_helper) return length;
+        }
+        catch when (_helper && themeRoot) { /* not readable for the app: ask the helper */ }
+        return ThemeHelperClient.Size(path);
     }
 
     public void WriteAllBytes(string path, byte[] data) => throw new InvalidOperationException("the report only reads");
