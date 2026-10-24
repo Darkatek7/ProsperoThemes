@@ -72,6 +72,10 @@ public class FirmwareReportTests
 
         Assert.False(File(report, FirmwareReport.TileIcons[0]).GetProperty("exists").GetBoolean());
         Assert.Empty(files.Writes);   // a report only reads
+        // With a backup, the live file is only hashed: an icon container of about 100 MB and its backup did not both
+        // fit in memory (11.60 report).
+        Assert.DoesNotContain(Hub, files.Reads);
+        Assert.Contains(Hub, files.Hashes);
     }
 
     [Fact]

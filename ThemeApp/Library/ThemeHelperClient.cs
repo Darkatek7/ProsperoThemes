@@ -436,7 +436,12 @@ public sealed class ReportDeviceFiles : IDeviceFiles
         }
     }
 
-    public long Length(string path) => throw new InvalidOperationException("the report reads whole files");
+    public long Length(string path)
+    {
+        try { return _local.Length(path); }
+        catch when (_helper && HelperDeviceFiles.IsThemeRoot(path)) { return ThemeHelperClient.Size(path); }
+    }
+
     public void WriteAllBytes(string path, byte[] data) => throw new InvalidOperationException("the report only reads");
     public void Move(string from, string to) => throw new InvalidOperationException("the report only reads");
     public void DeleteFile(string path) => throw new InvalidOperationException("the report only reads");

@@ -146,32 +146,36 @@ public static class FirmwareReport
         w.WriteBoolean("exists", exists);
         if (!exists) return;
 
-        byte[] live = files.ReadAllBytes(device);
-        byte[] stock = live;
-        byte[]? saved = null;
+        // One copy of a file in memory at a time: before 13.00 the icon container is about 100 MB, and the live file
+        // and its backup together did not fit (11.60 report). The live file is compared by its hash.
+        string liveHash = files.Hash(device);
+        byte[]? stock = null;
         if (files.Exists(backup))
         {
             // A backup the app cannot read is reported with its error; the live file is described instead.
-            try { saved = files.ReadAllBytes(backup); }
+            try { stock = files.ReadAllBytes(backup); }
             catch (Exception ex) { w.WriteString("backup_error", ex.Message); }
         }
-        if (saved is not null)
+        string hash;
+        if (stock is not null)
         {
+            hash = ThemePack.Hash(stock);
             w.WriteString("source", "backup");
             // The backup is the stock file unless the system replaced the file since; then the live one is.
-            w.WriteBoolean("themed", !saved.AsSpan().SequenceEqual(live));
-            stock = saved;
+            w.WriteBoolean("themed", hash != liveHash);
         }
         else
         {
+            stock = files.ReadAllBytes(device);
+            hash = liveHash;
             w.WriteString("source", "console");
         }
         w.WriteNumber("bytes", stock.Length);
-        w.WriteString("sha256", ThemePack.Hash(stock));
-        if (!live.AsSpan().SequenceEqual(stock))
+        w.WriteString("sha256", hash);
+        if (hash != liveHash)
         {
-            w.WriteNumber("live_bytes", live.Length);
-            w.WriteString("live_sha256", ThemePack.Hash(live));
+            w.WriteNumber("live_bytes", files.Length(device));
+            w.WriteString("live_sha256", liveHash);
         }
 
         PayloadFacts facts = PayloadCompat.Read(stock);
