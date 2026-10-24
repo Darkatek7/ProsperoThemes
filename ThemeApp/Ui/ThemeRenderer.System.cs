@@ -11,9 +11,15 @@ public sealed partial class ThemeRenderer
     /// The app's own version (<c>contentVersion</c> of <c>sce_sys/param.json</c>), shown on the System screen. Empty
     /// when it could not be read; the version line is then left out.
     /// </summary>
-    public string AppVersion { get; set; } = "";
+    public string AppVersion
+    {
+        get => _appVersion;
+        set { _appVersion = value; _updateRowText = AppUpdate.RowText(_updateState, _newerVersion, value); }
+    }
+    private string _appVersion = "";
 
-    private string _newerVersion = "", _newerText = "";
+    private string _newerVersion = "", _newerText = "", _appUpdateText = "", _updateRowText = AppUpdate.RowText(AppUpdate.State.None, "", "");
+    private AppUpdate.State _updateState;
     private string _reportCode = "", _reportValue = "Save";
 
     /// <summary>
@@ -33,7 +39,29 @@ public sealed partial class ThemeRenderer
     public string NewerVersion
     {
         get => _newerVersion;
-        set { _newerVersion = value; _newerText = value.Length > 0 ? " · " + value + " available" : ""; }
+        set
+        {
+            _newerVersion = value;
+            _newerText = value.Length > 0 ? " · " + value + " available" : "";
+            _updateRowText = AppUpdate.RowText(_updateState, value, AppVersion);
+        }
+    }
+
+    /// <summary>
+    /// What the System tab's App update row offers (<see cref="AppUpdate.State"/>); its description follows
+    /// <see cref="NewerVersion"/> and <see cref="AppVersion"/>.
+    /// </summary>
+    public AppUpdate.State UpdateState
+    {
+        get => _updateState;
+        set { _updateState = value; _updateRowText = AppUpdate.RowText(value, _newerVersion, AppVersion); }
+    }
+
+    /// <summary>The text of the app update question (<see cref="AppUpdate.DialogText"/>), which the app makes when it knows the release.</summary>
+    public string AppUpdateText
+    {
+        get => _appUpdateText;
+        set { _appUpdateText = value; _dialogBody[(int)DialogKind.AppUpdate - 1] = null; }
     }
 
     // ---- Shared by System, USB Import and the store-address keyboard ------------------------------------------------
@@ -166,7 +194,7 @@ public sealed partial class ThemeRenderer
 
     // ---- System -----------------------------------------------------------------------------------------------------
 
-    private static readonly string[] SystemLabels = ["App backgrounds", "Earlier themes", "Music and sounds", "Sound volume", "Music volume", "AI themes", "Store address", "Firmware report", "Restore defaults"];
+    private static readonly string[] SystemLabels = ["App backgrounds", "Earlier themes", "Music and sounds", "Sound volume", "Music volume", "AI themes", "Store address", "Firmware report", "App update", "Restore defaults"];
     private static readonly string[] SystemDescriptions =
     [
         "Which apps show a theme’s background image",
@@ -177,15 +205,16 @@ public sealed partial class ThemeRenderer
         "Whether the Community tab lists themes with AI pictures",
         "Where the Community tab loads themes from",
         "Save or send a list of the console’s theme files",
+        "",   // App update: _updateRowText, which follows what the store announced
         "Put every background, icon and sound back to the original",
     ];
 
-    // Nine rows of 48 leave the two-line info panel above the footer.
-    internal const int SysRowsTop = SysBodyTop, SysRowH = 48, SysRowGap = 6;
+    // Ten rows of 44 with 4 between them take the 476 px that nine of 48 with 6 did, so the two-line info panel still fits above the footer.
+    internal const int SysRowsTop = SysBodyTop, SysRowH = 44, SysRowGap = 4;
     private const int SysRowPad = 32, SysLabelWidth = 288;
     // Equal rows, then the info panel below them.
     private const int SysInfoTop = SysRowsTop + ThemeBrowser.SystemRowCount * SysRowH + (ThemeBrowser.SystemRowCount - 1) * SysRowGap + 24, SysInfoPad = 28, SysInfoPitch = 40, SysInfoLabelWidth = 176;
-    private const int SysSegmentHeight = 40, SysSegmentInset = 4, SysSegmentPad = 20, SysUrlMaxWidth = 640;
+    private const int SysSegmentHeight = 38, SysSegmentInset = 4, SysSegmentPad = 20, SysUrlMaxWidth = 640;
     // A focused row is lighter than the glass of the others; its text steps up a little with it.
     internal static readonly Color SysRowFocusFill = Color.FromRgb(46, 62, 84);
     private static readonly Color SysFocusText = Color.FromRgb(196, 208, 226);
@@ -280,12 +309,19 @@ public sealed partial class ThemeRenderer
                     DrawRight(_label, s, _reportValue, chevron - 12, textY, Accent);
                     descriptionRight = chevron - 12 - _label.MeasureText(_reportValue) - 24;
                     break;
+                case SystemRow.AppUpdate:
+                    // The version on offer in the accent colour, or "Restart" once it is installed; a chevron when X only looks.
+                    int updateChevron = DrawSysChevron(s, right, y + SysRowH / 2, focus ? White : Muted);
+                    string updateValue = _updateState switch { AppUpdate.State.Ready => _newerVersion, AppUpdate.State.Installed => "Restart", _ => "" };
+                    DrawRight(_label, s, updateValue, updateChevron - 12, textY, _updateState == AppUpdate.State.Installed ? Theme.Success : Accent);
+                    descriptionRight = updateValue.Length == 0 ? updateChevron - 12 : updateChevron - 12 - _label.MeasureText(updateValue) - 24;
+                    break;
                 default:
                     DrawSysChevron(s, right, y + SysRowH / 2, restore ? Theme.Danger : focus ? White : Muted);
                     break;
             }
             int descriptionX = Theme.SafeX + SysRowPad + SysLabelWidth;
-            ClipLeft(_body, s, SystemDescriptions[i], descriptionX, textY, text, descriptionRight - descriptionX);
+            ClipLeft(_body, s, i == (int)SystemRow.AppUpdate ? _updateRowText : SystemDescriptions[i], descriptionX, textY, text, descriptionRight - descriptionX);
         }
         if (browser.SystemSelected is >= 0 and < ThemeBrowser.SystemRowCount)
         {

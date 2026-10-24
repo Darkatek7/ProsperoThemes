@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using ProsperoThemes.App.Library;
 using ProsperoThemes.App.Ui;
+using ProsperoThemes.Shared;
 using SharpProspero.Application;
 using SharpProspero.Diagnostics;
 using SharpProspero.Graphics;
@@ -55,6 +56,8 @@ internal sealed class ThemeApp : ProsperoApp
     /// <summary>The system software version ("13.000.000"), null when it could not be read.</summary>
     private string? _firmware;
     private StockCatalog _stock = StockCatalog.Empty;
+    // The firmware the System tab asks a report for (see AppSettings.ReportToAsk) until it is answered; null when not asked.
+    private string? _reportAsk;
     // The community store: the list on screen and one HTTP client (Http/Ssl resolved at run time, see
     // StoreHttpClient), created on first use (Http) by the worker or the update check. Each request has its own
     // connection, so the two can use it at once.
@@ -63,8 +66,16 @@ internal sealed class ThemeApp : ProsperoApp
     private readonly object _httpLock = new();
     // The notice that a later release is out (CheckAppVersion), until the app is idle to show it.
     private string? _updateNotice;
+    // The newer release the store announced (null when none, or not asked yet), and the version this session installed over
+    // itself (null until it did): then the files on disk are the new ones and the app has to be started again.
+    private AppUpdate.Release? _latest;
+    private string? _installedVersion;
+    private volatile bool _versionChecking;
     // Set by a finished download: the library is scanned again as soon as the worker is free.
     private bool _rescanAfterWork;
+    // "Download and apply": the hash of the pack just downloaded. The scan that follows selects the library pack named after it
+    // and opens the apply question for it (OfferApply); null when no download is waiting for that.
+    private string? _applyAfterScan;
     // Store id -> pack hash of every theme downloaded here (CommunityList.DownloadsPath), for the badges.
     private Dictionary<string, string> _downloads = new(StringComparer.Ordinal);
     // Store ids this console has liked (CommunityList.LikesPath), for the hearts and for choosing like or unlike.
@@ -117,6 +128,18 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.Firmware = _firmware ?? "";
         try { _stock = StockCatalog.Parse(StockCatalog.PathFor(_firmware) is { } catalog ? FileSystem.ReadAllText(catalog) : null); }
         catch { /* a firmware without a catalog: only the app's own records tell a theme's file from an original */ }
+        // A named firmware without a bundled catalog is asked once, the first time System opens, for a firmware report.
+        try
+        {
+            string? name = StockCatalog.FirmwareName(_firmware);
+            _reportAsk = _settings.ReportToAsk(name, StockCatalog.PathFor(_firmware) is { } bundled && FileSystem.Exists(bundled));
+        }
+        catch { /* not asked */ }
+        if (_reportAsk is not null)
+        {
+            _renderer.ReportFirmware = _reportAsk;
+            _browser.OfferReport();
+        }
         try { _renderer.AppVersion = JsonValue.Parse(FileSystem.ReadAllText("/app0/sce_sys/param.json")).GetString("contentVersion", ""); }
         catch { /* the System screen then shows no app version */ }
         _browser.StoreUrl = _settings.StoreUrl;
@@ -211,6 +234,11 @@ internal sealed class ThemeApp : ProsperoApp
                     _renderer.Status = ThemeRenderer.Plural(_entries.Count, "theme");
                     _renderer.Busy = false;
                     _busy = false;
+                    if (_applyAfterScan is { } downloaded)
+                    {
+                        _applyAfterScan = null;
+                        OfferApply(downloaded);
+                    }
                 });
             }
             catch (Exception ex)
@@ -218,6 +246,7 @@ internal sealed class ThemeApp : ProsperoApp
                 string message = ex.Message;
                 _results.Post(() =>
                 {
+                    _applyAfterScan = null;
                     _renderer.LibraryStatus = message;
                     _renderer.Notify(message, NoticeLevel.Error);
                     _renderer.Status = "Check file access";
@@ -309,6 +338,16 @@ internal sealed class ThemeApp : ProsperoApp
         _reapply = null;
         if (_firmware is null) return;
         _settings = _settings with { ReapplySkipped = _firmware };
+        try { WriteSettings(); }
+        catch { /* asked again on the next start */ }
+    }
+
+    /// <summary>Keeps that the report was asked for this firmware, so it does not come back.</summary>
+    private void RememberReportAsked()
+    {
+        if (_reportAsk is not { } firmware) return;
+        _reportAsk = null;
+        _settings = _settings with { ReportAsked = firmware };
         try { WriteSettings(); }
         catch { /* asked again on the next start */ }
     }
@@ -433,6 +472,13 @@ internal sealed class ThemeApp : ProsperoApp
             return;
         }
         if (_busy) { Wait(); return; }
+        // /app0 is a live view of the install folder: after an update a helper would start from the new ELF, which this
+        // (old) program does not expect.
+        if (_installedVersion is not null && needsHelper)
+        {
+            _renderer.Notify("Prospero Themes was updated. Close the app and start it again first.", NoticeLevel.Info);
+            return;
+        }
         _busy = true;
         _renderer.Busy = true;
         _renderer.Status = busyText;
@@ -442,6 +488,7 @@ internal sealed class ThemeApp : ProsperoApp
             string message, status;
             bool ok = false;
             IReadOnlyList<(string Backup, string Device)>? shellBackups = null;
+            HenKind hen = HenKind.Unknown;
             try
             {
                 string? helperProblem = ThemeHelperClient.EnsureRunning();
@@ -456,7 +503,10 @@ internal sealed class ThemeApp : ProsperoApp
                     ok = result.Success;
                     // New icons or sounds show once the home screen restarts; the app offers that (RestartShell).
                     if (offerRestart && helperProblem is null && result.Written.Any(ThemeApplier.LoadsWithShell))
+                    {
                         shellBackups = new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds).ShellBackups(result.Written);
+                        hen = ThemeHelperClient.QueryHen();   // under OnionHEN the home screen is not restarted from here
+                    }
                 }
             }
             catch (Exception ex)
@@ -481,8 +531,9 @@ internal sealed class ThemeApp : ProsperoApp
                 _fitAsked.Clear();
                 if (shellBackups is not null)
                 {
-                    _shellBackups = shellBackups;
-                    _browser.AskRestartShell();
+                    // No backups are kept under OnionHEN, so nothing can start the restart there.
+                    _shellBackups = RunningHen.AllowsShellRestart(hen) ? shellBackups : null;
+                    _browser.AskRestartShell(hen);
                 }
             });
         }) { IsBackground = true, Name = "ThemeApply" };
@@ -511,7 +562,9 @@ internal sealed class ThemeApp : ProsperoApp
             triangle: context.Pressed(ScePadButton.Triangle), asksScope: SelectedHasAllAppsBackground(),
             allAppsScope: _allAppsBackgrounds, busy: _busy && !_fitChecking,
             removable: _browser.Selected >= 0 && _browser.Selected < _entries.Count && !_entries[_browser.Selected].Bundled,
-            parts: SelectedParts(), sounds: _settings.Sounds, restorable: _restorable);
+            parts: SelectedParts(), sounds: _settings.Sounds, restorable: _restorable,
+            communityUpdate: SelectedCommunity() is { } card && _renderer.CommunityUpdates.Contains(card.Id),
+            appUpdate: _renderer.UpdateState);
         switch (_browser.TakeAction())
         {
             case ThemeAction.Busy: Wait(); break;
@@ -558,7 +611,9 @@ internal sealed class ThemeApp : ProsperoApp
                 StartWork(() => DeviceThemeLibrary.Remove(removed.Path, removed.Manifest.Name), notify: true);
                 break;
             case ThemeAction.SaveStoreUrl: SaveStoreAddress(); break;
+            case ThemeAction.ReportLater: RememberReportAsked(); break;
             case ThemeAction.FirmwareReport:
+                RememberReportAsked();   // a report sent or saved by hand answers the question too
                 // "Save and send" also gives it to the store; without a store address it is only saved.
                 string? reportStore = _browser.SendReport ? _settings.StoreUrl : null;
                 StartHelperWork(reportStore is null ? "Saving firmware report…" : "Sending firmware report…", needsHelper: false,
@@ -566,7 +621,11 @@ internal sealed class ThemeApp : ProsperoApp
                 break;
             case ThemeAction.CommunityRefresh: StartCommunityList(); break;
             case ThemeAction.ToggleAiThemes: ToggleAiThemes(); break;
+            case ThemeAction.CheckAppUpdate: AppUpdateInfo(); break;
+            case ThemeAction.UpdateApp when _latest is { Zip: not null } release: StartAppUpdate(release); break;
             case ThemeAction.CommunityDownload when SelectedCommunity() is { } theme: StartCommunityDownload(theme); break;
+            case ThemeAction.CommunityDownloadApply when SelectedCommunity() is { } theme: StartCommunityDownload(theme, thenApply: true); break;
+            case ThemeAction.CommunityPreview when SelectedCommunity() is { } theme: StartCommunityPreview(theme); break;
             case ThemeAction.CommunityLike when SelectedCommunity() is { } theme: StartCommunityLike(theme); break;
         }
         _preview.Update(_entries);
@@ -958,29 +1017,113 @@ internal sealed class ThemeApp : ProsperoApp
 
     /// <summary>
     /// Asks the store for the newest release (<see cref="AppUpdate"/>) on a thread of its own, so a slow or missing
-    /// network holds up nothing. A later one is shown on the System screen and, once the app is idle, as a notice. Any
-    /// failure says nothing; the next start asks again.
+    /// network holds up nothing. A later one is shown on the System screen and, once the app is idle, as a notice; with a
+    /// ZIP in the answer the System tab's App update row can install it. Any failure says nothing at start (the next start
+    /// asks again); when the user asked (<paramref name="userAsked"/>), the answer is a notice either way.
     /// </summary>
-    private void CheckAppVersion()
+    private void CheckAppVersion(bool userAsked = false)
     {
         string baseUrl = _settings.StoreUrl, current = _renderer.AppVersion;
-        if (baseUrl.Length == 0 || current.Length == 0) return;
+        if (baseUrl.Length == 0 || current.Length == 0)
+        {
+            if (userAsked) _renderer.Notify("No store address is set, so there is nothing to ask. System, Store address sets it.", NoticeLevel.Info);
+            return;
+        }
+        if (_versionChecking) return;
+        _versionChecking = true;
+        if (userAsked) _renderer.Notify("Looking for a newer version…", NoticeLevel.Info);
         new Thread(() =>
         {
+            AppUpdate.Release? latest = null;
+            string? failure = null;
             try
             {
                 HttpResponse answer = Http().Get(AppUpdate.LatestUrl(baseUrl));
-                if (!answer.IsSuccess) return;
-                if (AppUpdate.Parse(System.Text.Encoding.UTF8.GetString(answer.Body)) is not { } latest ||
-                    !AppUpdate.IsNewer(latest.Version, current)) return;
-                _results.Post(() =>
-                {
-                    _renderer.NewerVersion = latest.Version;
-                    _updateNotice = AppUpdate.Text(latest.Version, current);
-                });
+                if (!answer.IsSuccess) failure = "The store answered with status " + answer.StatusCode + ".";
+                else latest = AppUpdate.Parse(System.Text.Encoding.UTF8.GetString(answer.Body));
+                if (failure is null && latest is null) failure = "The store did not name a release.";
             }
-            catch { /* no notice */ }
+            catch (Exception ex) { failure = "Can’t reach the store: " + ex.Message; }
+            _results.Post(() =>
+            {
+                _versionChecking = false;
+                if (latest is null || !AppUpdate.IsNewer(latest.Version, current))
+                {
+                    if (userAsked)
+                        _renderer.Notify(failure ?? "Prospero Themes is up to date (" + current + ").", failure is null ? NoticeLevel.Success : NoticeLevel.Error);
+                    return;
+                }
+                _latest = latest;
+                ShowAppUpdate();
+                string text = AppUpdate.Text(latest.Version, current, latest.Zip is not null);
+                if (userAsked) _renderer.Notify(text, NoticeLevel.Info);
+                else _updateNotice = text;
+            });
         }) { IsBackground = true, Name = "AppUpdate" }.Start();
+    }
+
+    /// <summary>Puts what is known about a newer release on the System screen: the version, the row's state and the question's text.</summary>
+    private void ShowAppUpdate()
+    {
+        string current = _renderer.AppVersion;
+        _renderer.NewerVersion = _latest is { } latest && AppUpdate.IsNewer(latest.Version, current) ? latest.Version : "";
+        _renderer.UpdateState = _installedVersion is not null ? AppUpdate.State.Installed : AppUpdate.StateOf(_latest, current, installed: false);
+        if (_latest is { Zip: { } zip } release) _renderer.AppUpdateText = AppUpdate.DialogText(release.Version, current, zip.Bytes);
+    }
+
+    /// <summary>X on the App update row when there is nothing to install: says what is known, or asks the store again.</summary>
+    private void AppUpdateInfo()
+    {
+        string current = _renderer.AppVersion;
+        if (_installedVersion is not null)
+            _renderer.Notify("Prospero Themes " + _installedVersion + " is installed. Close the app and start it again.", NoticeLevel.Info);
+        else if (_latest is { } latest && AppUpdate.IsNewer(latest.Version, current))
+            _renderer.Notify(AppUpdate.Text(latest.Version, current, latest.Zip is not null), NoticeLevel.Info);
+        else CheckAppVersion(userAsked: true);
+    }
+
+    /// <summary>
+    /// "Update now": finds the install folder, downloads the release ZIP the store announced, checks it and writes its files over
+    /// the app's own (<see cref="AppInstall"/>). Runs as a job, so nothing else runs meanwhile; the result stays on screen until a
+    /// button is pressed.
+    /// </summary>
+    private void StartAppUpdate(AppUpdate.Release release)
+    {
+        if (_installedVersion is not null)
+        {
+            _renderer.Notify("Prospero Themes " + _installedVersion + " is installed. Close the app and start it again.", NoticeLevel.Info);
+            return;
+        }
+        string baseUrl = _settings.StoreUrl, current = _renderer.AppVersion;
+        StartHelperWork("Updating the app…", needsHelper: false, _ => RunAppUpdate(release, baseUrl, current), offerRestart: false, holdResult: true);
+    }
+
+    private ApplyResult RunAppUpdate(AppUpdate.Release release, string baseUrl, string current)
+    {
+        if (release.Zip is not { } zip || baseUrl.Length == 0) return new ApplyResult(false, "There is no release ZIP to install.", []);
+        try
+        {
+            // The place first: a disk image or an unknown folder ends the update before anything is downloaded.
+            var host = new ConsoleInstallHost();
+            InstallTarget target = AppInstall.Locate(host, current);
+            _results.Post(() => { if (_busy) _renderer.ShowProgress("Updating the app… Downloading " + AppUpdate.FormatSize(zip.Bytes), 0f); });
+            HttpResponse answer = Http().GetWithRetry(AppUpdate.ZipUrl(baseUrl, zip));
+            if (!answer.IsSuccess) return new ApplyResult(false, "The download failed (" + answer.StatusCode + "). Nothing was changed.", []);
+            _results.Post(() => { if (_busy) _renderer.ShowProgress("Updating the app… Checking the download", 0f); });
+            AppInstall.Package package = AppInstall.Open(answer.Body, zip, release.Version);
+            AppInstall.InstallResult result = AppInstall.Write(package, target, new WorkProgress(this, "Updating the app…"));
+            string version = release.Version;
+            // So the home screen's copy of the version refreshes (untested on the console); a failure changes nothing.
+            host.RequestScan();
+            _results.Post(() =>
+            {
+                _installedVersion = version;
+                ShowAppUpdate();
+            });
+            return new ApplyResult(true, AppInstall.DoneText(version, result), []);
+        }
+        catch (AppInstallException ex) { return new ApplyResult(false, ex.Message, []); }
+        catch (Exception ex) { return new ApplyResult(false, "The update failed: " + ex.Message + " Nothing was changed that stops the old version from starting.", []); }
     }
 
     private void StartCommunityList()
@@ -1111,7 +1254,51 @@ internal sealed class ThemeApp : ProsperoApp
         if (started) _listLoading = _renderer.CommunityPicturesLoading = true;
     }
 
-    private void StartCommunityDownload(CommunityTheme theme)
+    /// <summary>
+    /// The scan after "Download and apply": selects the library pack named after <paramref name="digest"/> and goes to its
+    /// Detail, which asks to apply it as X there does (<see cref="ThemeBrowser.ApplyAfterDownload"/>). Nothing is applied
+    /// before that question is confirmed. If the user has left the Community tab meanwhile, the download notice is all there is.
+    /// </summary>
+    private void OfferApply(string digest)
+    {
+        int index = _entries.ToList().FindIndex(e => CommunityList.LibraryDigest(e.Path) == digest);
+        if (index < 0 || _browser.View != ThemeView.Community || _browser.Dialog != DialogKind.None) return;
+        _browser.Select(index);
+        _browser.ApplyAfterDownload();
+    }
+
+    /// <summary>
+    /// Fetches a store theme's pack without keeping it: held in memory, checked as a download is (<c>Inspect</c>), and handed
+    /// to the preview, which closes over it and lets it go. Nothing is written to the library, <c>community.json</c> or the
+    /// console. The store does not count the request as a download.
+    /// </summary>
+    private void StartCommunityPreview(CommunityTheme theme)
+    {
+        StartCommunityWork("Loading preview of “" + theme.Name + "”…", http =>
+        {
+            HttpResponse answer = http.GetWithRetry(CommunityList.PreviewDownloadUrl(theme.DownloadUrl));
+            if (!answer.IsSuccess) return new StoreResult("Preview failed (" + answer.StatusCode + ").", NoticeLevel.Error);
+            if (answer.Body.Length == 0 || answer.Body.Length > ThemeArchive.MaxArchiveBytes)
+                return new StoreResult("Preview failed: the pack is empty or too large (48 MiB at most).", NoticeLevel.Error);
+            ThemeLibraryEntry entry;
+            try { entry = ThemeLibraryEntry.Inspect("store:" + ProsperoThemes.Shared.ThemePack.Hash(answer.Body), answer.Body); }
+            catch (Exception ex) { return new StoreResult("Preview failed: " + ex.Message, NoticeLevel.Error); }
+            byte[] pack = answer.Body;
+            _results.Post(() =>
+            {
+                _preview.ShowStorePack(entry, pack);
+                // The user may have left the tab while the pack was on its way: then there is no preview to show.
+                if (!_browser.OpenCommunityPreview()) _preview.DropStorePack();
+            });
+            return new StoreResult("", NoticeLevel.Success);
+        });
+    }
+
+    /// <summary>
+    /// Downloads a store theme into the library. With <paramref name="thenApply"/> the scan that follows goes on to the apply
+    /// question for that pack (<see cref="OfferApply"/>); a download that fails never does.
+    /// </summary>
+    private void StartCommunityDownload(CommunityTheme theme, bool thenApply = false)
     {
         // The pack an earlier download of this theme stored; an update replaces it in the library.
         string? previous = _downloads.TryGetValue(theme.Id, out string? recorded) ? recorded : null;
@@ -1131,6 +1318,7 @@ internal sealed class ThemeApp : ProsperoApp
             _results.Post(() =>
             {
                 _downloads[theme.Id] = digest;
+                if (thenApply) _applyAfterScan = digest;
                 try { AppData.Files.WriteAllText(CommunityList.DownloadsPath, CommunityList.SerializeDownloads(_downloads)); }
                 catch { /* the badge lasts until the app quits */ }
                 // The store counted this download; show it without reloading the list.

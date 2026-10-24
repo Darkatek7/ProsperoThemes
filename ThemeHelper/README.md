@@ -16,6 +16,22 @@ research payload (not part of the public repository), with the same low-level id
   ProsperoThemes issue #7). The app then keeps its library, backups and settings through the helper
   (`AppData` in `ThemeApp/Library/DeviceFiles.cs`). Inside `/data/prospero-themes/` only, `WRITE` and
   `RENAME` take any name, and `MKDIR`, `UNLINK` and `LIST` with files are allowed.
+- **The app's install folder (v9):** the app updates itself in place. Inside `<root>/PPSA90210`, where `<root>` is exactly one
+  of ShadowMountPlus's scan roots (`/data/homebrew`, `/data/etaHEN/games`, `/mnt/ext0` and `/mnt/ext1`, `/mnt/usb0` to
+  `/mnt/usb7`, each bare or followed by `/homebrew` or `/etaHEN/games`), `STAT`, `READ`, `LIST` and `MKDIR` work, `WRITE` only
+  creates `<file>.tmp` (at most 160 MiB) and `RENAME` only moves `<file>.tmp` onto `<file>`. Names may use letters, digits and
+  `. _ -` only; no `..`, `//`, `.` segment, backslash, space or path of 256 bytes or more. After a write the helper sets mode
+  **0777** on the file (created with that mode, then the raw `chmod` syscall; the console does not start an app whose
+  `eboot.bin` is not executable). A failed chmod is accepted when the file has its owner execute bit anyway (a filesystem
+  without chmod); otherwise the answer is `WRITE chmod=<error>` instead of `WRITE wrote=<n>`.
+  The rules live in `Shared/HelperPaths.cs`, which the helper, the app and `Shared.Tests` compile.
+- **Avatars (v9):** inside `/system_data/priv/cache/profile/0x<8 hex digits, either case>/` only the files `avatar64.dds`,
+  `avatar128.dds`, `avatar260.dds`, `avatar440.dds`, `picture64.dds`, `picture128.dds`, `picture260.dds`, `picture440.dds`,
+  `avatar.png`, `picture.png` and `online.json` (and their `.tmp`; never `version.json`): `STAT`, `READ`, `LIST`, `WRITE` of
+  the `.tmp` (at most 1 MiB), `RENAME` and `DELETE`. `LIST /system_data/priv/cache/profile` (the folder of all profiles)
+  answers only `D <name>` lines, so the app can find the `0x...` folder. Measured on 13.00 with an offline user: writing that
+  set and restarting `SceShellUI` changes the profile picture; deleting it restores the default. The app feature comes later;
+  the helper ships the capability now so users restart the console once.
 - **Commands:**
   - `PING` returns `OK PONG 9071 v<tag>`, the build tag (`BuildTag` in `Program.cs`, `ExpectedTag` in the app).
   - `REMOUNT` remounts `/system_ex` read-write (exfatfs, same options as DevProbe). `EBUSY` counts as success.
@@ -34,6 +50,7 @@ research payload (not part of the public repository), with the same low-level id
   - `MKDIR <path>` (the app's folder or a folder in it) replies `MKDIR rc=<n>`; "already exists" is
     `0x80020011` as a signed number.
   - `UNLINK <path>` (a file in the app's folder) replies `UNLINK rc=<n>`.
+  - `DELETE <path>` (v9; an avatar file or its `.tmp`, nothing else) replies `DELETE rc=<n>`.
   - `RESTARTSHELL <n>` (v8), then `n` lines `<backup> <target>` (at most 64): ends `SceShellUI`, the home screen,
     and nothing else, so it reads the system icons, tile icons and UI sounds again. Each backup must lie in the app's
     folder and exist, each target in a theme root (not a `.tmp`); one bad pair refuses the whole request and closes
@@ -41,6 +58,10 @@ research payload (not part of the public repository), with the same low-level id
     away for 15 seconds, the helper copies each backup back over its target (`.tmp`, then rename). The watch
     and the copies finish even when the client is gone. Replies `RESTARTSHELL restarts=<n> restored=<k>`, or
     `RESTARTSHELL rc=<error>` when the home screen is not found or cannot be ended.
+  - `HEN` (v9, no argument) replies `OK HEN onionhen` when the folder `/system_tmp/onionhen/ready` exists, otherwise
+    `OK HEN none`. OnionHEN creates that folder (and `/system_tmp` is cleared at boot), so it means OnionHEN runs now.
+    Read-only, one fixed `stat` with the calls the helper already imports. The app cannot see `/system_tmp`, so it asks
+    here; it does not restart the home screen under OnionHEN. etaHEN is not reported.
   - `QUIT` closes the connection.
 - **Not included:** `RMDIR`, `SOTEST`, a general `KILL` and the remaining DevProbe diagnostics.
 
@@ -53,6 +74,9 @@ research payload (not part of the public repository), with the same low-level id
 - Repeated crashes make the system stop starting the home screen after about ten. The guard acts at three.
 - Tested with three manual kills during the watch: the helper put the backups back, and the app then recorded
   the restore.
+- OnionHEN puts its Toolbox into a new `SceShellUI` about 14 s after a restart. Measured on 13.00 (2026-10-25): in 1 of 3
+  tries that failed and the new home screen crashed (`CE-108262-9`); the system recovered by itself. So the app asks
+  `HEN` and, under OnionHEN, never sends `RESTARTSHELL` (the client refuses it too).
 - The process table comes from the raw `__sysctl` syscall, and `kill` and `nanosleep` are raw syscalls too, so v8
   imports nothing new. Every client socket gets `SO_NOSIGPIPE`, because the answer to `RESTARTSHELL` may reach a
   client that went away.

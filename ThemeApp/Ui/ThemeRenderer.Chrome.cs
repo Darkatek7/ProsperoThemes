@@ -122,8 +122,11 @@ public sealed partial class ThemeRenderer
     // ---- Dialogs ----------------------------------------------------------------------------------------------------
 
     // The wrapped body text of each dialog; it does not depend on the pack, so it is wrapped once.
-    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[(int)DialogKind.SoundVolume];
+    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[(int)DialogKind.RestartShellBlocked];
     private string _reapplyText = "";
+    // The line under the name in the download question, for the card it was made for.
+    private CommunityTheme? _dialogCard;
+    private string _dialogCardLine = "";
 
     /// <summary>The text of the Reapply question (it names the system software and the themes; see SystemUpdate.Text).</summary>
     public string ReapplyText
@@ -131,30 +134,46 @@ public sealed partial class ThemeRenderer
         get => _reapplyText;
         set { _reapplyText = value; _dialogBody[(int)DialogKind.Reapply - 1] = null; }
     }
+    private string _reportFirmware = "";
+
+    /// <summary>The firmware (as "12.40") the ReportAsk question is about.</summary>
+    public string ReportFirmware
+    {
+        get => _reportFirmware;
+        set { _reportFirmware = value; _dialogBody[(int)DialogKind.ReportAsk - 1] = null; }
+    }
     private const int DialogWidth = 900, DialogPad = 48, DialogRow = 72, DialogGap = 16;
     // The ticked parts of the ApplyParts dialog are lower rows, so six of them and the two buttons fit on the screen.
     private const int DialogPartRow = 56, DialogPartGap = 8, DialogCheck = 30;
 
-    private static string DialogTitle(DialogKind kind) => kind switch
+    private string DialogTitle(DialogKind kind) => kind switch
     {
         DialogKind.Restore or DialogKind.RestoreParts => "Restore defaults?",
         DialogKind.Reapply => "Apply your theme again?",
         DialogKind.FirmwareReport => "Firmware report",
+        DialogKind.ReportAsk => "Help support " + _reportFirmware,
         DialogKind.RestartShell => "Show the new look now?",
+        DialogKind.RestartShellBlocked => "The new look shows later",
         DialogKind.SoundVolume => "Apply your look again?",
         DialogKind.Remove => "Remove this theme?",
+        DialogKind.CommunityDownload => "Download this theme?",
+        DialogKind.AppUpdate => "Update Prospero Themes?",
         _ => "Apply this theme?",
     };
 
     private string DialogText(DialogKind kind) => kind switch
     {
         DialogKind.Reapply => _reapplyText,
+        DialogKind.AppUpdate => _appUpdateText,
+        DialogKind.ReportAsk => $"This app has no measurements for firmware {_reportFirmware} yet. Send a firmware report? It only reads files and lists their names, sizes and checksums; nothing personal.",
         DialogKind.SoundVolume => "Your theme’s music and sounds are written again at the new volume, with the rest of your look. That takes a minute or two.",
         DialogKind.RestartShell => "New icons and sounds show once the home screen restarts. That takes a few seconds; this app stays open. Later, they show after the next restart of the console.",
+        DialogKind.RestartShellBlocked => "OnionHEN is running, and restarting the home screen can make it crash. The new icons and sounds show after the next restart of the console.",
         DialogKind.FirmwareReport => "Lists the console’s theme files (names, sizes, checksums), the system software and the app version; nothing personal. Save and send also gives it to the store, which answers with a code to post in your GitHub issue.",
         DialogKind.Restore => "Puts the original backgrounds, icons and sounds back on this console. Your theme library stays as it is.",
         DialogKind.ApplyScope => "This theme has a background for apps. Choose where it goes: only apps without their own image, or all apps.",
         DialogKind.Remove => "Takes it out of your library; the file is kept in /data/prospero-themes/attic. If it is applied, it stays on the console until another theme replaces it or you restore the defaults.",
+        DialogKind.CommunityDownload => "Saves it in your library (an update replaces the older version, which goes to the attic folder). Download and apply then asks what to apply, like Details does. Nothing on the console changes until you confirm that.",
         DialogKind.ApplyParts => "Tick the parts to apply. Icons and sounds change after the next restart.",
         DialogKind.RestoreParts => "Tick the parts to put back. System icons and sounds share one file, so they go back together. Your library stays as it is.",
         _ => "This changes the backgrounds, icons and sounds on this console. Restore defaults on the System tab puts the originals back.",
@@ -163,13 +182,13 @@ public sealed partial class ThemeRenderer
     // What is on screen under a dialog, as it looks once dimmed. The screen behind a dialog is still, so it is dimmed
     // once (a full-screen pass is several milliseconds) and copied on every later frame, until something it shows changes.
     private readonly record struct DialogBase(ThemeView View, string? Path, bool Applied, bool Busy, bool AllApps, bool Replace, bool Sounds,
-        int Row, string StoreUrl, string Firmware, int Count, string NewerVersion, string ReportCode);
+        int Row, string StoreUrl, string Firmware, int Count, string NewerVersion, string ReportCode, string? Card, AppUpdate.State UpdateState);
     private PixelBuffer? _dialogBase;
     private DialogBase _dialogKey;
 
     private DialogBase DialogBaseKey(ThemeBrowser browser, ThemeLibraryEntry? selected, int count) =>
         new(browser.View, selected?.Path, selected is not null && IsApplied(selected), Busy, AllAppsBackgrounds, ReplaceEarlierThemes,
-            Sounds, browser.SystemSelected, browser.StoreUrl, Firmware, count, NewerVersion, ReportCode);
+            Sounds, browser.SystemSelected, browser.StoreUrl, Firmware, count, NewerVersion, ReportCode, SelectedCommunityId, UpdateState);
 
     private void ReleaseDialogBase()
     {
@@ -196,7 +215,26 @@ public sealed partial class ThemeRenderer
         IReadOnlyList<ThemePart> parts = browser.DialogParts;
         int bodyWidth = DialogWidth - 2 * DialogPad;
         IReadOnlyList<string> body = _dialogBody[(int)kind - 1] ??= _body.Wrap(DialogText(kind), bodyWidth, 5);
-        bool named = kind is not (DialogKind.Restore or DialogKind.RestoreParts or DialogKind.Reapply or DialogKind.FirmwareReport or DialogKind.RestartShell or DialogKind.SoundVolume) && entry is not null;
+        // What the question is about: the library pack for the apply and remove questions, the store card for the download one.
+        string? name = null, summary = null;
+        if (kind == DialogKind.CommunityDownload)
+        {
+            // The card the question was opened on (the cursor cannot move while it is open). Its line is made once per card:
+            // this runs every frame.
+            if (browser.CommunitySelected >= 0 && browser.CommunitySelected < Community.Count)
+            {
+                CommunityTheme card = Community[browser.CommunitySelected];
+                if (!ReferenceEquals(_dialogCard, card))
+                {
+                    _dialogCard = card;
+                    _dialogCardLine = "by " + card.Author + " · " + ContentsOf(card);
+                }
+                (name, summary) = (card.Name, _dialogCardLine);
+            }
+        }
+        else if (kind is not (DialogKind.Restore or DialogKind.RestoreParts or DialogKind.Reapply or DialogKind.FirmwareReport or DialogKind.RestartShell or DialogKind.RestartShellBlocked or DialogKind.SoundVolume or DialogKind.ReportAsk or DialogKind.AppUpdate) && entry is not null)
+            (name, summary) = (entry.Manifest.Name, SummaryOf(entry).Text);
+        bool named = name is not null;
 
         int height = DialogPad + _screenHeading.LineHeight + 16;
         if (named) height += _label.LineHeight + 8 + _small.LineHeight + 16;
@@ -208,18 +246,19 @@ public sealed partial class ThemeRenderer
         Paint.StrokeRoundedRect(s, x, y, DialogWidth, height, Theme.RadiusPanel, 1, Theme.PanelStroke);
 
         int tx = x + DialogPad, ty = y + DialogPad;
-        ClipLeft(_screenHeading, s, DialogTitle(kind), tx, ty, White, bodyWidth);
+        ClipLeft(_screenHeading, s, kind == DialogKind.CommunityDownload && browser.CommunityDialogUpdate ? "Update this theme?" : DialogTitle(kind), tx, ty, White, bodyWidth);
         ty += _screenHeading.LineHeight + 16;
         if (named)
         {
-            ClipLeft(_label, s, entry!.Manifest.Name, tx, ty, White, bodyWidth);
+            ClipLeft(_label, s, name!, tx, ty, White, bodyWidth);
             ty += _label.LineHeight + 8;
-            ClipLeft(_small, s, SummaryOf(entry).Text, tx, ty, Accent, bodyWidth);
+            ClipLeft(_small, s, summary!, tx, ty, Accent, bodyWidth);
             ty += _small.LineHeight + 16;
         }
-        foreach (string line in body)
+        // Indexed, not foreach: the lines are an IReadOnlyList, whose enumerator would be allocated every frame.
+        for (int i = 0; i < body.Count; i++)
         {
-            DrawLeft(_body, s, line, tx, ty, Muted);
+            DrawLeft(_body, s, body[i], tx, ty, Muted);
             ty += _body.LineHeight;
         }
         ty += 32;

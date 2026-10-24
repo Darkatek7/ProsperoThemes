@@ -15,8 +15,16 @@
 //   - THE APP'S FOLDER. Where the app's sandbox has no /data (10.01 with OnionHEN), the app keeps its library,
 //     backups and settings through the helper: inside /data/prospero-themes WRITE and RENAME take any name, and
 //     MKDIR, UNLINK and a LIST of files and folders are allowed. Nowhere else.
-//   - NARROW COMMAND SET. PING, REMOUNT, STAT, READ, WRITE, RENAME, LIST, MKDIR, UNLINK, RESTARTSHELL, QUIT.
-//     There is no RMDIR, SOTEST, KILL or any other diagnostic command.
+//   - THE APP'S INSTALL FOLDER (v9). The app updates itself in place: inside "<scan root>/PPSA90210", where the scan root is
+//     one of ShadowMountPlus's exact roots (/data/homebrew, /data/etaHEN/games, /mnt/ext0..1 and /mnt/usb0..7, bare or
+//     below /homebrew or /etaHEN/games), STAT, READ, LIST and MKDIR are allowed, WRITE only creates "<file>.tmp" and RENAME only
+//     moves "<file>.tmp" onto "<file>". The rules are HelperPaths (Shared/HelperPaths.cs), the same file the app and the tests
+//     compile.
+//   - AVATARS (v9). Inside /system_data/priv/cache/profile/0x<8 hex>/ the avatar and picture files only (HelperPaths.IsAvatarPath;
+//     never version.json): STAT, READ, LIST, WRITE (.tmp, at most 1 MiB), RENAME of that .tmp, and DELETE. LIST of the profile
+//     folder itself reports only its sub-folder names, so the app can find the 0x... folder.
+//   - NARROW COMMAND SET. PING, REMOUNT, STAT, READ, WRITE, RENAME, LIST, MKDIR, UNLINK, DELETE, RESTARTSHELL, HEN, QUIT.
+//     There is no RMDIR, SOTEST, KILL or any other diagnostic command. HEN (v9) only says which HEN runs (one fixed stat).
 //   - ONE PROCESS. RESTARTSHELL ends SceShellUI (the home screen) and nothing else, so it reloads the system
 //     icons, tile icons and sounds a theme wrote; the system starts it again within about a second. It
 //     then watches the restarted shell, and when it keeps crashing it copies the backups the app named back
@@ -32,6 +40,7 @@
 using System;
 using System.Runtime.InteropServices;
 using PayloadCommon;
+using ProsperoThemes.Shared;
 using SharpProspero.Interop.Kernel;
 using SharpProspero.Interop.Posix;
 using SharpProspero.Payload;
@@ -78,7 +87,7 @@ internal static unsafe class Program
     private const int SysNmount = 378;
 
     // Build tag announced on PING, so a client can tell which helper revision it is talking to.
-    private const int BuildTag = 8;
+    private const int BuildTag = 9;
 
     // /system_ex is remounted once per boot. A second MNT_UPDATE on the already writable mount was the
     // last thing before a console hang (2026-10-13), so it is not repeated: not within this helper's
@@ -180,7 +189,7 @@ internal static unsafe class Program
 
             if (StartsWith(line, "STAT "))
             {
-                byte* path = ConfinedPathFrom(line + 5, scratch);
+                byte* path = AllowedPathFrom(line + 5, scratch);
                 if (path == null) { Send(client, "ERR badpath\n"u8); continue; }
 
                 SceKernelStat info = default;
@@ -197,7 +206,7 @@ internal static unsafe class Program
 
             if (StartsWith(line, "READ "))
             {
-                byte* path = ConfinedPathFrom(line + 5, scratch);
+                byte* path = AllowedPathFrom(line + 5, scratch);
                 if (path == null) { Send(client, "ERR badpath\n"u8); continue; }
                 ServeRead(client, path, scratch);
                 continue;
@@ -213,8 +222,9 @@ internal static unsafe class Program
                 if (*cursor != (byte)' ') { Send(client, "ERR badpath\n"u8); return; }
                 *cursor = 0;
                 int wanted = ParseInt(cursor + 1);
-                byte* path = ConfinedPathFrom(line + 6, scratch);
-                if (path == null || !(EndsWithTmp(path) || IsDataPath(path)) || wanted < 0 || wanted > MaxWrite)
+                byte* path = AllowedPathFrom(line + 6, scratch);
+                if (path == null || !(EndsWithTmp(path) || IsDataPath(path)) || wanted < 0 || wanted > MaxWrite
+                    || (wanted > HelperPaths.AvatarMaxBytes && IsAvatar(path)))
                 {
                     Send(client, "ERR badpath\n"u8);
                     return;
@@ -234,8 +244,8 @@ internal static unsafe class Program
                 if (*cursor != (byte)' ') { Send(client, "ERR badpath\n"u8); continue; }
                 *cursor = 0;
                 byte* fromPath = line + 7;
-                if (!IsConfined(fromPath)) { Send(client, "ERR badpath\n"u8); continue; }
-                byte* toPath = ConfinedPathFrom(cursor + 1, scratch);
+                if (!IsAllowed(fromPath)) { Send(client, "ERR badpath\n"u8); continue; }
+                byte* toPath = AllowedPathFrom(cursor + 1, scratch);
                 bool inData = toPath != null && IsDataPath(fromPath) && IsDataPath(toPath);
                 if (toPath == null || !(inData || IsTmpOf(fromPath, toPath))) { Send(client, "ERR badpath\n"u8); continue; }
 
@@ -256,7 +266,11 @@ internal static unsafe class Program
             if (StartsWith(line, "MKDIR "))
             {
                 byte* path = PathFrom(line + 6, scratch);
-                if (path == null || !(IsDataPath(path) || Equals(path, DataRoot))) { Send(client, "ERR badpath\n"u8); continue; }
+                if (path == null || !(IsDataPath(path) || Equals(path, DataRoot) || IsInstall(path) || IsInstallFolder(path)))
+                {
+                    Send(client, "ERR badpath\n"u8);
+                    continue;
+                }
                 int rc = KernelFile.sceKernelMkdir(path, 0x1FF);
                 if (rc != 0 && rc != AlreadyExists)
                     rc = (int)PayloadCrt.Syscall(PayloadCrt.SYS_mkdir, (long)(nint)path, 0x1FF);
@@ -276,6 +290,18 @@ internal static unsafe class Program
                 continue;
             }
 
+            // DELETE: an avatar file (or its .tmp) in a profile folder, and nothing else (UNLINK is for the app's folder).
+            if (StartsWith(line, "DELETE "))
+            {
+                byte* path = PathFrom(line + 7, scratch);
+                if (path == null || !IsAvatar(path)) { Send(client, "ERR badpath\n"u8); continue; }
+                int rc = KernelFile.sceKernelUnlink(path);
+                if (rc != 0)
+                    rc = (int)PayloadCrt.Syscall(PayloadCrt.SYS_unlink, (long)(nint)path);
+                SendResult(client, "DELETE", "rc="u8, rc);
+                continue;
+            }
+
             // "RESTARTSHELL <n>", then n lines "<backup> <target>". Like WRITE, a refused request ends the
             // connection, so its pair lines are never read as commands.
             if (StartsWith(line, "RESTARTSHELL "))
@@ -284,11 +310,29 @@ internal static unsafe class Program
                 return;
             }
 
+            // HEN: which HEN runs now. OnionHEN makes /system_tmp/onionhen/ready (and /system_tmp is cleared at boot), so the
+            // folder means "running now". The app does not restart the home screen under OnionHEN. Read-only, no argument.
+            if (StartsWith(line, "HEN"))
+            {
+                Send(client, PathExists("/system_tmp/onionhen/ready"u8, scratch) ? "OK HEN onionhen\n"u8 : "OK HEN none\n"u8);
+                continue;
+            }
+
             if (StartsWith(line, "QUIT"))
                 return;
 
             Send(client, "ERR unknown\n"u8);
         }
+    }
+
+    /// <summary>True when a fixed path exists (a file or a folder). The path is copied into <paramref name="scratch"/> to be NUL-terminated.</summary>
+    private static bool PathExists(ReadOnlySpan<byte> path, byte* scratch)
+    {
+        for (int i = 0; i < path.Length; i++) scratch[i] = path[i];
+        scratch[path.Length] = 0;
+        SceKernelStat info = default;
+        return KernelFile.stat(scratch, &info) == 0
+            || PayloadCrt.Syscall(PayloadCrt.SYS_stat, (long)(nint)scratch, (long)(nint)(&info)) == 0;
     }
 
     private static void ServeRead(int client, byte* path, byte* scratch)
@@ -331,9 +375,19 @@ internal static unsafe class Program
         int flags = OpenReadWrite | OpenCreate;
         if (wanted > 0) flags |= OpenTruncate;
 
-        int fd = KernelFile.sceKernelOpen(path, flags, Mode666);
+        // The path lives in scratch, which carries the body from here on; a file in the install folder keeps its path in a
+        // buffer of its own for the chmod after the write.
+        ushort mode = HelperPaths.ModeAfterWrite(Span(path));
+        byte* kept = stackalloc byte[MaxPath];
+        if (mode != 0)
+            for (int i = 0; i <= Length(path); i++) kept[i] = path[i];
+
+        // A new file in the install folder is created executable at once (the chmod below only repairs what the umask or an
+        // existing .tmp left); everything else keeps mode 0666.
+        ushort createMode = mode != 0 ? mode : Mode666;
+        int fd = KernelFile.sceKernelOpen(path, flags, createMode);
         if (fd < 0)
-            fd = (int)PayloadCrt.Syscall(PayloadCrt.SYS_open, (long)(nint)path, flags, Mode666);
+            fd = (int)PayloadCrt.Syscall(PayloadCrt.SYS_open, (long)(nint)path, flags, createMode);
         if (fd < 0)
         {
             Drain(client, wanted, scratch);
@@ -361,6 +415,21 @@ internal static unsafe class Program
         KernelFile.sceKernelClose(fd);
         if (received < wanted)
             Drain(client, wanted - received, scratch);
+        // A file in the install folder must be executable for the console to start the app (mode 0777): the raw chmod
+        // syscall, so nothing new is imported. A filesystem without chmod (an exFAT drive) is no failure as long as the file
+        // is executable anyway (its owner's execute bit); otherwise the answer is "chmod=" instead of "wrote=", so the app
+        // does not rename the file into place.
+        if (done == wanted && mode != 0)
+        {
+            long rc = PayloadCrt.Syscall(SysChmod, (long)(nint)kept, mode);
+            if (rc != 0)
+            {
+                SceKernelStat info = default;
+                bool executable = (KernelFile.stat(kept, &info) == 0
+                    || PayloadCrt.Syscall(PayloadCrt.SYS_stat, (long)(nint)kept, (long)(nint)(&info)) == 0) && (info.Mode & OwnerExecute) != 0;
+                if (!executable) { SendResult(client, "WRITE", "chmod="u8, (int)rc); return false; }
+            }
+        }
         SendResult(client, "WRITE", "wrote="u8, done);
         return done == wanted;
     }
@@ -380,6 +449,8 @@ internal static unsafe class Program
 
     // FreeBSD kill(2), nanosleep(2) and __sysctl(2): raw syscalls, so the helper imports nothing new that a
     // firmware could fail to resolve.
+    private const int SysChmod = 15;
+    private const int OwnerExecute = 0x40;   // S_IXUSR
     private const int SysKill = 37;
     private const int SysNanosleep = 240;
     private const int SysSysctl = 202;
@@ -711,14 +782,16 @@ internal static unsafe class Program
     }
 
     /// <summary>
-    /// LIST is allowed for two theme-root folders, where it only reports the sub-folder names (the title ids that
-    /// may carry an entry background), and for folders in the app's own folder, where it reports sub-folders as
-    /// "D name" and files as "F name".
+    /// LIST is allowed for two theme-root folders and the folder of all profiles, where it only reports the sub-folder
+    /// names (the title ids that may carry an entry background; the user ids), and for folders in the app's own folder, in
+    /// the install folder and in a profile folder, where it reports sub-folders as "D name" and files as "F name".
     /// </summary>
     private static void ServeList(int client, byte* path)
     {
-        bool data = IsDataPath(path) || Equals(path, DataRoot);
-        if (!(data || Equals(path, UserAppPrefix) || Equals(path, AppMetaPrefix))) { Send(client, "ERR badpath\n"u8); return; }
+        // Files are listed for the app's folder, the install folder and a profile folder; the folder of all profiles lists
+        // only its sub-folders, like the two theme-root folders.
+        bool data = IsDataPath(path) || Equals(path, DataRoot) || IsInstall(path) || IsInstallFolder(path) || HelperPaths.IsAvatarFolder(Span(path));
+        if (!(data || IsProfileRoot(path) || Equals(path, UserAppPrefix) || Equals(path, AppMetaPrefix))) { Send(client, "ERR badpath\n"u8); return; }
         void* dir = PayloadFileSystem.opendir(path);
         if (dir == null) { Send(client, "ERR opendir\n"u8); return; }
         Send(client, "OK\n"u8);
@@ -782,6 +855,25 @@ internal static unsafe class Program
         if (path == null) return null;
         return IsConfined(path) ? path : null;
     }
+
+    /// <summary>
+    /// A path for STAT, READ, WRITE and RENAME: a theme root or the app's folder (<see cref="IsConfined"/>), a file in the
+    /// install folder or one of the avatar files. RESTARTSHELL keeps using <see cref="IsConfined"/> alone.
+    /// </summary>
+    private static byte* AllowedPathFrom(byte* source, byte* scratch)
+    {
+        byte* path = PathFrom(source, scratch);
+        if (path == null) return null;
+        return IsAllowed(path) ? path : null;
+    }
+
+    private static bool IsAllowed(byte* path) => IsConfined(path) || IsInstall(path) || IsAvatar(path);
+
+    private static ReadOnlySpan<byte> Span(byte* path) => new(path, Length(path));
+    private static bool IsInstall(byte* path) => HelperPaths.IsInstallPath(Span(path));
+    private static bool IsInstallFolder(byte* path) => HelperPaths.IsInstallFolder(Span(path));
+    private static bool IsAvatar(byte* path) => HelperPaths.IsAvatarPath(Span(path));
+    private static bool IsProfileRoot(byte* path) => HelperPaths.IsProfileRoot(Span(path));
 
     // ---- socket helpers ----
 

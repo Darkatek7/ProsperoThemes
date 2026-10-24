@@ -223,7 +223,7 @@ public unsafe class CommunityScreenTests
         using var screen = new Screen(3);
         ThemeRenderer r = screen.Renderer;
         string[] Labels() => r.CommunityHints(screen.Browser).Select(h => h.Label).ToArray();
-        Assert.Equal(["Download", "Like", "Refresh", "Back"], Labels());
+        Assert.Equal(["Download", "Preview", "Like", "Refresh"], Labels());
         screen.Browser.Update(Up);
         Assert.Equal(["Select", "Move · Down for themes", "Sort", "Back"], Labels());
         Assert.True(r.CommunityHints(screen.Browser).Length <= 4);
@@ -392,8 +392,12 @@ public unsafe class CommunityScreenTests
         Assert.True(RingAt(s, 0, ThemeRenderer.CommunityGridTop + ThemeRenderer.CommunityRowStride));
         Assert.False(RingAt(s, 0, ThemeRenderer.CommunityGridTop));
 
-        // Square resets the selection to the first card: the very next frame is already at the top, not gliding there.
+        // A new sort (Square on the chips) resets the selection to the first card: the very next frame is already at the top,
+        // not gliding there.
+        for (int i = 0; i < 5; i++) screen.Press(UiInput.None with { Up = true });   // four rows up, then onto the chips
+        Assert.True(screen.Browser.CommunityChipFocused);
         screen.Press(UiInput.None, square: true);
+        screen.Press(down);   // back onto the cards, whose ring is what the check looks for
         s = screen.Frame();
         Assert.Equal(0, screen.Browser.CommunitySelected);
         Assert.True(RingAt(s, 0, ThemeRenderer.CommunityGridTop));
@@ -478,18 +482,75 @@ public unsafe class CommunityScreenTests
         ThemeRenderer r = screen.Renderer;
         string[] Labels() => r.CommunityHints(screen.Browser).Select(h => h.Label).ToArray();
 
-        Assert.Equal(["Download", "Like", "Refresh", "Back"], Labels());
+        Assert.Equal(["Download", "Preview", "Like", "Refresh"], Labels());
         r.CommunityLiked = new HashSet<string> { "id0" };
-        Assert.Equal(["Download", "Unlike", "Refresh", "Back"], Labels());
+        Assert.Equal(["Download", "Preview", "Unlike", "Refresh"], Labels());
         r.CommunityUpdates = new HashSet<string> { "id0" };
-        Assert.Equal(["Update", "Unlike", "Refresh", "Back"], Labels());
+        Assert.Equal(["Update", "Preview", "Unlike", "Refresh"], Labels());
         r.CommunityLiked = new HashSet<string>();
-        Assert.Equal(["Update", "Like", "Refresh", "Back"], Labels());
+        Assert.Equal(["Update", "Preview", "Like", "Refresh"], Labels());
+        Assert.True(r.CommunityHints(screen.Browser).Length <= 4);
         // The same arrays every time: nothing is built per frame.
         Assert.Same(r.CommunityHints(screen.Browser), r.CommunityHints(screen.Browser));
 
         r.Community = Array.Empty<CommunityTheme>();
         Assert.Equal(["Refresh", "Back"], Labels());
+    }
+
+    [Fact]
+    public void The_download_question_draws_over_the_store_and_an_update_reads_differently()
+    {
+        using var screen = new Screen(4);
+        long Shot()
+        {
+            Surface s = screen.Settle();
+            long hash = 17;
+            for (int y = 0; y < s.Height; y += 2)
+                for (int x = 0; x < s.Width; x += 2) hash = unchecked(hash * 31 + Px(s, x, y));
+            return hash;
+        }
+        long plain = Shot();
+        screen.Press(UiInput.None with { Confirm = true });
+        Assert.Equal(DialogKind.CommunityDownload, screen.Browser.Dialog);
+        long download = Shot();
+        Assert.NotEqual(plain, download);
+        // The same question about a theme with a newer version has other words.
+        screen.Press(UiInput.None with { Cancel = true });
+        screen.Browser.Update(UiInput.None with { Confirm = true }, communityUpdate: true);
+        long update = Shot();
+        Assert.NotEqual(download, update);
+        // Another card is another name in the question.
+        screen.Press(UiInput.None with { Cancel = true });
+        screen.Press(UiInput.None with { Right = true });
+        screen.Press(UiInput.None with { Confirm = true });
+        Assert.NotEqual(download, Shot());
+        // And the question over a card does not fall back to the library's pack (there is none here).
+        screen.Press(UiInput.None with { Cancel = true });
+        Assert.Equal(DialogKind.None, screen.Browser.Dialog);
+    }
+
+    [Fact]
+    public void The_sort_hint_beside_the_pills_shows_only_while_the_chips_have_the_focus()
+    {
+        using var screen = new Screen(4);
+        ThemeRenderer r = screen.Renderer;
+        // The hint sits between the last pill and the chips (a gap and a divider before the first chip).
+        long Hint()
+        {
+            Surface s = screen.Settle();
+            int right = r.CommunityChipScreenX(0) - 48 - 8, left = right - 110;
+            long hash = 17;
+            for (int y = ThemeRenderer.CommunitySortY; y < ThemeRenderer.CommunitySortY + ThemeRenderer.CommunitySortH; y++)
+                for (int x = left; x < right; x++) hash = unchecked(hash * 31 + Px(s, x, y));
+            return hash;
+        }
+        long onCards = Hint();
+        screen.Press(UiInput.None with { Up = true });
+        Assert.True(screen.Browser.CommunityChipFocused);
+        long onChips = Hint();
+        Assert.NotEqual(onCards, onChips);
+        screen.Press(UiInput.None with { Down = true });
+        Assert.Equal(onCards, Hint());
     }
 
     // ---- Header ----------------------------------------------------------------------------------------------------------
@@ -501,7 +562,8 @@ public unsafe class CommunityScreenTests
         screen.Renderer.CommunityListSort = (int)CommunitySort.Top;
         long Label() => LabelHash(screen.Settle());
         long top = Label();
-        // Square moved the pills on to "Most downloaded", but the list still on screen is the "Top rated" one.
+        // Square on the chips moved the pills on to "Most downloaded", but the list still on screen is the "Top rated" one.
+        screen.Press(UiInput.None with { Up = true });
         screen.Press(UiInput.None, square: true);
         Assert.Equal(1, screen.Browser.CommunitySort);
         Assert.Equal(top, Label());

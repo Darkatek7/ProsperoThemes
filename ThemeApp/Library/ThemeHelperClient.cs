@@ -22,7 +22,9 @@ public static class ThemeHelperClient
     public const int Port = 9071;
     public const int LoaderPort = 9021;
     /// <summary>The build tag this app expects; ThemeHelper/Program.cs BuildTag.</summary>
-    public const int ExpectedTag = 8;
+    public const int ExpectedTag = 9;
+    /// <summary>The start of the problem <see cref="EnsureRunning"/> reports when another build of the helper holds the port.</summary>
+    public const string DifferentHelperPrefix = "A different theme helper is already running";
     public const string ElfPath = DeviceThemeLibrary.AssetRoot + "/ThemeHelper.elf";
 
     private const uint ReplyTimeoutMicroseconds = 15_000_000;
@@ -80,7 +82,13 @@ public static class ThemeHelperClient
     private static string? CheckTag(string reply) =>
         reply == $"OK PONG {Port} v{ExpectedTag}"
             ? null
-            : $"A different theme helper is already running ({reply}). Please restart the console.";
+            : $"{DifferentHelperPrefix} ({reply}). Please restart the console.";
+
+    /// <summary>Brings the network up once (a plain socket needs it before the first connect).</summary>
+    public static void EnsureNetwork()
+    {
+        if (!_netReady) { NetPool.sceNetInit(); _netReady = true; }
+    }
 
     private static string? TryPing(out bool listening)
     {
@@ -206,18 +214,45 @@ public static class ThemeHelperClient
         if (folder != AppData.Root && !folder.StartsWith(AppData.Root + "/", StringComparison.Ordinal))
             throw new InvalidOperationException($"the theme helper only creates folders in {AppData.Root}, not {folder}");
         var steps = new List<string> { AppData.Root };
-        if (folder != AppData.Root)
-        {
-            for (int slash = folder.IndexOf('/', AppData.Root.Length + 1); slash > 0; slash = folder.IndexOf('/', slash + 1))
-                steps.Add(folder[..slash]);
-            steps.Add(folder);
-        }
-        foreach (string step in steps)
-        {
-            string reply = Request("MKDIR " + step, null, out _);
-            if (reply != "MKDIR rc=0" && reply != "MKDIR rc=" + unchecked((int)0x80020011))
-                throw new InvalidOperationException($"mkdir {step} failed: {reply}");
-        }
+        if (folder != AppData.Root) AddSteps(steps, folder, AppData.Root);
+        foreach (string step in steps) Mkdir(step);
+    }
+
+    /// <summary>
+    /// Creates a folder inside the app's install folder (<see cref="HelperPaths"/>), and the ones above it up to the install
+    /// folder itself, which has to exist already. "Already exists" counts as done.
+    /// </summary>
+    public static void MakeInstallDirectories(string path)
+    {
+        string folder = path.TrimEnd('/');
+        string root = HelperPaths.InstallFolderOf(folder)
+            ?? throw new InvalidOperationException($"the theme helper only creates folders in the app's install folder, not {folder}");
+        if (folder == root) return;
+        var steps = new List<string>();
+        AddSteps(steps, folder, root);
+        foreach (string step in steps) Mkdir(step);
+    }
+
+    // Every folder from the one below <root> down to <folder>.
+    private static void AddSteps(List<string> steps, string folder, string root)
+    {
+        for (int slash = folder.IndexOf('/', root.Length + 1); slash > 0; slash = folder.IndexOf('/', slash + 1))
+            steps.Add(folder[..slash]);
+        steps.Add(folder);
+    }
+
+    private static void Mkdir(string step)
+    {
+        string reply = Request("MKDIR " + step, null, out _);
+        if (reply != "MKDIR rc=0" && reply != "MKDIR rc=" + unchecked((int)0x80020011))
+            throw new InvalidOperationException($"mkdir {step} failed: {reply}");
+    }
+
+    /// <summary>Deletes an avatar file (or its .tmp) in a profile folder; the helper refuses every other path (v9).</summary>
+    public static void Delete(string path)
+    {
+        string reply = Request("DELETE " + path, null, out _);
+        if (reply != "DELETE rc=0") throw new InvalidOperationException($"delete {path} failed: {reply}");
     }
 
     public static void Unlink(string path)
@@ -232,14 +267,36 @@ public static class ThemeHelperClient
         if (reply != "RENAME rc=0") throw new InvalidOperationException($"rename {from} failed: {reply}");
     }
 
+    private static HenKind _hen = HenKind.Unknown;
+
+    /// <summary>
+    /// Which HEN runs, from the helper's HEN command (the app's sandbox cannot see /system_tmp). The answer is kept for the
+    /// session once the helper gave one; a helper that cannot be reached, or an older one that does not know the command,
+    /// gives <see cref="HenKind.Unknown"/>, which is asked again next time. Never throws. Blocks; call it from a worker thread.
+    /// </summary>
+    public static HenKind QueryHen()
+    {
+        if (_hen != HenKind.Unknown) return _hen;
+        try
+        {
+            EnsureNetwork();
+            HenKind answer = RunningHen.Parse(Request(RunningHen.Command, null, out _));
+            _hen = answer;
+            return answer;
+        }
+        catch (Exception) { return HenKind.Unknown; }
+    }
+
     /// <summary>
     /// Restarts the home screen (SceShellUI) so the icons and sounds just written show, and waits while the helper
-    /// watches it for about 30 seconds. When the restarted home screen keeps crashing, the helper copies each backup
+    /// watches it for about 30 seconds. Under OnionHEN (<see cref="QueryHen"/>) it throws without asking the helper: a restart
+    /// there can crash the new home screen. When the restarted home screen keeps crashing, the helper copies each backup
     /// of <paramref name="backups"/> over its file. Returns how many times the home screen started and how many
     /// files went back; throws when the helper refuses or does not answer.
     /// </summary>
     public static (int Restarts, int Restored) RestartShell(IReadOnlyList<(string Backup, string Device)> backups)
     {
+        if (RunningHen.ShellRestartRefusal(QueryHen()) is { } refusal) throw new InvalidOperationException(refusal);
         var request = new StringBuilder("RESTARTSHELL ").Append(backups.Count).Append('\n');
         foreach (var (backup, device) in backups) request.Append(backup).Append(' ').Append(device).Append('\n');
         using var connection = TcpConnection.Connect(SocketAddress.Loopback(Port));

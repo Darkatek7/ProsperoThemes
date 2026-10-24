@@ -37,7 +37,7 @@
     <Compile Include="..\ThemeApp\Library\CommunityList.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Library\FirmwareReport.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Library\AppSettings.cs" LinkBase="App" />
-    <Compile Include="..\ThemeApp\Library\PackSummary.cs;..\ThemeApp\Library\AppliedTheme.cs;..\ThemeApp\Library\ThemeParts.cs;..\ThemeApp\Library\LibraryOrder.cs;..\ThemeApp\Library\Look.cs;..\ThemeApp\Library\SystemUpdate.cs;..\ThemeApp\Library\AppUpdate.cs;..\ThemeApp\Library\LookPack.cs;..\ThemeApp\Library\StoredZip.cs;..\ThemeApp\Library\StockCatalog.cs" LinkBase="App" />
+    <Compile Include="..\ThemeApp\Library\PackSummary.cs;..\ThemeApp\Library\AppliedTheme.cs;..\ThemeApp\Library\ThemeParts.cs;..\ThemeApp\Library\LibraryOrder.cs;..\ThemeApp\Library\Look.cs;..\ThemeApp\Library\SystemUpdate.cs;..\ThemeApp\Library\AppUpdate.cs;..\ThemeApp\Library\AppInstall.cs;..\ThemeApp\Library\LookPack.cs;..\ThemeApp\Library\StoredZip.cs;..\ThemeApp\Library\StockCatalog.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Library\PreviewModel.cs;..\ThemeApp\Library\PreviewAssets.cs;..\ThemeApp\Library\Mp3Frames.cs;..\ThemeApp\Library\ImageHeader.cs;..\ThemeApp\Library\PreviewAudio.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Ui\ThemeBrowser.cs;..\ThemeApp\Ui\StoreAddressEditor.cs;..\ThemeApp\Ui\PreviewVisuals.cs;..\ThemeApp\Ui\PreviewController.cs" LinkBase="App" />
     <Compile Include="..\ThemeApp\Ui\AtlasFont.cs;..\ThemeApp\Ui\ThemeRenderer*.cs;..\ThemeApp\Ui\ButtonGlyph.cs;..\ThemeApp\Ui\Theme.cs;..\ThemeApp\Ui\Paint.cs;..\ThemeApp\Ui\ImageCache.cs;..\ThemeApp\Ui\QrCode.cs" LinkBase="App" />

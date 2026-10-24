@@ -35,14 +35,16 @@ public sealed partial class ThemeRenderer
 
     // ---- Footer hints ---------------------------------------------------------------------------------------------------
 
+    // On a card: X asks (download, download and apply), Square previews it without keeping it. At most four hints, so the
+    // footer leaves out Back; Circle still goes back, as it does on the Library's footer.
     private static readonly HintItem[] CommunityDownloadLikeHints =
-        [new(PadButton.Cross, "Download"), new(PadButton.Triangle, "Like"), new(PadButton.Options, "Refresh"), new(PadButton.Circle, "Back")];
+        [new(PadButton.Cross, "Download"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Like"), new(PadButton.Options, "Refresh")];
     private static readonly HintItem[] CommunityDownloadUnlikeHints =
-        [new(PadButton.Cross, "Download"), new(PadButton.Triangle, "Unlike"), new(PadButton.Options, "Refresh"), new(PadButton.Circle, "Back")];
+        [new(PadButton.Cross, "Download"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Unlike"), new(PadButton.Options, "Refresh")];
     private static readonly HintItem[] CommunityUpdateLikeHints =
-        [new(PadButton.Cross, "Update"), new(PadButton.Triangle, "Like"), new(PadButton.Options, "Refresh"), new(PadButton.Circle, "Back")];
+        [new(PadButton.Cross, "Update"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Like"), new(PadButton.Options, "Refresh")];
     private static readonly HintItem[] CommunityUpdateUnlikeHints =
-        [new(PadButton.Cross, "Update"), new(PadButton.Triangle, "Unlike"), new(PadButton.Options, "Refresh"), new(PadButton.Circle, "Back")];
+        [new(PadButton.Cross, "Update"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Unlike"), new(PadButton.Options, "Refresh")];
     private static readonly HintItem[] CommunityEmptyHints = [new(PadButton.Options, "Refresh"), new(PadButton.Circle, "Back")];
     // With the filter chips focused: X picks the chip; the d-pad hint says how to get back to the cards when there are some.
     private static readonly HintItem[] CommunityChipHints =
@@ -52,7 +54,7 @@ public sealed partial class ThemeRenderer
 
     /// <summary>
     /// The footer hints of the store: Update instead of Download for a theme with a newer version, Unlike instead of
-    /// Like for one this console liked. With no list there is nothing to download or like, only to refresh. While the
+    /// Like for one this console liked, Preview for the fullscreen preview of the card. With no list there is nothing to download or like, only to refresh. While the
     /// filter chips have the focus the cards are not in play, so the hints are the chips' (also for an empty list: the
     /// chips are how to pick another category).
     /// </summary>
@@ -162,7 +164,9 @@ public sealed partial class ThemeRenderer
             DrawCommunityPill(s, x, top, w, on, false, CommunityList.Label((CommunitySort)i));
             x += w + Theme.Unit;
         }
-        Hint(s, PadButton.Square, "Sort", x + Theme.Unit, top + (CommunitySortH - _small.LineHeight) / 2);
+        // Square sorts only from the chips (on the cards it previews), so the hint shows only then.
+        if (browser.CommunityChipFocused || Community.Count == 0)
+            Hint(s, PadButton.Square, "Sort", x + Theme.Unit, top + (CommunitySortH - _small.LineHeight) / 2);
         DrawCommunityChips(s, browser, top);
     }
 

@@ -73,6 +73,19 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     public string? ReapplySkipped { get; init; }
 
     /// <summary>
+    /// The firmware ("12.40") for which the app asked once to send a firmware report ("report_asked"), answered or not,
+    /// so it does not ask again for that firmware. Null when never asked.
+    /// </summary>
+    public string? ReportAsked { get; init; }
+
+    /// <summary>
+    /// The firmware to ask a report for on the System tab, or null: only a named firmware without a bundled catalog
+    /// (<paramref name="hasCatalog"/>) that was not asked about yet.
+    /// </summary>
+    public string? ReportToAsk(string? firmware, bool hasCatalog) =>
+        firmware is { Length: > 0 } && !hasCatalog && ReportAsked != firmware ? firmware : null;
+
+    /// <summary>
     /// The public community store, used when settings.json has no "store_url" (a first start writes it there).
     /// An empty "store_url" means the user removed the store on purpose.
     /// </summary>
@@ -82,7 +95,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     public static AppSettings Parse(string? json, Func<string> newDeviceId)
     {
         bool all = false, replace = false, sounds = true, newest = false, hideAi = false;
-        string url = DefaultStoreUrl, device = "", skipped = "", volume = "", music = "";
+        string url = DefaultStoreUrl, device = "", skipped = "", asked = "", volume = "", music = "";
         // The SDK's parser, not System.Text.Json: JsonDocument seeds its hashing from the BCL's crypto
         // random source, which pulls OpenSSL imports the console cannot link (see ThemePack.Hash).
         if (!string.IsNullOrWhiteSpace(json) && JsonValue.TryParse(json, out JsonValue root) && root.Type == JsonType.Object)
@@ -95,6 +108,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
             url = root.GetString("store_url", url).Trim();
             device = root.GetString("device_id");
             skipped = root.GetString("reapply_skipped");
+            asked = root.GetString("report_asked");
             volume = root.GetString("sound_volume");
             music = root.GetString("music_volume");
         }
@@ -102,7 +116,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
         return new AppSettings(all, url, device)
         {
             ReplaceEarlierThemes = replace, Sounds = sounds, LibrarySort = newest ? LibrarySort.Newest : LibrarySort.Name, HideAi = hideAi,
-            ReapplySkipped = skipped.Length > 0 ? skipped : null,
+            ReapplySkipped = skipped.Length > 0 ? skipped : null, ReportAsked = asked.Length > 0 ? asked : null,
             SoundVolume = VolumeOf(volume, DefaultSoundVolume), MusicVolume = VolumeOf(music, DefaultMusicVolume),
         };
     }
@@ -120,6 +134,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
         o["store_url"] = StoreUrl;
         o["device_id"] = DeviceId;
         if (ReapplySkipped is { Length: > 0 }) o["reapply_skipped"] = ReapplySkipped;
+        if (ReportAsked is { Length: > 0 }) o["report_asked"] = ReportAsked;
         return o.Write(indented: true) + "\n";
     }
 

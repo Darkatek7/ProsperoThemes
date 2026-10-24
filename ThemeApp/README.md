@@ -21,8 +21,9 @@ launch evidence are recorded separately below.
 - L1/R1 switch between the Library, Community, USB Import and System tabs. Circle goes back to the Library from
   any tab.
 - **Questions first:** X on a theme's detail opens an Apply dialog; X on System's "Restore defaults" row opens a
-  Restore dialog (focus starts on Cancel). In a dialog the d-pad moves the focus, X takes the focused option, Circle
-  closes it; every other button is ignored. While the app is busy neither dialog opens ("Please wait…").
+  Restore dialog (focus starts on Cancel); X on a Community card opens the Download dialog (focus on Download, see "Download
+  question" below). In a dialog the d-pad moves the focus, X takes the focused option, Circle
+  closes it; every other button is ignored. While the app is busy neither of these two opens ("Please wait…"); the Download question can (a download is not a console change).
 - **Notices:** results and progress ("Applying theme…", "Download failed (404).") appear as one toast at the bottom
   of the screen: in the footer band, or just above it when the text is long. It stays while the app is busy and fades
   about six seconds after it was posted.
@@ -74,9 +75,13 @@ launch evidence are recorded separately below.
 - The on-screen text is English (US spelling). The Inter font atlases cover ASCII plus the characters in
   `CHARS` of `tools/bake-assets.py` (`… · – × “ ” ‘ ’` and some accented Latin letters); keep new UI text
   inside that set.
+- **App update** (System tab, the row before Restore defaults; see "In-app update" below).
 - **System tab:** a focusable list (d-pad up/down, X): App backgrounds (X switches between "Without own image" and
   "All apps"), Store address (X opens the keyboard), Firmware report (X saves the report), Restore defaults (X asks
-  first). Circle goes back to the Library.
+  first). Circle goes back to the Library. The first time System opens on a firmware without a bundled catalog
+  (`/app0/sce_sys/prospero-themes/catalog/<fw>.json` missing, firmware known), a "Help support <fw>" question offers
+  "Send report" (the same as Firmware report, Save and send) or "Not now" (Circle too); the firmware is kept as
+  `report_asked` in `settings.json`, so it is not asked again for it.
 - **Store address** (System tab, Store address row): X opens an on-screen keyboard that the app draws itself, so no system
   keyboard library is needed. The d-pad moves over the keys, X types the focused key (the bottom row has
   `http://`, `https://`, `:8080`, "Default" for the public store and "Clear all"), Square deletes the last character, Options saves
@@ -104,17 +109,38 @@ launch evidence are recorded separately below.
   when the list carries one. A pack removed from the library loses its badge. The ids of the themes this console
   liked are kept next to `community.json`, in `/data/prospero-themes/likes.json` (see Likes below).
 - **Theme updates** (Community tab): cards show the store's version. When the store lists a hash that is not in
-  the library while the pack recorded in `community.json` is, the card carries an orange "Update" badge and X
-  says Update. The download moves the old pack to `/data/prospero-themes/attic/` (kept, not deleted); an
+  the library while the pack recorded in `community.json` is, the card carries an orange "Update" badge and the footer and
+  the question (X) say Update. The download moves the old pack to `/data/prospero-themes/attic/` (kept, not deleted); an
   applied theme changes on the console only after it is applied again.
-- **Community controls** (Community tab): the d-pad moves between the cards, X downloads (or updates), Square changes
-  the sort (Top rated, Most downloaded, New), Options refreshes the list, Circle goes back to the Library.
+- **Community controls** (Community tab): the d-pad moves between the cards, X asks what to do with the theme (see below),
+  Square previews it, Triangle likes, Options refreshes the list, Circle goes back to the Library. The footer lists
+  Download (Update), Preview, Like (Unlike) and Refresh. The sort (Top rated, Most downloaded, New) is Square on the chips
+  (and with no cards, when there is nothing to preview); its hint sits beside the pills only while the chips have the focus.
+- **Download question** (X on a card): "Download" / "Download and apply" / "Cancel" ("Update" / "Update and apply" for a
+  card with a newer version). Focus starts on "Download", so a plain download is X, X. The X that opens the question never
+  answers it; Circle or Cancel closes it. A download is not a console change, so the question also works while card pictures
+  load (the store queue runs it afterwards). A list that arrives under the question closes it, because the card under the
+  cursor may be another theme. "Download and apply" runs the same download job, and the library scan that follows
+  (`_applyAfterScan`, the downloaded pack's hash) selects the pack named after that hash and goes to its Detail, where the
+  Apply question opens on the next frame exactly as X on the Detail opens it (`ThemeBrowser.ApplyAfterDownload` and the
+  shared `AskApply`): the parts to tick, the app background scope question, or the plain question. Nothing is applied before
+  that question is confirmed, and none opens while the app is busy. A failed download never goes on; if the user has left the
+  Community tab (or another question is open) when the scan ends, the download notice is all there is.
+- **Preview before download** (Square on a card): fetches the pack without keeping it and opens the same fullscreen preview the
+  library has (home row with the pack's tile icons, background following the focus, control centre, UI sounds, Square for the
+  music, Circle back to the card). The pack is downloaded with `GetWithRetry` on the store queue (so card pictures stop for it
+  like for a download), checked like a download (`ThemeLibraryEntry.Inspect`, 48 MiB at most) and held in memory only:
+  `PreviewController.ShowStorePack` keeps the bytes (the worker captures its own reference) and lets them go when the preview
+  closes. Nothing is written to `/data`, the library or `community.json`, and the library's reader is never used for it. A
+  failure is a notice ("Preview failed (404)."), and a pack that arrives after the user left the tab is dropped. The request
+  carries `?preview=1`, which the store does not count as a download (`web/server`; an older store ignores the flag).
+  While a store preview is open the library's size does not matter (`ThemeBrowser.PreviewOfStore`).
 - **Category filter** (Community tab): a row of chips to the right of the sort pills, "All" and the store's twelve
   categories (Anime, Games, Movies & TV, Cartoon, Nature, Space, Fantasy, Sci-Fi, Pixel art, Minimal, Abstract,
   Seasonal). D-pad up from the cards' top row focuses the row (with no cards, Up and Down toggle between it and the
   cards, so another category can always be picked); Left and Right move between the chips, X chooses the focused chip
   (the list reloads with `?category=<id>`, the cursor goes back to the first card), Down returns to the cards. Square
-  (sort) and Options (refresh) work from either row; Triangle and X keep their meaning on the cards only. The chosen
+  (sort) works on the chips only (on a card Square previews it), Options (refresh) from either row; Triangle, X and Square-as-preview keep their meaning on the cards only. The chosen
   chip is white, the focused one carries the focus ring, and the row scrolls to keep the focused (else the chosen) chip
   in view. The count line names what the list on screen was loaded with ("24 themes · Anime · Top rated"), and an
   empty filter says "No themes in this category yet". A card lists its categories as small capsules along the bottom of
@@ -202,7 +228,67 @@ decoder of its own, since the SDK's PC texture library reads PNG only), the soun
 The last pack in its library is made in code (`PreviewDemoPack.cs`): tile icons, pictures, music and sounds for the
 preview to show; it is reached with End in the Library. `--screenshots` renders every screen (Library, Detail, Preview, Artwork, the demo pack's preview in each of its
 scenes, Community, Import, System and the store-address keyboard) and the new states (the Apply, scope and Restore dialogs, each System row focused, the
-three kinds of toast, the Applied badge) to `ThemeApp.Preview/out/`.
+three kinds of toast, the Applied badge) to `ThemeApp.Preview/out/`. The Community shots include the preview of a store card
+(`community-preview*`), the Download and Update questions (`dialog-community-download`, `dialog-community-update`) and the apply
+question that "Download and apply" leads to (`dialog-community-download-apply`); the PC preview treats a card's pack as the library
+pack it was made from, so nothing is fetched or written there.
+
+## Home screen restart
+
+New system icons, tile icons and UI sounds show once the home screen (`SceShellUI`) restarts. After an apply or restore
+that wrote one of them the app asks "Show the new look now?" (Show now, Later). Show now has ThemeHelper end the home
+screen and watch it for 30 seconds; when it keeps crashing, the helper puts the backups back (`ThemeHelper/README.md`).
+
+**Under OnionHEN the app does not restart the home screen.** OnionHEN puts its Toolbox into the new home screen about 14 s
+after a restart, and in 1 of 3 tries on 13.00 (2026-10-25) that failed and the home screen crashed (`CE-108262-9`; the system
+recovered by itself). The app asks the helper (`HEN`, answered from `/system_tmp/onionhen/ready`; the app's sandbox cannot see
+`/system_tmp`) after a job that wrote icons or sounds. When OnionHEN runs, the question has the option Later only
+(`DialogKind.RestartShellBlocked`) and says the changes show after the next restart of the console. The client refuses
+`RESTARTSHELL` under OnionHEN as well. An answer from the helper is kept for the session; a helper that does not answer, or
+an older one without the command, leaves the question as it was. Only OnionHEN changes the behaviour (etaHEN is not detected).
+
+## In-app update
+
+The System tab's **App update** row (ten rows now: 44 px high with 4 px gaps, the same 476 px that nine of 48 took, so the
+info panel still fits above the footer) shows what `AppUpdate.State` says: None (X asks the store again and answers with a
+notice), Notice (a later release without a ZIP: "update it where you installed it from"), Ready (the version in the accent
+colour; X opens the "Update Prospero Themes?" question, "Update now" / "Cancel", focus on Update now; busy apps answer "Please
+wait"), Installed (this session replaced the files; "Restart"). The start-up notice says "System, App update installs it" when
+the store's answer (`GET /api/app/latest`) carries `zip: {url, bytes, sha256}`; `AppUpdate.Parse` accepts a ZIP only with a
+size up to 64 MiB, 64 hex digits and a store path under `/api/app/download/` (no `..`, `//`, `?`, backslash or other host).
+
+"Update now" runs as a job (`StartHelperWork`, result held on screen) in this order, all in `Library/AppInstall.cs`:
+
+1. **Where.** ShadowMountPlus first: `POST http://127.0.0.1:10101/api/v1/games/info` with `{"title_id":"PPSA90210"}` over a plain
+   loopback socket (`ConsoleInstallHost`, 2 s receive timeout, `Connection: close`). The answer's `path` counts only for
+   `source_type` "folder", not image backed, `source_available` true and a valid path (absolute, normalised, ends in
+   `/PPSA90210`); its `version` is the registration's and can be stale, so it is not read. An image gives "Installed as a disk
+   image: update it by hand." Without a usable answer the scan roots (`AppInstall.ScanRoots`: `/data/homebrew`,
+   `/data/etaHEN/games`, `/mnt/ext0..1`, `/mnt/usb0..7`, bare and with `/homebrew` or `/etaHEN/games`) are probed for
+   `<root>/PPSA90210/sce_sys/param.json`; a candidate counts when its `titleId` is PPSA90210 and its `contentVersion` is the one
+   the app started with (`/app0/sce_sys/param.json` read at start). None or two matches refuse with the places named.
+2. **Download and check** (`AppInstall.Open`): byte count and SHA-256 (the SDK's managed `Sha256`) against `zip`, then the SDK's
+   `ZipArchive`. An entry must lie under `PPSA90210/`, with no `..`, backslash, space, control or non-ASCII character, and
+   pass the helper's own path rules (`HelperPaths.IsInstallRelative`); folder entries are skipped; at most 256 entries, 64 MiB per
+   file, 160 MiB in all; `eboot.bin` and `sce_sys/param.json` must be there, the param.json naming PPSA90210 at the announced
+   `contentVersion`. Nothing is written before all of this passes.
+3. **Write** (`AppInstall.Write`): everything but `eboot.bin` and `sce_sys/param.json` first (by name), then `eboot.bin`, then
+   `param.json`. Every file goes to a new `<file>.tmp`, is renamed onto the file and read back (SHA-256); a file identical to what
+   is there is skipped (which also tells whether `ThemeHelper.elf` changed: then the message adds "restart the console once as
+   well"). Files in the folder that the ZIP does not name stay. Afterwards the app asks ShadowMount to scan
+   (`POST /api/v1/scan`, failures ignored) so the home screen's version refreshes; untested on the console, as is the refresh of
+   the console's own copy of `sce_sys` (`/user/appmeta/PPSA90210`).
+
+**Why every write goes through ThemeHelper (v9).** The console refuses to start an app whose `eboot.bin` or modules are not
+executable: another app's updater wrote files with mode 0644 and got "Can't start the game or app" (errno 13). The SDK's file
+API creates files with mode 0666 (less the umask), so the helper creates each file in the install folder with mode 0777 and then
+sets it with the raw `chmod` syscall (`HelperPaths.ModeAfterWrite`). A filesystem that refuses chmod (an exFAT drive, untested)
+is accepted when the file has its owner execute bit anyway; otherwise the answer is `WRITE chmod=<error>` and the app does not
+rename the file. Local writes by the app are not used, so there is one tested path; the app's sandbox may also not reach `/data`
+at all (OnionHEN). A helper from before v9 answers `ERR badpath` for these paths, and a
+different build holding the port is caught by the build tag: both give "Restart the console once, then try the update again."
+After a successful update further helper jobs are refused until the app is restarted, because `/app0` is a live view of the
+install folder and a helper started now would come from the new ELF.
 
 ## ShadowMount deployment
 

@@ -22,7 +22,8 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
   play. The app writes them again at that volume, from 10 % to 100 %.
 - **No console restart:** new icons and sounds show once the home screen restarts. After an apply or restore the
   app offers that; it takes a few seconds and the app stays open. If the home screen does not come back steadily,
-  the helper puts the previous files back.
+  the helper puts the previous files back. Under OnionHEN the app does not restart the home screen; the changes show after
+  the next console restart.
 
 ## Requirements
 
@@ -44,6 +45,26 @@ Your library, backups and settings live in `/data/prospero-themes/`, so updating
 a new ThemeHelper (01.000.022 is one) needs one console restart after the update, because a running payload cannot
 be replaced; the app says so when it finds the old helper.
 
+## Update in the app
+
+When the store knows a newer release, the System tab's **App update** row shows its version. X asks "Update now"; the app
+then downloads the release ZIP from the store (checked against the size and SHA-256 the store announced), checks every
+file name in it, and replaces its own files in the folder it is installed in. The new version starts the next time you
+open the app: close it and start it again.
+
+- It needs [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus), or a folder install in one of the places
+  ShadowMount scans (`/data/homebrew`, `/data/etaHEN/games`, `/mnt/ext0` and `/mnt/ext1`, `/mnt/usb0` to `/mnt/usb7`, each
+  also with `/homebrew` or `/etaHEN/games`). The app asks ShadowMount where it is installed; without an answer it looks in
+  those places for its own `param.json`, and refuses when it finds none or more than one.
+- Writing goes through ThemeHelper, which also sets the file mode the console needs to start an app (0777). Your library,
+  backups and settings are not touched, and files in the folder that the release does not contain stay.
+- An app **installed as a disk image** cannot be changed in place: the app says so, and you update it by hand.
+- A release that comes with a new ThemeHelper (the first release with in-app update is one) needs **one console restart** after the update, because a
+  running payload cannot be replaced. If an older helper is still running when you press Update now, the app says "Restart
+  the console once, then try the update again."
+- Each file is written to a new `.tmp` file first and renamed over the old one, the program (`eboot.bin`) and its
+  `param.json` last, so an update that stops half-way still starts the old version and can be run again.
+
 ## Controls
 
 | Screen | Buttons |
@@ -52,10 +73,10 @@ be replaced; the app says so when it finds the old helper.
 | Library | X opens the details. Square opens the fullscreen preview. Triangle changes the order. Options reloads the library. On the "Save current look" card at the end, X saves the mix. |
 | Details | X applies the theme (it asks first). Square opens the preview. Circle goes back. |
 | Apply dialog | D-pad chooses, X confirms, Circle cancels. |
-| Preview | X shows or hides the home overlay. Square or Circle goes back. |
-| Community | X downloads (or updates). Triangle likes, or removes your like. Square changes the sort. Options refreshes the list. D-pad up from the first row reaches the chips: Left and Right move, X filters, Down goes back to the themes. X on Search opens a keyboard; Options searches, and X on the chip with a term shows every theme again. X on No AI hides or shows themes with AI pictures. |
+| Preview | X shows or hides the home overlay. Square plays the theme's music. Circle goes back. |
+| Community | X on a theme asks "Download", "Download and apply" or "Cancel" (an update says "Update"); the second goes on to the same apply questions as the Details screen, and nothing is applied before you confirm there. Square previews the theme without adding it to your library (picture, home row, sounds; Square again plays its music, Circle comes back). Triangle likes, or removes your like. Options refreshes the list. D-pad up from the first row reaches the chips: Left and Right move, X filters, Square changes the sort, Down goes back to the themes. X on Search opens a keyboard; Options searches, and X on the chip with a term shows every theme again. X on No AI hides or shows themes with AI pictures. |
 | USB Import | X imports from USB. |
-| System | D-pad picks a row, X acts on it. On Sound volume and Music volume, Left and Right change the volume. On AI themes, X switches between Show and Hide. |
+| System | D-pad picks a row, X acts on it. On Sound volume and Music volume, Left and Right change the volume. On AI themes, X switches between Show and Hide. On App update, X asks to install a newer release (see "Update in the app"), or asks the store when none is known. |
 
 Results and progress ("Applying theme…", "Download failed (404).") appear as a short message at the bottom of the
 screen.
@@ -78,7 +99,9 @@ this console is skipped and listed, never written. After a system update the app
 replaced and takes those as the new defaults, so Restore defaults never puts an old firmware's file back.
 It then offers to apply your theme again.
 
-On another firmware, please send a report: on the System tab, X on the Firmware report row offers "Save" or
+On another firmware, please send a report. The first time you open the System tab on a firmware this app has no
+measurements for, it asks once ("Send report" or "Not now"; it does not ask again for that firmware). You can also
+send one yourself: on the System tab, X on the Firmware report row offers "Save" or
 "Save and send". It saves `/data/prospero-themes/reports/firmware-<version>.json` (and a copy on a connected USB
 drive); "Save and send" also sends it to the store and shows a short code. It only reads, and describes the files
 a theme can change (sizes, hashes, formats, the icon list). Open an issue on this repository with the code, or

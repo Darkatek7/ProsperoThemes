@@ -52,7 +52,7 @@ void Press(UiInput input, bool square = false, bool triangle = false)
 {
     preview.BeforeUpdate(entries);
     browser.Update(input, preview: square, triangle: triangle);
-    if (browser.TakeAction() == ThemeAction.PreviewMusic) preview.ToggleMusic();
+    Dispatch(browser.TakeAction());
     preview.Update(entries);
 }
 
@@ -81,6 +81,37 @@ void ReloadStore()
     renderer.CommunityStatus = shown.Count == 0 ? (query.Length > 0 ? $"No themes match “{query}”." : "No themes in this category yet.") : "";
     renderer.SelectedCommunityId = shown.Count > 0 ? shown[0].Id : null;
     browser.SetCommunityCount(shown.Count);
+}
+
+// The store card under the cursor, and the library pack the preview's built-in store made it from (card i is entries[i]).
+CommunityTheme? CardUnderCursor() => browser.CommunitySelected >= 0 && browser.CommunitySelected < renderer.Community.Count ? renderer.Community[browser.CommunitySelected] : null;
+ThemeLibraryEntry? EntryOf(CommunityTheme? card) =>
+    card is not null && card.Id.StartsWith("store-", StringComparison.Ordinal) && int.TryParse(card.Id["store-".Length..], out int i) && i < entries.Count ? entries[i] : null;
+void SyncCard() => renderer.SelectedCommunityId = CardUnderCursor()?.Id;
+
+// What the app does for the browser's actions that the preview can show: the music, and the store card's preview and downloads. The
+// pack of a card is the library pack it was made from; nothing is fetched, written or applied here.
+void Dispatch(ThemeAction action)
+{
+    if (action == ThemeAction.PreviewMusic) preview.ToggleMusic();
+    if (action is not (ThemeAction.CommunityPreview or ThemeAction.CommunityDownload or ThemeAction.CommunityDownloadApply)) return;
+    if (CardUnderCursor() is not { } card || EntryOf(card) is not { } entry) return;
+    if (action == ThemeAction.CommunityPreview)
+    {
+        // The app fetches the pack and hands it over; here the pack is already at hand.
+        preview.ShowStorePack(entry with { Path = "store:" + card.Id }, entry.Path == PreviewDemoPack.Path ? demoPack! : File.ReadAllBytes(entry.Path));
+        if (!browser.OpenCommunityPreview()) preview.DropStorePack();
+        return;
+    }
+    renderer.CommunityInLibrary = new HashSet<string>(renderer.CommunityInLibrary, StringComparer.Ordinal) { card.Id };
+    renderer.CommunityUpdates = new HashSet<string>(renderer.CommunityUpdates.Where(id => id != card.Id), StringComparer.Ordinal);
+    renderer.Notify($"“{card.Name}” is now in your library (PC preview only).", NoticeLevel.Success);
+    if (action == ThemeAction.CommunityDownloadApply)
+    {
+        // The scan after the download selects the pack and the browser asks to apply it, as it does for the Detail's X.
+        browser.Select(entries.IndexOf(entry));
+        browser.ApplyAfterDownload();
+    }
 }
 
 if (args.Contains("--bench"))
@@ -280,7 +311,43 @@ if (args.Contains("--screenshots"))
         browser.Update(UiInput.None with { Home = true });
         browser.Update(UiInput.None with { Right = true });   // the second pack stays selected for the rest of the shots
     }
-    browser.Update(UiInput.None with { PageDown = true }); Save("community", ThemeView.Community);
+    browser.Update(UiInput.None with { PageDown = true }); SyncCard(); Save("community", ThemeView.Community);
+
+    // Square on a card previews that theme without adding it to the library (the app fetches the pack first; here it is at hand).
+    // Circle comes back to the store, onto the same card.
+    var nextCard = UiInput.None with { Right = true };
+    var previousCard = UiInput.None with { Left = true };
+    Press(nextCard);
+    SyncCard();
+    Press(UiInput.None, square: true);
+    Save("community-preview", ThemeView.Preview);
+    Press(nextCard);
+    Save("community-preview-moved", ThemeView.Preview);
+    Press(back);
+    if (browser.View != ThemeView.Community || browser.CommunitySelected != 1) throw new InvalidOperationException("The store preview did not lead back to its card");
+    Save("community-after-preview", ThemeView.Community);
+
+    // X on a card asks first: Download, Download and apply, Cancel. A card with a newer version says Update.
+    SyncCard();
+    browser.Update(press); Save("dialog-community-download", ThemeView.Community, DialogKind.CommunityDownload);
+    browser.Update(back);
+    browser.Update(nextCard); SyncCard();
+    browser.Update(press, communityUpdate: renderer.CommunityUpdates.Contains(renderer.SelectedCommunityId ?? ""));
+    Save("dialog-community-update", ThemeView.Community, DialogKind.CommunityDownload);
+    // "Download and apply": the pack is in the library now, selected, and the Detail's apply question follows. Nothing is applied.
+    browser.Update(down);
+    browser.Update(press);
+    Dispatch(browser.TakeAction());
+    ThemeLibraryEntry fetched = entries[browser.Selected];
+    browser.Update(UiInput.None, parts: ThemeParts.In(fetched.Manifest), asksScope: fetched.Manifest.Targets.Any(t => t.Path == AssetRoots.AllAppsBackground));
+    Save("dialog-community-download-apply", ThemeView.Detail, browser.Dialog);
+    browser.Update(back);   // the question is cancelled: the pack's Detail
+    browser.Update(back);   // and the Library
+    browser.Update(UiInput.None with { PageDown = true });
+    browser.Update(previousCard); browser.Update(previousCard); browser.Update(previousCard);
+    browser.Select(1);
+    SyncCard();
+    renderer.ClearNotice();
 
     // The category filter. What the app does for a chip: X asks for the list of that category, and when it arrives the
     // list, the category it was loaded with and the card count are replaced (the store answers with the cards in it).
@@ -393,9 +460,10 @@ if (args.Contains("--screenshots"))
     browser.Update(UiInput.None with { PageDown = true });
     browser.StoreUrl = "http://192.168.0.5:8080"; Save("system", ThemeView.System);
     // The store knows of a later release (AppUpdate): the version row says so.
-    renderer.AppVersion = "01.000.026";
+    renderer.AppVersion = "01.000.027";
     renderer.NewerVersion = "01.000.022"; Save("system-update", ThemeView.System);
     renderer.NewerVersion = "";
+    renderer.UpdateState = AppUpdate.State.None;
     // Each row focused in turn; the last one asks before restoring, with the focus on Cancel.
     renderer.AllAppsBackgrounds = false;
     for (int row = 0; row < ThemeBrowser.SystemRowCount; row++)
@@ -411,10 +479,33 @@ if (args.Contains("--screenshots"))
     for (int i = 0; i < 7; i++) browser.Update(up, restorable: ThemePart.All);
     browser.Update(press, restorable: ThemePart.All); Save("dialog-restore-parts-untick", ThemeView.System, DialogKind.RestoreParts);
     browser.Update(back);
+    // App update: the store announced a release with a ZIP, so X asks; then the same row when the files are in, and when it only knows of a release.
+    browser.Update(up);
+    renderer.NewerVersion = "01.000.027";
+    renderer.UpdateState = AppUpdate.State.Ready;
+    renderer.AppUpdateText = AppUpdate.DialogText("01.000.028", "01.000.027", 8_576_241);
+    Save("system-app-update", ThemeView.System);
+    browser.Update(press, appUpdate: AppUpdate.State.Ready); Save("dialog-app-update", ThemeView.System, DialogKind.AppUpdate);
+    browser.Update(down, appUpdate: AppUpdate.State.Ready); Save("dialog-app-update-cancel", ThemeView.System, DialogKind.AppUpdate);
+    browser.Update(back);
+    renderer.UpdateState = AppUpdate.State.Installed; Save("system-app-update-installed", ThemeView.System);
+    renderer.UpdateState = AppUpdate.State.Notice; Save("system-app-update-notice", ThemeView.System);
+    renderer.UpdateState = AppUpdate.State.None;
+    renderer.NewerVersion = "";
+    renderer.Notify("Prospero Themes 01.000.027 is installed. Close the app and start it again. This version has a new theme helper: restart the console once as well.", NoticeLevel.Success);
+    Save("toast-app-updated", ThemeView.System);
+    renderer.ClearNotice();
     // Firmware report: X asks whether to only save it or send it too; a sent one shows the store's code on its row.
     browser.Update(up);
     browser.Update(press); Save("dialog-firmware-report", ThemeView.System, DialogKind.FirmwareReport);
     browser.Update(back);
+    // A firmware without a catalog: the first visit to System asks once for a report (the loop leaves and re-enters the tab).
+    renderer.ReportFirmware = "12.40";
+    browser.OfferReport();
+    for (int i = 0; i < 4; i++) browser.Update(UiInput.None with { PageDown = true });
+    browser.TakeAction();   // the Community tab asked for its list on the way
+    Save("dialog-report-ask", ThemeView.System, DialogKind.ReportAsk);
+    browser.Update(back); browser.TakeAction();
     renderer.ReportCode = "K7Q2MX"; Save("system-report-code", ThemeView.System);
     renderer.ReportCode = "";
     browser.Update(up);   // Store address: X opens the keyboard
@@ -427,6 +518,8 @@ if (args.Contains("--screenshots"))
     browser.AskReapply(); Save("dialog-reapply", ThemeView.Library, DialogKind.Reapply);
     browser.Update(back); browser.TakeAction();
     browser.AskRestartShell(); Save("dialog-restart-shell", ThemeView.Library, DialogKind.RestartShell);
+    browser.Update(back); browser.TakeAction();
+    browser.AskRestartShell(HenKind.OnionHen); Save("dialog-restart-shell-onionhen", ThemeView.Library, DialogKind.RestartShellBlocked);
     browser.Update(back); browser.TakeAction();
     renderer.Busy = true;
     renderer.Notify("Applying theme…", NoticeLevel.Info); Save("toast-info", ThemeView.Library);
@@ -482,12 +575,22 @@ app.MapPost("/input/{key}", (string key) =>
         { PageUp = key == "l1", PageDown = key == "r1", Home = key == "home", End = key == "end" };
         bool asksScope = browser.Selected >= 0 && entries[browser.Selected].Manifest.Targets.Any(t => t.Path == AssetRoots.AllAppsBackground);
         ThemePart parts = browser.Selected >= 0 ? ThemeParts.In(entries[browser.Selected].Manifest) : ThemePart.None;
+        SyncCard();
         preview.BeforeUpdate(entries);
         browser.Update(input, preview: key == "preview", options: key == "options", triangle: key == "triangle",
-            asksScope: asksScope, allAppsScope: allAppsScope, busy: false, parts: parts, sounds: renderer.Sounds);
+            asksScope: asksScope, allAppsScope: allAppsScope, busy: false, parts: parts, sounds: renderer.Sounds,
+            communityUpdate: CardUnderCursor() is { } card && renderer.CommunityUpdates.Contains(card.Id));
         var action = browser.TakeAction();
-        if (action == ThemeAction.PreviewMusic) preview.ToggleMusic();
+        Dispatch(action);
+        // The app's frame loop opens the apply question that "Download and apply" asked for on its next frame; here that is now.
+        if (action == ThemeAction.CommunityDownloadApply && browser.Selected >= 0)
+        {
+            ThemeLibraryEntry fetched = entries[browser.Selected];
+            browser.Update(UiInput.None, asksScope: fetched.Manifest.Targets.Any(t => t.Path == AssetRoots.AllAppsBackground),
+                allAppsScope: allAppsScope, parts: ThemeParts.In(fetched.Manifest), sounds: renderer.Sounds);
+        }
         preview.Update(entries);
+        SyncCard();
         const string pcOnly = "This PC preview doesn’t write to a console; the PS5 app does.";
         // The preview's built-in store answers sort and category like the real one (Options reloads the same list).
         if (action == ThemeAction.CommunityRefresh) ReloadStore();

@@ -138,7 +138,7 @@ public class ThemeBrowserTests
     }
 
     [Fact]
-    public void Community_tab_moves_in_a_grid_downloads_likes_and_cycles_sort()
+    public void Community_tab_moves_in_a_grid_downloads_likes_previews_and_cycles_sort()
     {
         var browser = new ThemeBrowser();
         browser.Update(UiInput.None with { PageDown = true });
@@ -150,9 +150,19 @@ public class ThemeBrowserTests
         browser.Update(Right);
         Assert.Equal(5, browser.CommunitySelected);
         browser.Update(X);
+        Assert.Equal(DialogKind.CommunityDownload, browser.Dialog);   // X asks first
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+        browser.Update(X);
         Assert.Equal(ThemeAction.CommunityDownload, browser.TakeAction());
         browser.Update(UiInput.None, triangle: true);
         Assert.Equal(ThemeAction.CommunityLike, browser.TakeAction());
+        // Square on a card previews it (the sort is Square on the chips)
+        browser.Update(UiInput.None, preview: true);
+        Assert.Equal(ThemeAction.CommunityPreview, browser.TakeAction());
+        Assert.Equal(0, browser.CommunitySort);
+        Assert.Equal(5, browser.CommunitySelected);
+        browser.Update(Up);
+        browser.Update(Up);
         browser.Update(UiInput.None, preview: true);
         Assert.Equal(1, browser.CommunitySort);
         Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
@@ -194,6 +204,8 @@ public class ThemeBrowserTests
         Assert.False(browser.CommunityChipFocused);
         Assert.Equal(1, browser.CommunitySelected);
         browser.Update(X);                               // and the cards answer again
+        Assert.Equal(DialogKind.CommunityDownload, browser.Dialog);
+        browser.Update(X);
         Assert.Equal(ThemeAction.CommunityDownload, browser.TakeAction());
     }
 
@@ -348,16 +360,21 @@ public class ThemeBrowserTests
     }
 
     [Fact]
-    public void Square_cycles_the_sort_and_options_refresh_from_both_rows()
+    public void Square_cycles_the_sort_on_the_chips_and_options_refresh_from_both_rows()
     {
         var browser = OnCommunity(10);
         Press(browser, Right, 2);
+        // On a card Square previews: the sort stays as it is.
+        browser.Update(UiInput.None, preview: true);
+        Assert.Equal(0, browser.CommunitySort);
+        Assert.Equal(2, browser.CommunitySelected);
+        Assert.Equal(ThemeAction.CommunityPreview, browser.TakeAction());
+
+        browser.Update(Up);
         browser.Update(UiInput.None, preview: true);
         Assert.Equal(1, browser.CommunitySort);
         Assert.Equal(0, browser.CommunitySelected);
         Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
-
-        browser.Update(Up);
         browser.Update(UiInput.None, preview: true);
         Assert.Equal(2, browser.CommunitySort);
         Assert.True(browser.CommunityChipFocused);           // sorting does not take the focus off the chips
@@ -393,6 +410,7 @@ public class ThemeBrowserTests
         Assert.Equal(0, browser.CommunitySelected);
         browser.Update(Down);
         browser.Update(X);
+        browser.Update(X);
         Assert.Equal(ThemeAction.CommunityDownload, browser.TakeAction());
     }
 
@@ -409,6 +427,87 @@ public class ThemeBrowserTests
         browser.Update(O);
         Assert.Equal(ThemeView.Library, browser.View);
         Assert.False(browser.CommunityChipFocused);
+    }
+
+    private static ThemeBrowser OffersReport()
+    {
+        var browser = new ThemeBrowser();
+        browser.SetCount(2);
+        browser.OfferReport();
+        return browser;
+    }
+
+    private static void ToSystem(ThemeBrowser browser)
+    {
+        for (int i = 0; i < 3; i++) browser.Update(UiInput.None with { PageDown = true });
+        browser.TakeAction();   // the Community tab asked for its list on the way
+    }
+
+    [Fact]
+    public void The_report_is_asked_the_first_time_System_opens_and_not_on_the_other_tabs()
+    {
+        ThemeBrowser browser = OffersReport();
+        browser.Update(UiInput.None with { PageDown = true });
+        Assert.Equal(ThemeView.Community, browser.View);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        browser.Update(UiInput.None with { PageDown = true });
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        browser.Update(UiInput.None with { PageDown = true });
+        Assert.Equal(ThemeView.System, browser.View);
+        Assert.Equal(DialogKind.ReportAsk, browser.Dialog);
+        Assert.Equal(["Send report", "Not now"], browser.DialogOptions);
+        Assert.Equal(0, browser.DialogFocus);
+    }
+
+    [Fact]
+    public void Nothing_is_asked_without_an_offer()
+    {
+        var browser = new ThemeBrowser();
+        browser.SetCount(2);
+        ToSystem(browser);
+        Assert.Equal(ThemeView.System, browser.View);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+    }
+
+    [Fact]
+    public void Send_report_is_the_save_and_send_of_the_firmware_report_row()
+    {
+        ThemeBrowser browser = OffersReport();
+        ToSystem(browser);
+        browser.Update(X);
+        Assert.Equal(ThemeAction.FirmwareReport, browser.TakeAction());
+        Assert.True(browser.SendReport);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+    }
+
+    [Fact]
+    public void Not_now_and_O_answer_report_later_and_the_question_does_not_come_back()
+    {
+        ThemeBrowser browser = OffersReport();
+        ToSystem(browser);
+        browser.Update(Right);
+        browser.Update(X);                                          // Not now
+        Assert.Equal(ThemeAction.ReportLater, browser.TakeAction());
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        browser.Update(UiInput.None with { PageDown = true });      // Library again
+        ToSystem(browser);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+
+        browser = OffersReport();
+        ToSystem(browser);
+        browser.Update(O);
+        Assert.Equal(ThemeAction.ReportLater, browser.TakeAction());
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        Assert.Equal(ThemeView.System, browser.View);
+    }
+
+    [Fact]
+    public void Send_report_while_busy_is_a_busy_press_and_sends_nothing()
+    {
+        ThemeBrowser browser = OffersReport();
+        ToSystem(browser);
+        browser.Update(X, busy: true);
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
     }
 
     // ---- Dialogs: Apply -----------------------------------------------------------------------------
@@ -726,6 +825,11 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeAction.None, browser.TakeAction());
 
         browser.Update(Down);
+        browser.Update(X);                                          // App update with nothing to install: X only looks
+        Assert.Equal(ThemeAction.CheckAppUpdate, browser.TakeAction());
+        Assert.Equal(DialogKind.None, browser.Dialog);
+
+        browser.Update(Down);
         browser.Update(X);                                          // Restore defaults only asks
         Assert.Equal(DialogKind.Restore, browser.Dialog);
         Assert.Equal(ThemeAction.None, browser.TakeAction());
@@ -909,6 +1013,9 @@ public class ThemeBrowserTests
         browser.Update(Down);
         browser.Update(Down);
         browser.Update(X, busy: true);                              // Firmware report
+        Assert.Equal(ThemeAction.Busy, browser.TakeAction());
+        browser.Update(Down);
+        browser.Update(X, busy: true, appUpdate: AppUpdate.State.Ready);   // App update: installing waits for an idle app
         Assert.Equal(ThemeAction.Busy, browser.TakeAction());
         browser.Update(Down);
         browser.Update(X, busy: true);                              // Restore defaults

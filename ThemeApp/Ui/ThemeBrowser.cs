@@ -1,4 +1,5 @@
 using ProsperoThemes.App.Library;
+using ProsperoThemes.Shared;
 using SharpProspero.Ui;
 using System;
 using System.Collections.Generic;
@@ -13,11 +14,19 @@ public enum ThemeView { Library, Detail, Preview, Community, Import, System, Sto
 /// <summary>
 /// SaveStoreUrl: Options in the store-address editor; the app reads <see cref="ThemeBrowser.StoreEditor"/>'s text.
 /// PreviewMusic: Square in the preview, which starts or stops the theme's music excerpt (the app owns the sound).
+/// CommunityDownload and CommunityDownloadApply: the answers of the download question over a store card (the second goes
+/// straight into the apply question once the pack is in the library, see <see cref="ThemeBrowser.ApplyAfterDownload"/>);
+/// CommunityPreview: Square on a store card, which fetches the pack for a preview without adding it to the library (the app
+/// then calls <see cref="ThemeBrowser.OpenCommunityPreview"/>).
 /// ToggleLibrarySort: Triangle in the library, which switches the order of the row (name or newest).
+/// ReportLater: "Not now" (or O) on the ReportAsk question, which the app remembers so it is not asked again for this firmware.
+/// UpdateApp: "Update now" in the app update question (the app downloads the release ZIP and replaces its own files);
+/// CheckAppUpdate: X on the System tab's App update row when there is nothing to install (the app asks the store again, or says
+/// what it knows).
 /// ToggleBackgroundScope: the System row for app backgrounds. ToggleSounds: the System row for music and sounds. ToggleAiThemes: the System row (or the Community chip's setting) for AI themes. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
 /// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
 /// </summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, RestartShell, ChangeSoundVolume, ChangeMusicVolume, AskSoundVolume, ApplySoundVolume, ToggleAiThemes, Busy }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityDownloadApply, CommunityPreview, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, RestartShell, ChangeSoundVolume, ChangeMusicVolume, AskSoundVolume, ApplySoundVolume, ToggleAiThemes, ReportLater, UpdateApp, CheckAppUpdate, Busy }
 
 /// <summary>The two scenes of the preview: the home screen with its row of tiles, and the control centre's row of buttons.</summary>
 public enum PreviewScene { Home, ControlCentre }
@@ -31,12 +40,17 @@ public enum PreviewScene { Home, ControlCentre }
 /// the theme again (the app opens it, <see cref="ThemeBrowser.AskReapply"/>); FirmwareReport says what the report holds
 /// and whether to only save it or also send it to the store; RestartShell offers to restart the home screen after a job
 /// wrote icons or sounds (the app opens it, <see cref="ThemeBrowser.AskRestartShell"/>); SoundVolume asks before the look
-/// is applied again at a new UI sound volume (the app opens it, <see cref="ThemeBrowser.AskSoundVolume"/>).
+/// is applied again at a new UI sound volume (the app opens it, <see cref="ThemeBrowser.AskSoundVolume"/>); ReportAsk is
+/// the one-time request for a firmware report on a firmware the app has no catalog for (<see cref="ThemeBrowser.OfferReport"/>);
+/// CommunityDownload is the question over a store card: download it, download it and go on to apply it, or cancel (an
+/// update says Update); AppUpdate is the question behind the System tab's App update row: install the release the store
+/// announced over the app's own files, or cancel; RestartShellBlocked is RestartShell under OnionHEN, which can crash a home screen
+/// that restarts, so it has the option Later only and never emits <see cref="ThemeAction.RestartShell"/>.
 /// </summary>
-public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts, RestoreParts, Reapply, FirmwareReport, RestartShell, SoundVolume }
+public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts, RestoreParts, Reapply, FirmwareReport, RestartShell, SoundVolume, ReportAsk, CommunityDownload, AppUpdate, RestartShellBlocked }
 
 /// <summary>The focusable rows of the System screen, top to bottom.</summary>
-public enum SystemRow { Backgrounds, EarlierThemes, Sounds, SoundVolume, MusicVolume, AiThemes, StoreAddress, FirmwareReport, Restore }
+public enum SystemRow { Backgrounds, EarlierThemes, Sounds, SoundVolume, MusicVolume, AiThemes, StoreAddress, FirmwareReport, AppUpdate, Restore }
 
 public sealed class ThemeBrowser
 {
@@ -47,10 +61,15 @@ public sealed class ThemeBrowser
     private static readonly string[] ReapplyOptions = ["Apply again", "Not now"];
     private static readonly string[] ReportOptions = ["Save", "Save and send", "Cancel"];
     private static readonly string[] RestartShellOptions = ["Show now", "Later"];
+    private static readonly string[] RestartShellBlockedOptions = ["Later"];
     private static readonly string[] SoundVolumeOptions = ["Apply again", "Cancel"];
+    private static readonly string[] ReportAskOptions = ["Send report", "Not now"];
+    private static readonly string[] DownloadOptions = ["Download", "Download and apply", "Cancel"];
+    private static readonly string[] UpdateOptions = ["Update", "Update and apply", "Cancel"];
+    private static readonly string[] AppUpdateOptions = ["Update now", "Cancel"];
 
     /// <summary>Number of focusable rows on the System screen.</summary>
-    public const int SystemRowCount = 9;
+    public const int SystemRowCount = 10;
 
     /// <summary>
     /// The step Left (-1) or Right (+1) on the Sound volume or Music volume row asked for, with
@@ -93,10 +112,16 @@ public sealed class ThemeBrowser
         DialogKind.Reapply => ReapplyOptions,
         DialogKind.FirmwareReport => ReportOptions,
         DialogKind.RestartShell => RestartShellOptions,
+        DialogKind.RestartShellBlocked => RestartShellBlockedOptions,
         DialogKind.SoundVolume => SoundVolumeOptions,
+        DialogKind.ReportAsk => ReportAskOptions,
+        DialogKind.CommunityDownload => CommunityDialogUpdate ? UpdateOptions : DownloadOptions,
+        DialogKind.AppUpdate => AppUpdateOptions,
         DialogKind.ApplyParts or DialogKind.RestoreParts => _partsOptions,
         _ => Array.Empty<string>(),
     };
+    /// <summary>Whether the open (or last) CommunityDownload question is about an update of a theme in the library: its options then say Update.</summary>
+    public bool CommunityDialogUpdate { get; private set; }
     /// <summary>Whether the last <see cref="ThemeAction.FirmwareReport"/> also sends the report to the store ("Save and send").</summary>
     public bool SendReport { get; private set; }
     /// <summary>The parts the open ApplyParts or RestoreParts dialog lists, in order: its first options. Empty for every other dialog.</summary>
@@ -170,15 +195,19 @@ public sealed class ThemeBrowser
     private bool _scopeAfterParts;
     private int _scopeDefault;
     private ThemeAction _action;
+    // ApplyAfterDownload asked for the apply question; the next Update opens it.
+    private bool _askApply;
 
     public void SetCount(int count)
     {
         _count = Math.Max(0, count);
         Selected = _count == 0 ? -1 : Math.Clamp(Selected, 0, _count - 1);
-        if (_count == 0 && View is ThemeView.Detail or ThemeView.Preview) View = ThemeView.Library;
+        // The preview of a store theme is not of a library pack, so it stays.
+        if (_count == 0 && View is ThemeView.Detail or ThemeView.Preview && !PreviewOfStore) View = ThemeView.Library;
         // The library changed under the question, so it may no longer be about the pack that is selected. The question
-        // after a system update and the offer to restart the home screen are about the look, not the selection, so they stay.
-        if (Dialog is not (DialogKind.Reapply or DialogKind.RestartShell)) Dialog = DialogKind.None;
+        // after a system update and the offer to restart the home screen are about the look, not the selection, and the
+        // download question is about a store card, so they stay.
+        if (Dialog is not (DialogKind.Reapply or DialogKind.RestartShell or DialogKind.RestartShellBlocked or DialogKind.CommunityDownload or DialogKind.AppUpdate)) Dialog = DialogKind.None;
     }
 
     /// <summary>Puts the focus on the pack at <paramref name="index"/> (after the library was put in another order).</summary>
@@ -210,6 +239,8 @@ public sealed class ThemeBrowser
     public void SetCommunityCount(int count)
     {
         _communityCount = Math.Max(0, count);
+        // Another list under the question may put another theme on the selected card.
+        if (Dialog == DialogKind.CommunityDownload) Dialog = DialogKind.None;
         CommunitySelected = _communityCount == 0 ? -1 : Math.Clamp(CommunitySelected < 0 ? 0 : CommunitySelected, 0, _communityCount - 1);
     }
 
@@ -240,13 +271,28 @@ public sealed class ThemeBrowser
     /// selected pack can leave the library (the theme that ships with the app cannot). <paramref name="parts"/> are the
     /// parts the selected pack has (<see cref="ThemeParts.In"/>; None when not known), and <paramref name="sounds"/> the
     /// sounds setting: the apply question lists the parts when there are several, or when sounds are off and the pack
-    /// has some, and then starts with every part ticked but the sounds when they are off.
+    /// has some, and then starts with every part ticked but the sounds when they are off. <paramref name="communityUpdate"/>
+    /// says the selected store card is an update of a theme in the library (its download question then says Update).
+    /// <paramref name="appUpdate"/> is what the app knows about a newer release of itself: only <see cref="AppUpdate.State.Ready"/>
+    /// lets X on the System tab's App update row ask to install it.
     /// </summary>
     public void Update(UiInput input, bool preview = false, bool options = false, bool triangle = false,
         bool asksScope = false, bool allAppsScope = false, bool busy = false, bool removable = false,
-        ThemePart parts = ThemePart.None, bool sounds = true, ThemePart restorable = ThemePart.None)
+        ThemePart parts = ThemePart.None, bool sounds = true, ThemePart restorable = ThemePart.None, bool communityUpdate = false,
+        AppUpdate.State appUpdate = AppUpdate.State.None)
     {
         _restorable = restorable;
+        // The apply question that follows "Download and apply" opens on the first frame after the app selected the pack, with
+        // the parts and the scope of that pack (they are only known now).
+        if (_askApply && Dialog == DialogKind.None)
+        {
+            _askApply = false;
+            if (View == ThemeView.Detail && Selected >= 0)
+            {
+                AskApply(parts, asksScope, allAppsScope, sounds, busy);
+                return;
+            }
+        }
         // One Update is one frame, and an open dialog answers first. The X that opens a dialog (below) returns
         // right after opening it, so the same X cannot also confirm it.
         if (Dialog != DialogKind.None)
@@ -309,29 +355,27 @@ public sealed class ThemeBrowser
             tab = (tab + (input.PageDown ? 1 : Tabs.Length - 1)) % Tabs.Length;
             View = Tabs[tab];
             if (View == ThemeView.Community && _communityCount == 0) _action = ThemeAction.CommunityRefresh;
+            if (View == ThemeView.System && _reportOffer)
+            {
+                _reportOffer = false;   // once per start; the app remembers the answer
+                OpenDialog(DialogKind.ReportAsk, 0);
+            }
             return;
         }
         if (View == ThemeView.Community)
         {
-            UpdateCommunity(input, preview, options, triangle);
+            UpdateCommunity(input, preview, options, triangle, communityUpdate);
             return;
         }
         if (View == ThemeView.System)
         {
-            UpdateSystem(input, busy);
+            UpdateSystem(input, busy, appUpdate);
             return;
         }
         if (!LookSavable) LookCardFocused = false;
         if (preview && Selected >= 0 && (View == ThemeView.Detail || View == ThemeView.Library && !LookCardFocused))
         {
-            _previewOrigin = View;
-            ShowOverlay = true;
-            PreviewScene = PreviewScene.Home;
-            PreviewTab = PreviewTab.Games;
-            Array.Clear(_previewFocus);
-            PreviewButton = 0;
-            _previewSound = PreviewSound.None;
-            View = ThemeView.Preview;
+            StartPreview(View);
             return;
         }
         if (View == ThemeView.Library && _count > 0 && LookCardFocused)
@@ -359,26 +403,7 @@ public sealed class ThemeBrowser
         else if (View == ThemeView.Detail)
         {
             // Writing to the console always goes through a question first.
-            if (input.Confirm)
-            {
-                List<ThemePart> list = ThemeParts.List(parts);
-                if (busy) _action = ThemeAction.Busy;
-                else if (list.Count > 1 || !sounds && (parts & ThemePart.Sounds) != 0)
-                {
-                    _dialogParts = list;
-                    _partsOptions = [.. list.ConvertAll(ThemeParts.Label), "Apply theme", "Cancel"];
-                    ApplyParts = sounds ? parts : parts & ~ThemePart.Sounds;
-                    _scopeAfterParts = asksScope;
-                    _scopeDefault = allAppsScope ? 1 : 0;
-                    OpenDialog(DialogKind.ApplyParts, list.Count);   // starts on Apply theme
-                }
-                else
-                {
-                    ApplyParts = ThemePart.All;
-                    if (asksScope) OpenDialog(DialogKind.ApplyScope, allAppsScope ? 1 : 0);
-                    else OpenDialog(DialogKind.Apply, 0);
-                }
-            }
+            if (input.Confirm) AskApply(parts, asksScope, allAppsScope, sounds, busy);
             else if (triangle && removable)
             {
                 if (busy) _action = ThemeAction.Busy;
@@ -387,6 +412,74 @@ public sealed class ThemeBrowser
         }
         else if (View == ThemeView.Import && input.Confirm) _action = ThemeAction.ImportUsb;
         if (options && View == ThemeView.Library) _action = ThemeAction.Reload;
+    }
+
+    // Opens the preview from origin (where Circle goes back to), at the start of the home row.
+    private void StartPreview(ThemeView origin)
+    {
+        _previewOrigin = origin;
+        ShowOverlay = true;
+        PreviewScene = PreviewScene.Home;
+        PreviewTab = PreviewTab.Games;
+        Array.Clear(_previewFocus);
+        PreviewButton = 0;
+        _previewSound = PreviewSound.None;
+        View = ThemeView.Preview;
+    }
+
+    // The question that starts an apply (the Detail screen's X, and "Download and apply" once the pack is in the library):
+    // the parts to tick when the pack has several, else where an app background goes, else the plain question. Nothing is
+    // written before one of them is confirmed; while the app is busy none opens.
+    private void AskApply(ThemePart parts, bool asksScope, bool allAppsScope, bool sounds, bool busy)
+    {
+        List<ThemePart> list = ThemeParts.List(parts);
+        if (busy) _action = ThemeAction.Busy;
+        else if (list.Count > 1 || !sounds && (parts & ThemePart.Sounds) != 0)
+        {
+            _dialogParts = list;
+            _partsOptions = [.. list.ConvertAll(ThemeParts.Label), "Apply theme", "Cancel"];
+            ApplyParts = sounds ? parts : parts & ~ThemePart.Sounds;
+            _scopeAfterParts = asksScope;
+            _scopeDefault = allAppsScope ? 1 : 0;
+            OpenDialog(DialogKind.ApplyParts, list.Count);   // starts on Apply theme
+        }
+        else
+        {
+            ApplyParts = ThemePart.All;
+            if (asksScope) OpenDialog(DialogKind.ApplyScope, allAppsScope ? 1 : 0);
+            else OpenDialog(DialogKind.Apply, 0);
+        }
+    }
+
+    /// <summary>
+    /// Whether the preview on screen is of a store theme (opened from a card with <see cref="OpenCommunityPreview"/>), not of a
+    /// library pack: Circle then goes back to the Community tab, and the library's size does not matter.
+    /// </summary>
+    public bool PreviewOfStore => View == ThemeView.Preview && _previewOrigin == ThemeView.Community;
+
+    /// <summary>
+    /// Opens the preview for the store theme the app has just fetched (see <see cref="ThemeAction.CommunityPreview"/>). Does
+    /// nothing, and returns false, when the user has left the Community tab or a question is open by now.
+    /// </summary>
+    public bool OpenCommunityPreview()
+    {
+        if (View != ThemeView.Community || Dialog != DialogKind.None) return false;
+        StartPreview(ThemeView.Community);
+        return true;
+    }
+
+    /// <summary>
+    /// After "Download and apply": the pack is in the library and selected (<see cref="Select"/>). Goes to its Detail and, on the
+    /// next <see cref="Update"/>, asks to apply it exactly as X on the Detail does. Nothing is applied before that question is
+    /// confirmed. Does nothing, and returns false, unless the user is still on the Community tab with no question open.
+    /// </summary>
+    public bool ApplyAfterDownload()
+    {
+        if (View != ThemeView.Community || Dialog != DialogKind.None || Selected < 0) return false;
+        CommunityChipFocused = false;
+        View = ThemeView.Detail;
+        _askApply = true;
+        return true;
     }
 
     // The preview. The d-pad moves along the tiles of the home row, or along the buttons of the control centre; L1 and R1
@@ -451,8 +544,9 @@ public sealed class ThemeBrowser
 
     // The store tab has two rows to be in: the filter chips above the grid and the cards. Up from the cards' top row goes to
     // the chips, Down comes back; with no cards (an empty filter, a failed load) Up and Down toggle between the two, so the
-    // chips can always be reached to pick another category. Square (sort) and Options (refresh) work from either row.
-    private void UpdateCommunity(UiInput input, bool preview, bool options, bool triangle)
+    // chips can always be reached to pick another category. Options (refresh) works from either row. Square sorts from the
+    // chips (and with no cards) and previews the theme on a card; X on a card opens the download question.
+    private void UpdateCommunity(UiInput input, bool preview, bool options, bool triangle, bool update)
     {
         const int columns = 4;
         if (CommunityChipFocused)
@@ -501,10 +595,19 @@ public sealed class ThemeBrowser
             if (input.Left) CommunitySelected = Math.Max(0, CommunitySelected - 1);
             if (input.Down) CommunitySelected = Math.Min(_communityCount - 1, CommunitySelected + columns);
             if (input.Up) CommunitySelected = Math.Max(0, CommunitySelected - columns);
-            if (input.Confirm) _action = ThemeAction.CommunityDownload;
+            // X asks first (download, download and apply, or cancel); the same X cannot also answer.
+            if (input.Confirm)
+            {
+                CommunityDialogUpdate = update;
+                OpenDialog(DialogKind.CommunityDownload, 0);
+                return;
+            }
             if (triangle) _action = ThemeAction.CommunityLike;
+            // Square on a card previews that theme, as in the Library; the sort is Square on the chips.
+            if (preview) _action = ThemeAction.CommunityPreview;
         }
-        if (preview)
+        // Sort is Square on the chips (and with no cards, when there is nothing to preview).
+        if (preview && (CommunityChipFocused || _communityCount == 0))
         {
             CommunitySort = (CommunitySort + 1) % 3;
             CommunitySelected = _communityCount == 0 ? -1 : 0;
@@ -513,7 +616,7 @@ public sealed class ThemeBrowser
         if (options) _action = ThemeAction.CommunityRefresh;
     }
 
-    private void UpdateSystem(UiInput input, bool busy)
+    private void UpdateSystem(UiInput input, bool busy, AppUpdate.State appUpdate)
     {
         if (input.Up) SystemSelected = Math.Max(0, SystemSelected - 1);
         if (input.Down) SystemSelected = Math.Min(SystemRowCount - 1, SystemSelected + 1);
@@ -553,6 +656,12 @@ public sealed class ThemeBrowser
                 if (busy) _action = ThemeAction.Busy;
                 else OpenDialog(DialogKind.FirmwareReport, 0);   // starts on Save; sending is a choice of its own
                 break;
+            case SystemRow.AppUpdate:
+                // Installing replaces the app's files, so it waits for an idle app; looking at what is known does not.
+                if (appUpdate != AppUpdate.State.Ready) _action = ThemeAction.CheckAppUpdate;
+                else if (busy) _action = ThemeAction.Busy;
+                else OpenDialog(DialogKind.AppUpdate, 0);   // starts on Update now
+                break;
             case SystemRow.Restore:
                 RestoreParts = ThemePart.All;
                 if (busy) _action = ThemeAction.Busy;
@@ -580,11 +689,14 @@ public sealed class ThemeBrowser
 
     /// <summary>
     /// Offers to restart the home screen so new icons and sounds show at once, unless another question is open. The
-    /// focus starts on "Show now"; "Later" and O just close it.
+    /// focus starts on "Show now"; "Later" and O just close it. Under OnionHEN (<paramref name="hen"/>) the question has the option
+    /// "Later" only: a restart there can crash the home screen, so nothing in this dialog can answer
+    /// <see cref="ThemeAction.RestartShell"/>.
     /// </summary>
-    public void AskRestartShell()
+    public void AskRestartShell(HenKind hen = HenKind.Unknown)
     {
-        if (Dialog == DialogKind.None) OpenDialog(DialogKind.RestartShell, 0);
+        if (Dialog == DialogKind.None)
+            OpenDialog(RunningHen.AllowsShellRestart(hen) ? DialogKind.RestartShell : DialogKind.RestartShellBlocked, 0);
     }
 
     /// <summary>
@@ -595,6 +707,15 @@ public sealed class ThemeBrowser
     {
         if (Dialog == DialogKind.None) OpenDialog(DialogKind.SoundVolume, 0);
     }
+
+    private bool _reportOffer;
+
+    /// <summary>
+    /// Asks for a firmware report the first time the System tab opens (the app calls it at start on a firmware without a
+    /// catalog that was not asked about yet). The focus starts on "Send report"; "Not now" and O answer
+    /// <see cref="ThemeAction.ReportLater"/>, "Send report" is <see cref="ThemeAction.FirmwareReport"/> with <see cref="SendReport"/>.
+    /// </summary>
+    public void OfferReport() => _reportOffer = true;
 
     private void OpenDialog(DialogKind kind, int focus)
     {
@@ -609,6 +730,7 @@ public sealed class ThemeBrowser
         if (input.Cancel)
         {
             if (Dialog == DialogKind.Reapply) _action = ThemeAction.ReapplyLater;
+            else if (Dialog == DialogKind.ReportAsk) _action = ThemeAction.ReportLater;
             Dialog = DialogKind.None;
             return;
         }
@@ -659,6 +781,13 @@ public sealed class ThemeBrowser
             if (chosen >= last)   // Cancel
             {
                 if (kind == DialogKind.Reapply) _action = ThemeAction.ReapplyLater;
+                else if (kind == DialogKind.ReportAsk) _action = ThemeAction.ReportLater;
+                return;
+            }
+            // A download goes through the store queue, which waits for the card pictures; it is not a console change.
+            if (kind == DialogKind.CommunityDownload)
+            {
+                _action = chosen == 1 ? ThemeAction.CommunityDownloadApply : ThemeAction.CommunityDownload;
                 return;
             }
             if (busy) { _action = ThemeAction.Busy; return; }
@@ -667,11 +796,18 @@ public sealed class ThemeBrowser
                 case DialogKind.Reapply:
                     _action = ThemeAction.Reapply;
                     break;
+                case DialogKind.AppUpdate:
+                    _action = ThemeAction.UpdateApp;
+                    break;
                 case DialogKind.RestartShell:
                     _action = ThemeAction.RestartShell;
                     break;
                 case DialogKind.SoundVolume:
                     _action = ThemeAction.ApplySoundVolume;
+                    break;
+                case DialogKind.ReportAsk:
+                    SendReport = true;
+                    _action = ThemeAction.FirmwareReport;
                     break;
                 case DialogKind.FirmwareReport:
                     SendReport = chosen == 1;

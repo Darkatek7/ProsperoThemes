@@ -144,6 +144,16 @@ public class SystemScreenTests
         browser.OpenStoreAddress("");
         Steady("keyboard, empty", browser, rings: 1);
 
+        // The download question over a store card: its name and line are made once, not per frame.
+        renderer.Community = [new CommunityTheme("id0", "Theme 0", "Author 0", "1.0", "", 1, 10, 100, null, "http://x/0",
+            Fallback: true, AllApps: true, PerApp: 1, Icons: 4, Tiles: 2)];
+        var store = new ThemeBrowser();
+        store.SetCommunityCount(1);
+        To(store, ThemeView.Community);
+        store.Update(UiInput.None with { Confirm = true });
+        Assert.Equal(DialogKind.CommunityDownload, store.Dialog);
+        Steady("community download question", store, rings: 1);
+
         var preview = new ThemeBrowser();
         preview.SetCount(1);
         preview.Update(UiInput.None, preview: true);

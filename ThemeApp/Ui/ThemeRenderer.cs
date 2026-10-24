@@ -71,6 +71,11 @@ public sealed partial class ThemeRenderer : IDisposable
     public IReadOnlySet<string> CommunityUpdates { get; set; } = new HashSet<string>();
     /// <summary>The community card under the cursor, for the footer's Download/Update hint.</summary>
     public string? SelectedCommunityId { get; set; }
+    /// <summary>
+    /// The store theme whose preview is open (<see cref="ThemeBrowser.PreviewOfStore"/>): it takes the place of the selected
+    /// library pack in the preview. Set and cleared by the <see cref="PreviewController"/>.
+    /// </summary>
+    public ThemeLibraryEntry? StorePreview { get; set; }
     /// <summary>The Community tab's empty or error state ("No themes loaded", "Can't reach the store"); drawn only while the list is empty.</summary>
     public string CommunityStatus { get; set; } = "";
     private readonly HashSet<string> _failedThumbs = new();
@@ -288,7 +293,8 @@ public sealed partial class ThemeRenderer : IDisposable
         UpdateCreator(browser.StoreUrl);
         if (_noticeFresh) { _noticeAt = seconds; _noticeFresh = false; }
         if (browser.View != _previousView) { _previousView = browser.View; _viewStart = seconds; }
-        var selected = browser.Selected >= 0 && browser.Selected < entries.Count ? entries[browser.Selected] : null;
+        var selected = browser.PreviewOfStore ? StorePreview
+            : browser.Selected >= 0 && browser.Selected < entries.Count ? entries[browser.Selected] : null;
         _selected = selected;
         bool dialog = browser.Dialog != DialogKind.None;
         if (dialog && _dialogBase is not null && _dialogKey == DialogBaseKey(browser, selected, entries.Count))

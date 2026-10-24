@@ -98,6 +98,9 @@ public class CommunityListTests
     {
         Assert.Equal("https://t.example/api/themes?sort=downloads&page=1&pageSize=24", CommunityList.ListUrl("https://t.example/", CommunitySort.Downloads));
         Assert.Equal("https://t.example/api/themes/a%20b/like", CommunityList.LikeUrl("https://t.example", "a b"));
+        // A preview is fetched with a flag that tells the store not to count it as a download.
+        Assert.Equal("https://t.example/api/themes/abc/download?preview=1", CommunityList.PreviewDownloadUrl("https://t.example/api/themes/abc/download"));
+        Assert.Equal("https://t.example/dl?v=2&preview=1", CommunityList.PreviewDownloadUrl("https://t.example/dl?v=2"));
         Assert.Equal(13, CommunityList.ParseLikes("""{"likes":13,"liked":true}"""));
         Assert.Equal(-1, CommunityList.ParseLikes("nope"));
     }

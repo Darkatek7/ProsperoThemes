@@ -23,6 +23,8 @@
   <!-- Shared by every payload here: a single-client serve loop must not be able to block forever. -->
   <ItemGroup>
     <Compile Include="..\PayloadCommon\ClientTimeout.cs" Link="ClientTimeout.cs" />
+    <!-- The path rules for the install folder and the avatar files: the app and the PC tests compile the same file. -->
+    <Compile Include="..\Shared\HelperPaths.cs" Link="HelperPaths.cs" />
   </ItemGroup>
 
   <Import Project="$(SharpProsperoRoot)\build\Prospero.Payload.targets" />

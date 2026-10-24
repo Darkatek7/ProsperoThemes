@@ -78,6 +78,25 @@ public class LibraryOrderTests
     }
 
     [Fact]
+    public void The_report_is_asked_once_per_firmware_that_has_no_catalog()
+    {
+        AppSettings first = AppSettings.Parse("{}", () => "abcdefgh12");
+        Assert.Null(first.ReportAsked);
+        Assert.Equal("12.40", first.ReportToAsk("12.40", hasCatalog: false));
+        Assert.Null(first.ReportToAsk("13.00", hasCatalog: true));      // a catalog is bundled
+        Assert.Null(first.ReportToAsk(null, hasCatalog: false));        // the firmware is unknown
+        Assert.Null(first.ReportToAsk("", hasCatalog: false));
+
+        AppSettings asked = first with { ReportAsked = "12.40" };
+        AppSettings again = AppSettings.Parse(asked.Serialize(), () => "x");
+        Assert.Equal("12.40", again.ReportAsked);
+        Assert.Contains("\"report_asked\": \"12.40\"", asked.Serialize());
+        Assert.Null(again.ReportToAsk("12.40", hasCatalog: false));
+        Assert.Equal("12.60", again.ReportToAsk("12.60", hasCatalog: false));   // another firmware is asked again
+        Assert.DoesNotContain("report_asked", first.Serialize());
+    }
+
+    [Fact]
     public void Triangle_in_the_library_asks_for_the_other_order_and_select_moves_the_focus()
     {
         var browser = new ThemeBrowser();

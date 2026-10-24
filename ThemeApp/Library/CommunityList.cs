@@ -124,6 +124,12 @@ public static class CommunityList
         + (string.IsNullOrEmpty(query) ? "" : "&q=" + Uri.EscapeDataString(query))
         + (hideAi ? "&ai=hide" : "");
 
+    /// <summary>
+    /// The download address for a preview: the store does not count it as a download (<c>preview=1</c>; an older store ignores
+    /// the flag and counts it). <paramref name="downloadUrl"/> is a theme's <see cref="CommunityTheme.DownloadUrl"/>.
+    /// </summary>
+    public static string PreviewDownloadUrl(string downloadUrl) => downloadUrl + (downloadUrl.Contains('?') ? "&" : "?") + "preview=1";
+
     public static string LikeUrl(string baseUrl, string id) => $"{baseUrl.TrimEnd('/')}/api/themes/{Uri.EscapeDataString(id)}/like";
 
     /// <summary>Parses <c>{ items: [...] }</c>; malformed entries are skipped, a malformed document throws.</summary>

@@ -37,6 +37,9 @@ public sealed class PreviewController : IDisposable
     private readonly Func<string, byte[]> _readPack;
     private readonly IPreviewWorker _worker;
     private ThemeLibraryEntry? _entry;
+    // The pack of a store theme being previewed (see ShowStorePack): kept in memory only while its preview is open.
+    private ThemeLibraryEntry? _storeEntry;
+    private byte[]? _storeBytes;
     private PreviewModel? _model;
     private PreviewAssets? _assets;
     private int _generation;
@@ -59,23 +62,52 @@ public sealed class PreviewController : IDisposable
     public bool IsOpen => _entry is not null;
 
     /// <summary>
+    /// Takes in the pack of a store theme to preview without adding it to the library: <paramref name="entry"/> is its
+    /// inspected manifest (give it a path of its own, such as "store:" and the pack's hash: the renderer's caches are keyed by
+    /// it) and <paramref name="pack"/> its bytes, which stay in memory until the preview closes (or <see cref="DropStorePack"/>).
+    /// The app calls this and then <see cref="ThemeBrowser.OpenCommunityPreview"/>, which opens the preview over it. Nothing is
+    /// written to the console or the library.
+    /// </summary>
+    public void ShowStorePack(ThemeLibraryEntry entry, byte[] pack)
+    {
+        _storeEntry = entry;
+        _storeBytes = pack;
+        _renderer.StorePreview = entry;
+    }
+
+    /// <summary>Lets go of a pack given to <see cref="ShowStorePack"/> that no preview was opened for (the user had left the tab).</summary>
+    public void DropStorePack()
+    {
+        if (_entry is not null && ReferenceEquals(_entry, _storeEntry)) return;   // its preview is open: Close lets go
+        _storeEntry = null;
+        _storeBytes = null;
+        _renderer.StorePreview = null;
+    }
+
+    // The entry the preview is, or would be, of: the store theme's, or the selected library pack.
+    private ThemeLibraryEntry? Subject(IReadOnlyList<ThemeLibraryEntry> entries)
+    {
+        if (_browser.PreviewOfStore) return _storeEntry;
+        int index = _browser.Selected;
+        return index >= 0 && index < entries.Count ? entries[index] : null;
+    }
+
+    /// <summary>
     /// Before <see cref="ThemeBrowser.Update"/> each frame: tells the browser how long the preview's rows are for the
     /// selected pack, so the first press after the preview opens is already clamped to them.
     /// </summary>
     public void BeforeUpdate(IReadOnlyList<ThemeLibraryEntry> entries)
     {
         if (_browser.View is not (ThemeView.Library or ThemeView.Detail or ThemeView.Preview)) return;
-        int index = _browser.Selected;
-        if (index < 0 || index >= entries.Count) return;
-        PreviewModel model = _renderer.PreviewModelFor(entries[index]);
+        if (Subject(entries) is not { } subject) return;
+        PreviewModel model = _renderer.PreviewModelFor(subject);
         _browser.SetPreviewLayout(model.Games.Count, model.Media.Count);
     }
 
     /// <summary>After <see cref="ThemeBrowser.Update"/> each frame: opens and closes the preview, plays sounds, starts the picture jobs.</summary>
     public void Update(IReadOnlyList<ThemeLibraryEntry> entries)
     {
-        int index = _browser.Selected;
-        ThemeLibraryEntry? wanted = _browser.View == ThemeView.Preview && index >= 0 && index < entries.Count ? entries[index] : null;
+        ThemeLibraryEntry? wanted = _browser.View == ThemeView.Preview ? Subject(entries) : null;
 
         // A press that makes a sound is played before the preview closes, so the back clip of leaving is heard.
         PreviewSound sound = _browser.TakePreviewSound();
@@ -107,13 +139,15 @@ public sealed class PreviewController : IDisposable
         _audio.SetClips(NoClips);   // the earlier theme's sounds must not play while this one's are still being read
         int generation = ++_generation;
         PreviewModel model = _model;
+        // A store theme's bytes are already here; the worker takes its own reference, so Close can let go of ours at any time.
+        byte[]? pack = ReferenceEquals(entry, _storeEntry) ? _storeBytes : null;
         PreviewAssets assets = PreviewAssets.Empty();
         PreviewLoad load = new();
         _worker.Run(() =>
         {
             try
             {
-                assets = PreviewAssets.Load(model, _readPack(entry.Path));
+                assets = PreviewAssets.Load(model, pack ?? _readPack(entry.Path));
                 load = PreviewVisuals.Load(model, assets, _decode);
             }
             catch { /* the stand-ins stay and the preview is silent */ }
@@ -133,6 +167,13 @@ public sealed class PreviewController : IDisposable
     private void Close()
     {
         _generation++;
+        // The store theme's pack is let go with its preview (a pack handed over for the next one stays).
+        if (ReferenceEquals(_entry, _storeEntry))
+        {
+            _storeEntry = null;
+            _storeBytes = null;
+            _renderer.StorePreview = null;
+        }
         _entry = null;
         _model = null;
         _assets = null;
@@ -193,6 +234,8 @@ public sealed class PreviewController : IDisposable
     {
         _generation++;
         _entry = null;
+        _storeEntry = null;
+        _storeBytes = null;
         _audio.Dispose();
     }
 }
