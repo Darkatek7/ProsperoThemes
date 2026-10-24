@@ -14,10 +14,10 @@ public enum ThemeView { Library, Detail, Preview, Community, Import, System, Sto
 /// SaveStoreUrl: Options in the store-address editor; the app reads <see cref="ThemeBrowser.StoreEditor"/>'s text.
 /// PreviewMusic: Square in the preview, which starts or stops the theme's music excerpt (the app owns the sound).
 /// ToggleLibrarySort: Triangle in the library, which switches the order of the row (name or newest).
-/// ToggleBackgroundScope: the System row for app backgrounds. ToggleSounds: the System row for music and sounds. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
+/// ToggleBackgroundScope: the System row for app backgrounds. ToggleSounds: the System row for music and sounds. ToggleAiThemes: the System row (or the Community chip's setting) for AI themes. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
 /// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
 /// </summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, RestartShell, ChangeSoundVolume, ChangeMusicVolume, AskSoundVolume, ApplySoundVolume, Busy }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, RestartShell, ChangeSoundVolume, ChangeMusicVolume, AskSoundVolume, ApplySoundVolume, ToggleAiThemes, Busy }
 
 /// <summary>The two scenes of the preview: the home screen with its row of tiles, and the control centre's row of buttons.</summary>
 public enum PreviewScene { Home, ControlCentre }
@@ -36,7 +36,7 @@ public enum PreviewScene { Home, ControlCentre }
 public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts, RestoreParts, Reapply, FirmwareReport, RestartShell, SoundVolume }
 
 /// <summary>The focusable rows of the System screen, top to bottom.</summary>
-public enum SystemRow { Backgrounds, EarlierThemes, Sounds, SoundVolume, MusicVolume, StoreAddress, FirmwareReport, Restore }
+public enum SystemRow { Backgrounds, EarlierThemes, Sounds, SoundVolume, MusicVolume, AiThemes, StoreAddress, FirmwareReport, Restore }
 
 public sealed class ThemeBrowser
 {
@@ -50,7 +50,7 @@ public sealed class ThemeBrowser
     private static readonly string[] SoundVolumeOptions = ["Apply again", "Cancel"];
 
     /// <summary>Number of focusable rows on the System screen.</summary>
-    public const int SystemRowCount = 8;
+    public const int SystemRowCount = 9;
 
     /// <summary>
     /// The step Left (-1) or Right (+1) on the Sound volume or Music volume row asked for, with
@@ -133,20 +133,28 @@ public sealed class ThemeBrowser
     /// <summary>Whether the filter chip row above the grid has the focus (and not a card).</summary>
     public bool CommunityChipFocused { get; private set; }
     /// <summary>
-    /// The chip the cursor is on while <see cref="CommunityChipFocused"/>: <see cref="SearchChip"/>, then
-    /// <see cref="AllChip"/>, then the categories in order (<see cref="ChipOfCategory"/>). Moving into the row starts on
-    /// the chosen category's chip.
+    /// The chip the cursor is on while <see cref="CommunityChipFocused"/>: <see cref="SearchChip"/>,
+    /// <see cref="NoAiChip"/>, then <see cref="AllChip"/> and the categories in order (<see cref="ChipOfCategory"/>).
+    /// Moving into the row starts on the chosen category's chip.
     /// </summary>
     public int CommunityChip { get; private set; }
-    /// <summary>The chips of the filter row: the search, "All" and every category.</summary>
-    public static int CommunityChipCount => CommunityCategories.Count + 2;
+    /// <summary>The chips of the filter row: the search, "No AI", "All" and every category.</summary>
+    public static int CommunityChipCount => CommunityCategories.Count + 3;
     /// <summary>The first chip: "Search" opens the keyboard; with a search term it shows the term, and X removes it.</summary>
     public const int SearchChip = 0;
-    public const int AllChip = 1;
+    /// <summary>"No AI" switches <see cref="CommunityHideAi"/>; it goes with any category.</summary>
+    public const int NoAiChip = 1;
+    public const int AllChip = 2;
     /// <summary>The chip of a category (an index into <see cref="CommunityCategories.List"/>, -1 for "All").</summary>
-    public static int ChipOfCategory(int category) => category + 2;
-    /// <summary>The category of a chip after the search chip (-1 for "All").</summary>
-    public static int CategoryOfChip(int chip) => chip - 2;
+    public static int ChipOfCategory(int category) => category + 3;
+    /// <summary>The category of a chip after "No AI" (-1 for "All").</summary>
+    public static int CategoryOfChip(int chip) => chip - 3;
+    /// <summary>
+    /// Whether the Community tab leaves out themes with AI-generated pictures (the store's <c>ai=hide</c>). The app keeps
+    /// it in settings.json and sets it at start (<see cref="SetCommunityHideAi"/>).
+    /// </summary>
+    public bool CommunityHideAi { get; private set; }
+    public void SetCommunityHideAi(bool hide) => CommunityHideAi = hide;
     /// <summary>What the Community tab searches for (the store's <c>q=</c>); empty for no search.</summary>
     public string CommunityQuery { get; private set; } = "";
     /// <summary>The keyboard behind <see cref="ThemeView.Search"/>.</summary>
@@ -467,6 +475,12 @@ public sealed class ThemeBrowser
                     _action = ThemeAction.CommunityRefresh;
                 }
             }
+            else if (input.Confirm && CommunityChip == NoAiChip)
+            {
+                CommunityHideAi = !CommunityHideAi;
+                CommunitySelected = _communityCount == 0 ? -1 : 0;
+                _action = ThemeAction.CommunityRefresh;
+            }
             else if (input.Confirm)
             {
                 // The list on screen stays until the filtered one arrives, like a new sort.
@@ -525,6 +539,11 @@ public sealed class ThemeBrowser
             case SystemRow.SoundVolume:
             case SystemRow.MusicVolume:
                 _action = busy ? ThemeAction.Busy : ThemeAction.AskSoundVolume;
+                break;
+            case SystemRow.AiThemes:
+                // Only the store list changes, so it works while the app is busy too.
+                CommunityHideAi = !CommunityHideAi;
+                _action = ThemeAction.ToggleAiThemes;
                 break;
             case SystemRow.StoreAddress:
                 // Typing starts on the next frame: this X only opens the keyboard.

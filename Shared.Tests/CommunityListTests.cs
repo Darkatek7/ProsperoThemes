@@ -151,6 +151,20 @@ public class CommunityListTests
     }
 
     [Fact]
+    public void Hiding_ai_themes_asks_the_store_for_ai_hide_and_items_say_whether_they_are_ai()
+    {
+        Assert.Equal("https://t.example/api/themes?sort=top&page=1&pageSize=24&category=anime&ai=hide",
+            CommunityList.ListUrl("https://t.example", CommunitySort.Top, "anime", hideAi: true));
+        Assert.DoesNotContain("ai=", CommunityList.ListUrl("https://t.example", CommunitySort.Top));
+        const string json = """
+            {"items":[{"id":"a","downloadUrl":"/d/a","ai":true,"summary":{}},{"id":"b","downloadUrl":"/d/b","summary":{}}]}
+            """;
+        List<CommunityTheme> list = CommunityList.Parse(json, "https://t.example");
+        Assert.True(list[0].Ai);
+        Assert.False(list[1].Ai);   // a store that predates the flag
+    }
+
+    [Fact]
     public void The_list_url_names_the_search_term_only_when_there_is_one_and_escapes_it()
     {
         const string all = "https://t.example/api/themes?sort=top&page=1&pageSize=24";

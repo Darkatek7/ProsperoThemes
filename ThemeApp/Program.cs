@@ -74,6 +74,7 @@ internal sealed class ThemeApp : ProsperoApp
     // was started with, to notice a sort, a chip or a search made while the app was busy (see StartCommunityWork).
     private int _listSort, _listCategory = -1;
     private string _listQuery = "";
+    private bool _listHideAi;
     // A list load (or a load of the pictures it still lacks) is running (frame thread only). Another sort or chip, a
     // download or a like asks it to stop (_stopList, read by the worker between pictures); the worker sets _listStopped
     // when it did, and _listPosted once the list it loads is on screen. What comes next: the queued download or like,
@@ -110,6 +111,7 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.SoundVolume = _settings.SoundVolume;
         _renderer.MusicVolume = _settings.MusicVolume;
         _renderer.LibrarySort = _settings.LibrarySort;
+        _browser.SetCommunityHideAi(_settings.HideAi);
         try { _firmware = SharpProspero.Platform.SystemInfo.SystemSoftwareVersion; }
         catch { _firmware = null; }
         _renderer.Firmware = _firmware ?? "";
@@ -563,6 +565,7 @@ internal sealed class ThemeApp : ProsperoApp
                     problem => SaveFirmwareReport(problem, reportStore));
                 break;
             case ThemeAction.CommunityRefresh: StartCommunityList(); break;
+            case ThemeAction.ToggleAiThemes: ToggleAiThemes(); break;
             case ThemeAction.CommunityDownload when SelectedCommunity() is { } theme: StartCommunityDownload(theme); break;
             case ThemeAction.CommunityLike when SelectedCommunity() is { } theme: StartCommunityLike(theme); break;
         }
@@ -710,6 +713,25 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.Notify(LookHasSounds()
             ? "Theme music at " + volume + "% from the next apply. X applies your look again now."
             : "Theme music at " + volume + "% from the next apply.", NoticeLevel.Info);
+    }
+
+    /// <summary>
+    /// System → AI themes: the same setting as the Community tab's "No AI" chip, kept in settings.json. A list on
+    /// screen is loaded again with it; a list load that is running notices the change when it ends.
+    /// </summary>
+    private void ToggleAiThemes()
+    {
+        bool hide = _browser.CommunityHideAi;
+        _settings = _settings with { HideAi = hide };
+        try { WriteSettings(); }
+        catch (Exception ex)
+        {
+            _renderer.Notify("Setting not saved: " + ex.Message, NoticeLevel.Error);
+            return;
+        }
+        _renderer.Notify(hide ? "The Community tab leaves out themes with AI pictures." : "The Community tab lists themes with AI pictures too.",
+            NoticeLevel.Info);
+        if (!_busy && _community.Count > 0) StartCommunityList();
     }
 
     private void ToggleSounds()
@@ -916,6 +938,7 @@ internal sealed class ThemeApp : ProsperoApp
                 // job refused it with "Please wait"; a list load stopped early for it). Load it now, with the sort and
                 // category they show. A list stopped before it arrived is loaded again even when the pills went back to it.
                 if (_browser.CommunitySort != _listSort || _browser.CommunityCategory != _listCategory || _browser.CommunityQuery != _listQuery
+                    || _browser.CommunityHideAi != _listHideAi
                     || _reloadList) StartCommunityList();
                 else if (_previewsMissing) StartCommunityPreviews();
             });
@@ -962,7 +985,15 @@ internal sealed class ThemeApp : ProsperoApp
         var sort = (CommunitySort)_browser.CommunitySort;
         int category = _browser.CommunityCategory;
         string query = _browser.CommunityQuery;
+        bool hideAi = _browser.CommunityHideAi;
         string? categoryId = CommunityCategories.IdAt(category);
+        // The "No AI" chip is a setting of its own, kept for the next start.
+        if (hideAi != _settings.HideAi)
+        {
+            _settings = _settings with { HideAi = hideAi };
+            try { WriteSettings(); }
+            catch { /* it lasts until the app quits */ }
+        }
         // "Loading themes · Anime · Top rated…", or without the category for all themes; "Searching “kanto” · …" for a search.
         string busyText = (query.Length > 0 ? $"Searching “{query}”" : "Loading themes")
             + (categoryId is null ? "" : " · " + CommunityCategories.LabelAt(category)) + $" · {CommunityList.Label(sort)}…";
@@ -971,7 +1002,7 @@ internal sealed class ThemeApp : ProsperoApp
         // (unless a queued download or like is waiting for it to stop).
         if (_busy && _listLoading)
         {
-            bool moved = (int)sort != _listSort || category != _listCategory || query != _listQuery;
+            bool moved = (int)sort != _listSort || category != _listCategory || query != _listQuery || hideAi != _listHideAi;
             _stopList = moved || _queuedJob is not null;
             if (moved)
             {
@@ -985,7 +1016,7 @@ internal sealed class ThemeApp : ProsperoApp
         _listPosted = false;
         bool started = StartCommunityWork(busyText, http =>
         {
-            HttpResponse answer = http.GetWithRetry(CommunityList.ListUrl(baseUrl, sort, categoryId, query: query));
+            HttpResponse answer = http.GetWithRetry(CommunityList.ListUrl(baseUrl, sort, categoryId, query: query, hideAi: hideAi));
             if (!answer.IsSuccess) return new StoreResult("Store responded with status " + answer.StatusCode + ".", NoticeLevel.Error);
             List<CommunityTheme> list = CommunityList.Parse(System.Text.Encoding.UTF8.GetString(answer.Body), baseUrl);
             // Asked to stop while the list was on its way: the old list stays on screen until the new one is here.
@@ -1020,6 +1051,7 @@ internal sealed class ThemeApp : ProsperoApp
             _listSort = (int)sort;
             _listCategory = category;
             _listQuery = query;
+            _listHideAi = hideAi;
             _listLoading = true;
             _reloadList = false;
             _previewsMissing = false;

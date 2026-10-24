@@ -186,6 +186,7 @@ public sealed partial class ThemeRenderer
     private string _communityChipQuery = "";
     private string CommunityChipLabel(int chip)
     {
+        if (chip == ThemeBrowser.NoAiChip) return "No AI";
         if (chip != ThemeBrowser.SearchChip) return CommunityCategories.LabelAt(ThemeBrowser.CategoryOfChip(chip));
         if (_communityChipQuery.Length == 0) return "Search";
         string term = _communityChipQuery.Length > 20 ? _communityChipQuery[..19] + "…" : _communityChipQuery;
@@ -288,7 +289,8 @@ public sealed partial class ThemeRenderer
         {
             int x = _communityChipX[i] - scroll, w = _communityChipW![i];
             if (x + w <= 0 || x >= viewWidth) continue;
-            DrawCommunityPill(strip, x, 0, w, i == chosen || (searching && i == ThemeBrowser.SearchChip), i == cursor, CommunityChipLabel(i));
+            bool on = i == chosen || (searching && i == ThemeBrowser.SearchChip) || (browser.CommunityHideAi && i == ThemeBrowser.NoAiChip);
+            DrawCommunityPill(strip, x, 0, w, on, i == cursor, CommunityChipLabel(i));
         }
         if (cursor < 0) return;
         // The ring and its glow reach 12 px past the chip, so they get a band a little wider than the viewport.
@@ -508,6 +510,8 @@ public sealed partial class ThemeRenderer
             Paint.FillCircle(c, 14 + 20f, 14 + 20f, 20f, Theme.Ink.WithAlpha(210));
             DrawCommunityHeart(c, 14 + (40 - 22) / 2, 14 + (40 - CommunityHeartHeight(22)) / 2, 22, filled: true, CommunityHeart);
         }
+        // AI-generated pictures (the author, the store's check or a moderator says so), after the heart.
+        if (t.Ai) Badge(c, "AI", liked ? 14 + 40 + 8 : 14, 14, Theme.White);
 
         DrawCommunityCategories(c, t);
         DrawCommunityPanel(c, t, update, liked);

@@ -217,18 +217,41 @@ public class ThemeBrowserTests
         var browser = OnCommunity(4);
         browser.Update(Up);
         browser.Update(Left);
+        Assert.Equal(ThemeBrowser.NoAiChip, browser.CommunityChip);
+        browser.Update(Left);
         Assert.Equal(ThemeBrowser.SearchChip, browser.CommunityChip);
         browser.Update(Left);
         Assert.Equal(0, browser.CommunityChip);
-        Assert.Equal(14, ThemeBrowser.CommunityChipCount);   // Search, All and the twelve categories
+        Assert.Equal(15, ThemeBrowser.CommunityChipCount);   // Search, No AI, All and the twelve categories
         Press(browser, Right, 5);
         Assert.Equal(5, browser.CommunityChip);
         Press(browser, Right, 40);
-        Assert.Equal(13, browser.CommunityChip);
+        Assert.Equal(14, browser.CommunityChip);
         Press(browser, Left, 3);
-        Assert.Equal(10, browser.CommunityChip);
+        Assert.Equal(11, browser.CommunityChip);
         Assert.Equal(0, browser.CommunitySelected);          // the cards did not move
         Assert.Equal(-1, browser.CommunityCategory);         // and nothing is chosen until X
+    }
+
+    [Fact]
+    public void X_on_no_ai_switches_it_and_keeps_the_category()
+    {
+        var browser = OnCommunity(4);
+        browser.SetCommunityHideAi(false);
+        browser.Update(Up);
+        browser.Update(Right);                               // All -> the first category
+        browser.Update(X);
+        Assert.Equal(0, browser.CommunityCategory);
+        browser.TakeAction();
+        Press(browser, Left, 2);
+        Assert.Equal(ThemeBrowser.NoAiChip, browser.CommunityChip);
+        browser.Update(X);
+        Assert.True(browser.CommunityHideAi);
+        Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
+        Assert.Equal(0, browser.CommunityCategory);          // the filters go together
+        browser.Update(X);
+        Assert.False(browser.CommunityHideAi);
+        Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());
     }
 
     [Fact]
@@ -267,7 +290,7 @@ public class ThemeBrowserTests
         var browser = OnCommunity(10);
         Press(browser, Right, 2);
         browser.Update(Up);
-        browser.Update(Left);                                // All -> Search
+        Press(browser, Left, 2);                             // All -> No AI -> Search
         Assert.Equal(ThemeBrowser.SearchChip, browser.CommunityChip);
         browser.Update(X);
         Assert.Equal(ThemeView.Search, browser.View);
@@ -294,7 +317,7 @@ public class ThemeBrowserTests
     {
         var browser = OnCommunity(4);
         browser.Update(Up);
-        browser.Update(Left);
+        Press(browser, Left, 2);
         browser.Update(X);
         browser.Update(X);
         browser.Update(O);
@@ -668,6 +691,14 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeAction.AskSoundVolume, browser.TakeAction());
 
         browser.Update(Down);
+        browser.Update(X);                                          // AI themes: switched here, saved by the app
+        Assert.Equal(ThemeAction.ToggleAiThemes, browser.TakeAction());
+        Assert.True(browser.CommunityHideAi);
+        browser.Update(X, busy: true);                              // only the store list changes, so even while busy
+        Assert.Equal(ThemeAction.ToggleAiThemes, browser.TakeAction());
+        Assert.False(browser.CommunityHideAi);
+
+        browser.Update(Down);
         browser.Update(X);                                          // Store address
         Assert.Equal(ThemeView.StoreAddress, browser.View);
         Assert.Equal("http://x", browser.StoreEditor.Text);         // the X only opened it: nothing typed yet
@@ -874,6 +905,7 @@ public class ThemeBrowserTests
         browser.Update(Down);
         browser.Update(X, busy: true);                              // Music volume
         Assert.Equal(ThemeAction.Busy, browser.TakeAction());
+        browser.Update(Down);                                       // AI themes only filters the store list
         browser.Update(Down);
         browser.Update(Down);
         browser.Update(X, busy: true);                              // Firmware report

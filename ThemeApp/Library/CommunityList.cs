@@ -41,6 +41,12 @@ public sealed record CommunityTheme(
     /// stays as it was and a <c>with</c> copy (a like or download count coming in) keeps it.
     /// </summary>
     public IReadOnlyList<string> Categories { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// The pictures count as AI-generated (the author, the store's check or a moderator says so); false from a store
+    /// that predates it.
+    /// </summary>
+    public bool Ai { get; init; }
 }
 
 /// <summary>One theme category: the id the store's API uses and the label the app shows.</summary>
@@ -109,12 +115,14 @@ public static class CommunityList
     /// <summary>
     /// The list request. <paramref name="category"/> is a category id (see <see cref="CommunityCategories"/>); without
     /// one the store lists every theme. The id is escaped, so only what the store would accept reaches it intact.
+    /// <paramref name="hideAi"/> leaves out themes with AI-generated pictures (<c>ai=hide</c>).
     /// </summary>
     public static string ListUrl(string baseUrl, CommunitySort sort, string? category = null, int page = 1, int pageSize = 24,
-        string? query = null) =>
+        string? query = null, bool hideAi = false) =>
         $"{baseUrl.TrimEnd('/')}/api/themes?sort={SortKey(sort)}&page={page}&pageSize={pageSize}"
         + (string.IsNullOrEmpty(category) ? "" : "&category=" + Uri.EscapeDataString(category))
-        + (string.IsNullOrEmpty(query) ? "" : "&q=" + Uri.EscapeDataString(query));
+        + (string.IsNullOrEmpty(query) ? "" : "&q=" + Uri.EscapeDataString(query))
+        + (hideAi ? "&ai=hide" : "");
 
     public static string LikeUrl(string baseUrl, string id) => $"{baseUrl.TrimEnd('/')}/api/themes/{Uri.EscapeDataString(id)}/like";
 
@@ -143,6 +151,7 @@ public static class CommunityList
                 ThumbUrl = Absolute(baseUrl, e.GetString("thumbUrl")),
                 Music = s.GetBool("music"),
                 Sounds = s.GetInt("sounds"),
+                Ai = e.GetBool("ai"),
             });
         }
         return list;

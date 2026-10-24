@@ -84,7 +84,7 @@ public sealed partial class ThemeRenderer
     private HintItem[] SystemHints(ThemeBrowser browser) => (SystemRow)browser.SystemSelected switch
     {
         SystemRow.SoundVolume or SystemRow.MusicVolume => SystemVolumeHints,
-        SystemRow.Backgrounds or SystemRow.EarlierThemes or SystemRow.Sounds or SystemRow.StoreAddress => SystemChangeHints,
+        SystemRow.Backgrounds or SystemRow.EarlierThemes or SystemRow.Sounds or SystemRow.AiThemes or SystemRow.StoreAddress => SystemChangeHints,
         _ => SystemChooseHints,
     };
 
@@ -166,7 +166,7 @@ public sealed partial class ThemeRenderer
 
     // ---- System -----------------------------------------------------------------------------------------------------
 
-    private static readonly string[] SystemLabels = ["App backgrounds", "Earlier themes", "Music and sounds", "Sound volume", "Music volume", "Store address", "Firmware report", "Restore defaults"];
+    private static readonly string[] SystemLabels = ["App backgrounds", "Earlier themes", "Music and sounds", "Sound volume", "Music volume", "AI themes", "Store address", "Firmware report", "Restore defaults"];
     private static readonly string[] SystemDescriptions =
     [
         "Which apps show a theme’s background image",
@@ -174,17 +174,18 @@ public sealed partial class ThemeRenderer
         "Whether themes may change the music and sounds",
         "How loud a theme’s system sounds play",
         "How loud a theme’s home music plays",
+        "Whether the Community tab lists themes with AI pictures",
         "Where the Community tab loads themes from",
         "Save or send a list of the console’s theme files",
         "Put every background, icon and sound back to the original",
     ];
 
-    // Eight rows of 52 leave the two-line info panel above the footer.
-    internal const int SysRowsTop = SysBodyTop, SysRowH = 52, SysRowGap = 8;
+    // Nine rows of 48 leave the two-line info panel above the footer.
+    internal const int SysRowsTop = SysBodyTop, SysRowH = 48, SysRowGap = 6;
     private const int SysRowPad = 32, SysLabelWidth = 288;
     // Equal rows, then the info panel below them.
     private const int SysInfoTop = SysRowsTop + ThemeBrowser.SystemRowCount * SysRowH + (ThemeBrowser.SystemRowCount - 1) * SysRowGap + 24, SysInfoPad = 28, SysInfoPitch = 40, SysInfoLabelWidth = 176;
-    private const int SysSegmentHeight = 44, SysSegmentInset = 4, SysSegmentPad = 20, SysUrlMaxWidth = 640;
+    private const int SysSegmentHeight = 40, SysSegmentInset = 4, SysSegmentPad = 20, SysUrlMaxWidth = 640;
     // A focused row is lighter than the glass of the others; its text steps up a little with it.
     internal static readonly Color SysRowFocusFill = Color.FromRgb(46, 62, 84);
     private static readonly Color SysFocusText = Color.FromRgb(196, 208, 226);
@@ -193,8 +194,9 @@ public sealed partial class ThemeRenderer
     // The two states of the App backgrounds and Earlier themes rows, as segmented controls. Measured once, with the
     // font they are drawn in.
     private const string SysSegmentOwn = "Without own image", SysSegmentAll = "All apps";
-    private const string SysSegmentKeep = "Combine", SysSegmentReplace = "Replace", SysSegmentOn = "On", SysSegmentOff = "Off";
-    private int _sysSegmentOwnWidth, _sysSegmentAllWidth, _sysSegmentKeepWidth, _sysSegmentReplaceWidth, _sysSegmentOnWidth, _sysSegmentOffWidth;
+    private const string SysSegmentKeep = "Combine", SysSegmentReplace = "Replace", SysSegmentOn = "On", SysSegmentOff = "Off",
+        SysSegmentShow = "Show", SysSegmentHide = "Hide";
+    private int _sysSegmentOwnWidth, _sysSegmentAllWidth, _sysSegmentKeepWidth, _sysSegmentReplaceWidth, _sysSegmentOnWidth, _sysSegmentOffWidth, _sysSegmentShowWidth;
     // The Sound volume row: one segment per volume, all as wide as the widest.
     private static readonly string[] SysVolumeLabels = Array.ConvertAll(AppSettings.SoundVolumes, v => v + "%");
     private int _sysVolumeWidth;
@@ -224,6 +226,7 @@ public sealed partial class ThemeRenderer
             _sysSegmentReplaceWidth = _small.MeasureText(SysSegmentReplace) + 2 * SysSegmentPad;
             // On and Off are as wide as each other, so the thumb does not change size.
             _sysSegmentOnWidth = _sysSegmentOffWidth = Math.Max(_small.MeasureText(SysSegmentOn), _small.MeasureText(SysSegmentOff)) + 2 * SysSegmentPad + 16;
+            _sysSegmentShowWidth = Math.Max(_small.MeasureText(SysSegmentShow), _small.MeasureText(SysSegmentHide)) + 2 * SysSegmentPad;
             foreach (string label in SysVolumeLabels) _sysVolumeWidth = Math.Max(_sysVolumeWidth, _small.MeasureText(label) + 2 * SysSegmentPad);
         }
 
@@ -264,6 +267,10 @@ public sealed partial class ThemeRenderer
                 case SystemRow.MusicVolume:
                     descriptionRight = DrawSysSteps(s, right, y, SysVolumeLabels, _sysVolumeWidth,
                         Array.IndexOf(AppSettings.SoundVolumes, MusicVolume)) - 24;
+                    break;
+                case SystemRow.AiThemes:
+                    descriptionRight = DrawSysSegments(s, right, y, SysSegmentShow, _sysSegmentShowWidth,
+                        SysSegmentHide, _sysSegmentShowWidth, browser.CommunityHideAi) - 24;
                     break;
                 case SystemRow.StoreAddress:
                     descriptionRight = DrawSysUrl(s, browser.StoreUrl, right, y, textY, focus) - 24;

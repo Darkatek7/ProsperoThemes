@@ -11,6 +11,8 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
   sort them by top rated, most downloaded or new, and like the ones you enjoy. Themes already in your library carry
   an "In library" badge; when a creator publishes a new version, the card says "Update". A theme you liked shows a
   heart, and Triangle on it removes the like. The Search chip finds themes by name, author or description.
+  Themes with AI-generated pictures carry an "AI" badge; the No AI chip hides them, and the System tab's "AI themes"
+  row keeps them hidden for good.
 - **USB import:** packs on a USB drive (its root or a `prospero-themes` folder) are checked and copied into the
   library.
 - **What a theme can change:** the home-screen background, including behind the system tiles (Game Library,
@@ -51,9 +53,9 @@ be replaced; the app says so when it finds the old helper.
 | Details | X applies the theme (it asks first). Square opens the preview. Circle goes back. |
 | Apply dialog | D-pad chooses, X confirms, Circle cancels. |
 | Preview | X shows or hides the home overlay. Square or Circle goes back. |
-| Community | X downloads (or updates). Triangle likes, or removes your like. Square changes the sort. Options refreshes the list. D-pad up from the first row reaches the chips: Left and Right move, X filters, Down goes back to the themes. X on Search opens a keyboard; Options searches, and X on the chip with a term shows every theme again. |
+| Community | X downloads (or updates). Triangle likes, or removes your like. Square changes the sort. Options refreshes the list. D-pad up from the first row reaches the chips: Left and Right move, X filters, Down goes back to the themes. X on Search opens a keyboard; Options searches, and X on the chip with a term shows every theme again. X on No AI hides or shows themes with AI pictures. |
 | USB Import | X imports from USB. |
-| System | D-pad picks a row, X acts on it. On Sound volume and Music volume, Left and Right change the volume. |
+| System | D-pad picks a row, X acts on it. On Sound volume and Music volume, Left and Right change the volume. On AI themes, X switches between Show and Hide. |
 
 Results and progress ("Applying theme…", "Download failed (404).") appear as a short message at the bottom of the
 screen.

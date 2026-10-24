@@ -68,6 +68,16 @@ public class LibraryOrderTests
     }
 
     [Fact]
+    public void Hiding_ai_themes_is_kept_in_the_settings_and_off_at_first()
+    {
+        Assert.False(AppSettings.Parse("{}", () => "abcdefgh12").HideAi);
+        AppSettings settings = AppSettings.Parse("{\"hide_ai\":\"on\",\"device_id\":\"abcdefgh12\"}", () => "x");
+        Assert.True(settings.HideAi);
+        Assert.True(AppSettings.Parse(settings.Serialize(), () => "x").HideAi);
+        Assert.False(AppSettings.Parse((settings with { HideAi = false }).Serialize(), () => "x").HideAi);
+    }
+
+    [Fact]
     public void Triangle_in_the_library_asks_for_the_other_order_and_select_moves_the_focus()
     {
         var browser = new ThemeBrowser();

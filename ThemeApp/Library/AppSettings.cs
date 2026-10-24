@@ -63,6 +63,9 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     /// <summary>The order of the library row after the applied theme; "library_sort": "newest" in settings.json.</summary>
     public LibrarySort LibrarySort { get; init; }
 
+    /// <summary>The Community tab leaves out themes with AI-generated pictures; "hide_ai": "on" in settings.json.</summary>
+    public bool HideAi { get; init; }
+
     /// <summary>
     /// The system software for which the user answered "Not now" when asked to apply the theme again after a system
     /// update ("reapply_skipped"), so the question does not come back until the next update. Null when never answered.
@@ -78,7 +81,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     /// <summary>Reads settings, tolerating a missing or broken file; a missing device id is created.</summary>
     public static AppSettings Parse(string? json, Func<string> newDeviceId)
     {
-        bool all = false, replace = false, sounds = true, newest = false;
+        bool all = false, replace = false, sounds = true, newest = false, hideAi = false;
         string url = DefaultStoreUrl, device = "", skipped = "", volume = "", music = "";
         // The SDK's parser, not System.Text.Json: JsonDocument seeds its hashing from the BCL's crypto
         // random source, which pulls OpenSSL imports the console cannot link (see ThemePack.Hash).
@@ -88,6 +91,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
             replace = root.GetString("earlier_themes") == "replace";
             sounds = root.GetString("sounds") != "off";
             newest = root.GetString("library_sort") == "newest";
+            hideAi = root.GetString("hide_ai") == "on";
             url = root.GetString("store_url", url).Trim();
             device = root.GetString("device_id");
             skipped = root.GetString("reapply_skipped");
@@ -97,7 +101,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
         if (!IsDeviceId(device)) device = newDeviceId();
         return new AppSettings(all, url, device)
         {
-            ReplaceEarlierThemes = replace, Sounds = sounds, LibrarySort = newest ? LibrarySort.Newest : LibrarySort.Name,
+            ReplaceEarlierThemes = replace, Sounds = sounds, LibrarySort = newest ? LibrarySort.Newest : LibrarySort.Name, HideAi = hideAi,
             ReapplySkipped = skipped.Length > 0 ? skipped : null,
             SoundVolume = VolumeOf(volume, DefaultSoundVolume), MusicVolume = VolumeOf(music, DefaultMusicVolume),
         };
@@ -112,6 +116,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
         o["sound_volume"] = SoundVolume.ToString(System.Globalization.CultureInfo.InvariantCulture);
         o["music_volume"] = MusicVolume.ToString(System.Globalization.CultureInfo.InvariantCulture);
         o["library_sort"] = LibrarySort == LibrarySort.Newest ? "newest" : "name";
+        o["hide_ai"] = HideAi ? "on" : "off";
         o["store_url"] = StoreUrl;
         o["device_id"] = DeviceId;
         if (ReapplySkipped is { Length: > 0 }) o["reapply_skipped"] = ReapplySkipped;

@@ -84,7 +84,7 @@ internal static class PreviewData
                 AllApps: summary.AllApps,
                 PerApp: summary.PerApp,
                 Icons: summary.Icons,
-                Tiles: summary.Tiles) { Categories = categories[i] });
+                Tiles: summary.Tiles) { Categories = categories[i], Ai = i == 1 });
         }
         return store;
     }

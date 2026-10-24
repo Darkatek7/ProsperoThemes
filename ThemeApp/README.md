@@ -115,6 +115,11 @@ launch evidence are recorded separately below.
   its picture. A press while the app is busy moves the chip but starts no load; the list is loaded as soon as the job
   ends (the same rule as the sort). The category ids and labels in `CommunityCategories` (`Library/CommunityList.cs`)
   must match `web/shared/src/categories.ts`.
+- **AI filter** (Community tab and System tab): the chip row starts with Search, No AI and All. X on No AI turns the
+  filter on or off; while it is on, the list loads with `&ai=hide`, so the store leaves out every theme it counts as
+  AI-generated (the author said so, the automatic check found it, or a moderator decided). The System tab's "AI
+  themes" row (Show / Hide) is the same switch; both write `hide_ai` (`on` / `off`, off at first) in
+  `/data/prospero-themes/settings.json`. A card of an AI theme carries an "AI" badge (next to the heart when liked).
 - **Likes** (Community tab): Triangle likes the selected theme. On a theme this console already liked, Triangle removes
   the like (the footer says "Unlike" there). A liked theme shows a heart on its card. The request is a POST to
   the store's `/api/themes/<id>/like` (a DELETE for an unlike), with the console's device ID in an `X-Device-Id`
