@@ -92,10 +92,17 @@ public static class FirmwareReport
     }
 
     /// <param name="after">Extra top-level fields written after the files (e.g. which side read them).</param>
+    /// <param name="looksThemed">
+    /// Filled with the files whose described copy looks like a theme's (<see cref="StockLook"/>), also written as
+    /// <c>looks_themed</c>: a console whose first backups were made from another tool's theme. Such a report is no
+    /// source for a catalog.
+    /// </param>
     public static byte[] Build(IDeviceFiles files, string? firmware, string appVersion, string whenUtc,
         IEnumerable<string> logicalPaths, string dataRoot = "/data/prospero-themes",
-        Func<IEnumerable<(string Key, string Value)>>? after = null)
+        Func<IEnumerable<(string Key, string Value)>>? after = null, List<string>? looksThemed = null)
     {
+        looksThemed ??= new List<string>();
+        var described = new Dictionary<string, string>(StringComparer.Ordinal);
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, NewLine = "\n" }))
         {
@@ -111,7 +118,8 @@ public static class FirmwareReport
                 w.WriteString("path", logical);
                 try
                 {
-                    Describe(w, files, logical, $"{dataRoot}/{ThemeApplier.BackupFolder}/{logical}");
+                    if (Describe(w, files, logical, $"{dataRoot}/{ThemeApplier.BackupFolder}/{logical}", looksThemed) is { } hash)
+                        described[logical] = hash;
                 }
                 catch (Exception ex)
                 {
@@ -119,6 +127,11 @@ public static class FirmwareReport
                 }
                 w.WriteEndObject();
             }
+            w.WriteEndArray();
+            HashSet<string> shared = StockLook.SharedTileHashes(described);
+            looksThemed.AddRange(described.Where(d => StockLook.IsTileBackground(d.Key) && shared.Contains(d.Value)).Select(d => d.Key));
+            w.WriteStartArray("looks_themed");
+            foreach (string logical in looksThemed) w.WriteStringValue(logical);
             w.WriteEndArray();
             if (after is not null)
                 foreach (var (key, value) in after())
@@ -128,12 +141,13 @@ public static class FirmwareReport
         return buffer.WrittenSpan.ToArray();
     }
 
-    private static void Describe(Utf8JsonWriter w, IDeviceFiles files, string logical, string backup)
+    /// <summary>Writes the facts of one file; returns the hash of the copy it described, null when there is none.</summary>
+    private static string? Describe(Utf8JsonWriter w, IDeviceFiles files, string logical, string backup, List<string> looksThemed)
     {
         if (!AssetRoots.TryResolve(logical, out string device, out string reason))
         {
             w.WriteString("error", reason);
-            return;
+            return null;
         }
         // A tile icon on a console without the live copy of its app (13.60, 10.01): the file the applier writes.
         string resolved = ThemeApplier.OnDevice(files, logical, device);
@@ -144,7 +158,7 @@ public static class FirmwareReport
         }
         bool exists = files.Exists(device);
         w.WriteBoolean("exists", exists);
-        if (!exists) return;
+        if (!exists) return null;
 
         // One copy of a file in memory at a time: before 13.00 the icon container is about 100 MB, and the live file
         // and its backup together did not fit (11.60 report). The live file is compared by its hash.
@@ -195,6 +209,13 @@ public static class FirmwareReport
                 w.WriteEndObject();
             }
             w.WriteEndArray();
+            List<string> untitled = StockLook.UntitledThemeIcons(stock);
+            if (untitled.Count > 0)
+            {
+                w.WriteNumber("theme_icons_untitled", untitled.Count);
+                looksThemed.Add(logical);
+            }
         }
+        return hash;
     }
 }

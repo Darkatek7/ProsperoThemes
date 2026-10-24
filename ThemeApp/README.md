@@ -56,12 +56,18 @@ launch evidence are recorded separately below.
   and of the icon container. A tile icon then comes back from the firmware's own copy in
   `/system_ex/rnps/apps` (on 13.00, 8 of the 9 icons are identical to it; Sony's servers updated NPXS40305).
   Any other such file has no original left on the console: Restore defaults leaves it and names it. A backup that
-  does not match the catalog is never written back. The System tab shows the firmware
+  does not match the catalog is never written back. On firmware without a catalog (12.40, for example) the look
+  decides (`Shared/StockLook.cs`): a stock icon container titles every theme icon (home, settings, power, ps_store and
+  the rest), and the system tiles' backgrounds all differ; reports from 9.60 to 13.60 agree. A backup that fails this
+  (made from another tool's theme, as on a 12.40 console whose 13 tile backgrounds were one picture) is never written
+  back nor recorded as an original, and a first apply keeps no backup of such a live file; both are named. The System tab shows the firmware
   (`SystemInfo.SystemSoftwareVersion`, "13.000.040" on the test console); `state.json` records it.
 - **Firmware report** (System tab, Firmware report row): writes `/data/prospero-themes/reports/firmware-<version>.json`
   (and a copy to `/mnt/usb0` when a drive is connected): for every file in the bundled
   `catalog/13.00.json`, the system tile backgrounds and tile icons and the icon container, whether it
-  exists, its size, hash and format, plus the RCO's icon list. Only reads. On the PC,
+  exists, its size, hash and format, plus the RCO's icon list. Copies that look like a theme's (see above) are listed
+  in `looks_themed`, and the app then asks for a report from a console that never had a theme; `catalog-from-report`
+  leaves those files out (for older reports it applies the same rules). Only reads. On the PC,
   `python ThemePackCreator/theme_pack.py catalog-from-report <report> catalog/<fw>.json` turns it into a
   catalog and lists what differs from 13.00. The 13.00 console's own report reproduces
   `catalog/13.00.json` exactly.

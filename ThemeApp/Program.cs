@@ -614,13 +614,14 @@ internal sealed class ThemeApp : ProsperoApp
         catch { }
         List<string> paths = FirmwareReport.Paths(FirmwareReport.CatalogPaths(catalog));
         var files = new ReportDeviceFiles(helperRunning: helperProblem is null);
+        var looksThemed = new List<string>();
         byte[] report = FirmwareReport.Build(files, _firmware, version,
             ThemeApplier.FormatUtc(HelperDeviceFiles.UnixSeconds()), paths, after: () =>
             [
                 ("helper", helperProblem ?? "running"),
                 ("app_reads", files.AppReads.ToString()),
                 ("helper_reads", files.HelperReads.ToString()),
-            ]);
+            ], looksThemed: looksThemed);
         string name = FirmwareReport.FileName(_firmware);
         AppData.Files.CreateDirectoryRecursive(FirmwareReport.Folder);
         AppData.Files.WriteAllBytes(FirmwareReport.Folder + "/" + name, report);
@@ -635,6 +636,9 @@ internal sealed class ThemeApp : ProsperoApp
         }
         catch { /* the copy in /data is enough */ }
         string helper = helperProblem is null ? "" : " The theme helper did not start; the report says why.";
+        // The backups were made from another tool's theme: such a report shows no originals.
+        if (looksThemed.Count > 0)
+            helper += $" {looksThemed.Count} file(s) here look like a theme's, not the originals: a report from a console that never had a theme helps more.";
         if (store is null)
             return new ApplyResult(true, $"Firmware report ({paths.Count} files) saved to {where}.{helper}", Array.Empty<string>());
         if (store.Length == 0)

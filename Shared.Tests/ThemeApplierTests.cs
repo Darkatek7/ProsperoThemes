@@ -808,6 +808,96 @@ public class ThemeApplierTests
         Assert.Equal(stock, fake.Files[Backup1]);
     }
 
+    // ---- backups that look like a theme's (no catalog) ------------------------
+
+    private const string Rco = "vsh_asset/Sce.PlayStation.PUI_UI3.rco";
+    private const string RcoDevice = "/system_ex/" + Rco;
+    private const string RcoBackup = "/data/prospero-themes/backup/original/" + Rco;
+    private const string TileA = "vsh_asset/bg_NPXS40037.dds.zst", TileB = "vsh_asset/bg_NPXS40047.dds.zst";
+
+    private static void Index(FakeDeviceFiles fake, params string[] logicals) =>
+        fake.Files["/data/prospero-themes/backup/index.txt"] = Encoding.UTF8.GetBytes(string.Join("\n", logicals) + "\n");
+
+    [Fact]
+    public void An_icon_container_backup_without_the_theme_icons_titles_is_never_put_back()
+    {
+        byte[] themed = StockLookTests.Container([]);
+        var fake = DeviceWithLive((RcoDevice, StockLookTests.Container(["utility/iconid_extra"])));
+        fake.Files[RcoBackup] = themed;
+        Index(fake, Rco);
+
+        ThemeApplier applier = Applier(fake);
+        ApplyResult result = applier.RestoreOriginals();
+
+        Assert.Equal(StockLookTests.Container(["utility/iconid_extra"]), fake.Files[RcoDevice]);
+        Assert.Equal(new[] { Rco }, applier.NoOriginal);
+        Assert.Contains("no original", result.Message);
+        Assert.False(fake.Files.ContainsKey("/data/prospero-themes/backup/originals.txt")
+            && Encoding.UTF8.GetString(fake.Files["/data/prospero-themes/backup/originals.txt"]).Contains(Sha(themed)));
+    }
+
+    [Fact]
+    public void A_stock_looking_icon_container_backup_is_put_back()
+    {
+        byte[] stock = StockLookTests.StockContainer();
+        var fake = DeviceWithLive((RcoDevice, StockLookTests.Container([])));
+        fake.Files[RcoBackup] = stock;
+        Index(fake, Rco);
+
+        ThemeApplier applier = Applier(fake);
+        Assert.True(applier.RestoreOriginals().Success);
+
+        Assert.Equal(stock, fake.Files[RcoDevice]);
+        Assert.Empty(applier.NoOriginal);
+    }
+
+    [Fact]
+    public void Tile_background_backups_with_one_picture_are_never_put_back()
+    {
+        byte[] theme = Frame(1000, "other-tool");
+        var fake = DeviceWithLive(("/system_ex/" + TileA, Frame(1000, "live-a")), ("/system_ex/" + TileB, Frame(1000, "live-b")));
+        fake.Files["/data/prospero-themes/backup/original/" + TileA] = theme;
+        fake.Files["/data/prospero-themes/backup/original/" + TileB] = theme;
+        Index(fake, TileA, TileB);
+
+        ThemeApplier applier = Applier(fake);
+        applier.RestoreOriginals();
+
+        Assert.Equal(Frame(1000, "live-a"), fake.Files["/system_ex/" + TileA]);
+        Assert.Equal(new[] { TileA, TileB }, applier.NoOriginal.OrderBy(p => p, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void A_first_apply_keeps_no_backup_of_tile_backgrounds_another_tool_gave_one_picture()
+    {
+        byte[] theme = Frame(1000, "other-tool");
+        var fake = DeviceWithLive(("/system_ex/" + TileA, theme), ("/system_ex/" + TileB, theme));
+
+        ThemeApplier applier = Applier(fake);
+        ApplyResult result = applier.Apply(MakePack(null, (TileA, Frame(1000, "ours"))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(Frame(1000, "ours"), fake.Files["/system_ex/" + TileA]);
+        Assert.False(fake.Files.ContainsKey("/data/prospero-themes/backup/original/" + TileA));
+        Assert.Equal(new[] { TileA }, applier.NoOriginal);
+    }
+
+    [Fact]
+    public void A_catalog_hash_wins_over_the_look()
+    {
+        byte[] themed = StockLookTests.Container([]);
+        var fake = DeviceWithLive((RcoDevice, StockLookTests.StockContainer()));
+        fake.Files[RcoBackup] = themed;
+        Index(fake, Rco);
+
+        // A catalog that (wrongly or not) lists this container as the stock one: it decides, not the titles.
+        var applier = new ThemeApplier(fake, () => FixedNow) { Stock = CatalogWith(Rco, themed) };
+        Assert.True(applier.RestoreOriginals().Success);
+
+        Assert.Equal(themed, fake.Files[RcoDevice]);
+        Assert.Empty(applier.NoOriginal);
+    }
+
     [Fact]
     public void A_tile_icon_without_a_backup_comes_back_from_the_shipped_app()
     {

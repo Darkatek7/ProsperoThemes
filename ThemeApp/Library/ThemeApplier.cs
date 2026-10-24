@@ -191,6 +191,9 @@ public sealed class ThemeApplier
 
     private Dictionary<string, string>? _written;
     private Dictionary<string, string>? _originals;
+    // The hashes two or more system tile backgrounds share (StockLook), among the backups and among the live files; found
+    // once per operation, the live ones before anything is written.
+    private HashSet<string>? _sharedBackupTiles, _sharedLiveTiles;
     // Where each named icon or sound of the current apply sits in its container, found in the stock copy by Prepare.
     // Rate is a sound's sample rate (0 for an icon).
     private readonly Dictionary<(string Device, string Layer, string Resource), (int Offset, int Length, int Rate)> _slots = new();
@@ -215,6 +218,7 @@ public sealed class ThemeApplier
                 return Fail(planError + ". Nothing was written.");
             Refreshed.Clear();
             NoOriginal.Clear();
+            _sharedBackupTiles = _sharedLiveTiles = null;
 
             // Before anything on the system side is written: every target is backed up and its payload is checked
             // against the console's own file, so a target that does not fit is skipped instead of failing halfway.
@@ -366,6 +370,7 @@ public sealed class ThemeApplier
                 return Fail(planError + ". Nothing was written.");
             Refreshed.Clear();
             NoOriginal.Clear();
+            _sharedBackupTiles = _sharedLiveTiles = null;
 
             // One plan per file: the icons of one container share it.
             plans = plans.GroupBy(p => p.Device, StringComparer.Ordinal).Select(g => g.First()).ToList();
@@ -455,6 +460,7 @@ public sealed class ThemeApplier
                     : "nothing of the chosen parts has a backup, so nothing was written.");
             Refreshed.Clear();
             NoOriginal.Clear();
+            _sharedBackupTiles = _sharedLiveTiles = null;
             // The pack the state names, read before the state is written again.
             StatePack? kept = all ? null : ReadStatePack();
             List<LookLayer>? look = ReadLook();
@@ -756,6 +762,12 @@ public sealed class ThemeApplier
                 return _files.ReadAllBytes(plan.Device);
             }
             byte[] first = _files.ReadAllBytes(source);
+            if (source == plan.Device && LooksThemed(plan.Logical, liveHash, () => first, live: true))
+            {
+                // Another tool's theme, not the original: the app keeps no backup a restore would take for one.
+                if (!NoOriginal.Contains(plan.Logical)) NoOriginal.Add(plan.Logical);
+                return first;
+            }
             WriteBackup(plan.Logical, plan.Backup, first);
             AddToIndex(plan.Logical);
             return first;
@@ -764,7 +776,10 @@ public sealed class ThemeApplier
         byte[]? stock = _files.ReadAllBytes(plan.Backup);
         string stockHash = ThemePack.Hash(stock);
         bool listed = Stock.TryStock(plan.Logical, out string catalog);
-        if (!listed || stockHash == catalog) RecordOriginal(plan.Logical, stockHash);   // a backup made before the record
+        if (listed ? stockHash == catalog : !LooksThemed(plan.Logical, stockHash, () => stock, live: false))
+            RecordOriginal(plan.Logical, stockHash);   // a backup made before the record
+        else if (!listed && !NoOriginal.Contains(plan.Logical))
+            NoOriginal.Add(plan.Logical);   // a backup made from a theme's file: a restore will not put it back
         // A backup that is not this firmware's original while the live file is: the live file becomes the backup.
         bool wrongBackup = listed && stockHash != catalog && liveHash == catalog;
         if (!wrongBackup && (liveHash == stockHash || !IsReplaced(plan.Device, liveHash)))
@@ -877,6 +892,14 @@ public sealed class ThemeApplier
     {
         if (!_files.Exists(device)) return false;
         string liveHash = _files.Hash(device), originalHash = _files.Hash(backup);
+        byte[]? original = null;
+        if (LooksThemed(logical, originalHash, () => original ??= _files.ReadAllBytes(backup), live: false))
+        {
+            // No catalog knows the file, and the backup looks like a theme's (made from another tool's file): it is never
+            // put back, nor recorded as the original.
+            if (!NoOriginal.Contains(logical)) NoOriginal.Add(logical);
+            return false;
+        }
         if (Stock.TryStock(logical, out string stock) && originalHash != stock)
         {
             // Not this firmware's original (a backup made from a theme's file): it is never put back. When the live file
@@ -896,8 +919,37 @@ public sealed class ThemeApplier
             Refresh(logical, backup, _files.ReadAllBytes(device));
             return false;
         }
-        WriteVerified(device, _files.ReadAllBytes(backup), originalHash);
+        WriteVerified(device, original ?? _files.ReadAllBytes(backup), originalHash);
         return true;
+    }
+
+    /// <summary>
+    /// Whether a file no catalog knows looks like a theme's rather than the console's original (<see cref="StockLook"/>):
+    /// an icon container without the titles of the theme icons, or a system tile background another tile has too. With
+    /// <paramref name="live"/> the tiles are compared with the live files, else with the backups. Only an icon container
+    /// is read (<paramref name="read"/>). A file with a catalog hash is left to the catalog.
+    /// </summary>
+    private bool LooksThemed(string logical, string sha256, Func<byte[]> read, bool live)
+    {
+        if (Stock.TryStock(logical, out _)) return false;
+        if (logical.EndsWith(".rco", StringComparison.Ordinal)) return StockLook.UntitledThemeIcons(read()).Count > 0;
+        if (!StockLook.IsTileBackground(logical)) return false;
+        HashSet<string> shared = live ? _sharedLiveTiles ??= SharedTiles(live: true) : _sharedBackupTiles ??= SharedTiles(live: false);
+        return shared.Contains(sha256);
+    }
+
+    /// <summary>The hashes two or more system tile backgrounds share, among the live files or among their backups.</summary>
+    private HashSet<string> SharedTiles(bool live)
+    {
+        var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string compressed in AssetRoots.SystemTileBackgrounds)
+            foreach (string logical in new[] { compressed, AssetRoots.Uncompressed(compressed)! })
+            {
+                string path = !live ? $"{_dataRoot}/{BackupFolder}/{logical}"
+                    : AssetRoots.TryResolve(logical, out string device, out _) ? device : "";
+                if (path.Length > 0 && _files.Exists(path)) hashes[logical] = _files.Hash(path);
+            }
+        return StockLook.SharedTileHashes(hashes);
     }
 
     // Logical is the <root>/<relative> path the backup and the index use; it differs from Target.Path for the

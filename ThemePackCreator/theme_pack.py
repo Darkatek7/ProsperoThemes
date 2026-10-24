@@ -761,6 +761,38 @@ def cmd_catalog(args: argparse.Namespace) -> int:
 # DXGI numbers the 13.00 catalog names (the report records the number, the catalog the name).
 DXGI_NAMES = {71: "BC1_UNORM", 98: "BC7_UNORM"}
 
+# Mirrors Shared/StockLook.cs: a stock icon container titles every one of these icons, and the system tiles' backgrounds
+# all differ (reports from 9.60 to 13.60). A replacement icon has no title, and a theme gives many tiles one picture.
+THEME_ICONS = (
+    "iconid_settings", "iconid_notification", "iconid_home", "iconid_power", "iconid_ps_store", "iconid_ps_user",
+    "iconid_app_library_game", "iconid_app_library_media", "iconid_music", "iconid_switcher", "iconid_game_base",
+    "iconid_download", "iconid_sound", "iconid_mic", "iconid_ps5_wireless_controller",
+)
+TILE_BACKGROUND = re.compile(r"^vsh_asset/bg_NPXS\d{5}\.dds(\.zst)?$")
+
+
+def report_looks_themed(report: dict) -> set:
+    """Paths whose described copy in a firmware report looks like a theme's, not the console's original.
+
+    The app names them in "looks_themed" (01.000.026 on); for older reports the same rules are applied here.
+    """
+    themed = set(report.get("looks_themed", []))
+    by_hash = {}
+    for f in report["files"]:
+        if not f.get("exists") or "sha256" not in f:
+            continue
+        if TILE_BACKGROUND.match(f["path"]):
+            by_hash.setdefault(f["sha256"], []).append(f["path"])
+        icons = f.get("icons")
+        if f["path"].endswith(".rco") and icons and len(icons) >= 100:
+            titled = {x["title"].rsplit("/", 1)[-1] for x in icons if x.get("title")}
+            if any(name not in titled for name in THEME_ICONS):
+                themed.add(f["path"])
+    for paths in by_hash.values():
+        if len(paths) > 1:
+            themed.update(paths)
+    return themed
+
 
 def cmd_catalog_from_report(args: argparse.Namespace) -> int:
     """A catalog for another firmware from the app's firmware report (System tab, Options).
@@ -776,11 +808,15 @@ def cmd_catalog_from_report(args: argparse.Namespace) -> int:
     parts = raw.split(".")
     firmware = args.firmware or (f"{int(parts[0])}.{parts[1][:2]}" if len(parts) == 3 and len(parts[1]) == 3 else raw)
 
+    # A console whose backups were made from another tool's theme reports that theme: those files are left out.
+    themed = report_looks_themed(report)
     assets, same, changed, added, missing, errors = [], [], [], [], [], []
     for f in report["files"]:
         path = f["path"]
         if "error" in f:
             errors.append(f"{path}: {f['error']}")
+            continue
+        if path in themed:
             continue
         if not f.get("exists"):
             if path in by_path:
@@ -820,7 +856,7 @@ def cmd_catalog_from_report(args: argparse.Namespace) -> int:
     # A container the app could not read has an "error" and no facts (13.60 report: its backup was unreadable). One
     # whose backup could not be read ("backup_error") describes the live file, which may be themed (11.60 report).
     icons = next((f for f in report["files"] if f["path"].endswith("PUI_UI3.rco") and f.get("exists")
-                  and "error" not in f and "backup_error" not in f), None)
+                  and "error" not in f and "backup_error" not in f and f["path"] not in themed), None)
     if icons:
         catalog["icon_container"] = {
             "path": icons["path"], "stock_bytes": icons["bytes"], "stock_sha256": icons["sha256"],
@@ -835,7 +871,8 @@ def cmd_catalog_from_report(args: argparse.Namespace) -> int:
     out.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
     print(f"catalog {firmware}: {len(assets)} assets -> {out}")
     print(f"  same as {base['firmware']}: {len(same)}, changed: {len(changed)}, new: {len(added)}, missing: {len(missing)}")
-    for label, paths in (("changed", changed), ("new", added), ("missing", missing), ("error", errors)):
+    for label, paths in (("changed", changed), ("new", added), ("missing", missing), ("error", errors),
+                         ("looks themed, left out", sorted(themed))):
         for p in paths:
             print(f"  {label}: {p}")
     if icons:

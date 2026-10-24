@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -76,6 +77,28 @@ public class FirmwareReportTests
         // fit in memory (11.60 report).
         Assert.DoesNotContain(Hub, files.Reads);
         Assert.Contains(Hub, files.Hashes);
+    }
+
+    [Fact]
+    public void Copies_that_look_like_a_themes_are_named()
+    {
+        // 12.40 report: the backups had been made from another tool's theme.
+        const string Backups = "/data/prospero-themes/backup/original/";
+        string[] tiles = AssetRoots.SystemTileBackgrounds.Take(3).ToArray();
+        var files = new RcoSvgTests.MemoryDeviceFiles();
+        files.Files[Rco] = StockLookTests.Container([]);
+        files.Files["/system_ex/" + tiles[0]] = Frame(8_294_548, "other-tool");
+        files.Files["/system_ex/" + tiles[1]] = Frame(8_294_548, "other-tool");
+        files.Files[Backups + tiles[1]] = Frame(8_294_548, "other-tool");
+        files.Files["/system_ex/" + tiles[2]] = Frame(8_294_548, "stock");
+        var looksThemed = new List<string>();
+
+        using JsonDocument report = JsonDocument.Parse(FirmwareReport.Build(files, "12.400.009", "01.000.026",
+            "2026-10-25T18:00:00Z", [FirmwareReport.IconContainer, .. tiles], looksThemed: looksThemed));
+
+        Assert.Equal(StockLook.ThemeIcons.Count, File(report, FirmwareReport.IconContainer).GetProperty("theme_icons_untitled").GetInt32());
+        Assert.Equal([FirmwareReport.IconContainer, tiles[0], tiles[1]], looksThemed);
+        Assert.Equal(looksThemed, report.RootElement.GetProperty("looks_themed").EnumerateArray().Select(e => e.GetString()!));
     }
 
     [Fact]
