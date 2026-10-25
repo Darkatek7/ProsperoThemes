@@ -841,6 +841,219 @@ public class ThemeApplierTests
         Assert.Equal(Live("one"), fake.Files[Dev1]);
     }
 
+    // ---- in place when there is no room for a .tmp (issue #13, helper v11) ----------
+
+    private const int PieceBytes = 64;
+
+    /// <summary>
+    /// A console file and a payload of one size that differ in pieces 0, 5, 6 and 12 only (of <see cref="PieceBytes"/>): the
+    /// first four bytes are the Zstandard magic every payload needs.
+    /// </summary>
+    private static (byte[] Live, byte[] Payload) SameSizePair()
+    {
+        var live = new byte[1000];
+        Array.Fill(live, (byte)'L');
+        byte[] payload = (byte[])live.Clone();
+        new byte[] { 0x28, 0xB5, 0x2F, 0xFD }.CopyTo(payload, 0);
+        payload[330] = (byte)'P';
+        payload[400] = (byte)'P';
+        payload[800] = (byte)'P';
+        return (live, payload);
+    }
+
+    private static ThemeApplier PatchingApplier(FakeDeviceFiles fake) =>
+        new(fake, () => FixedNow) { PatchChunkBytes = PieceBytes };
+
+    private static bool OnSystemSide(string path) => path.StartsWith("/system_ex/", StringComparison.Ordinal);
+
+    [Fact]
+    public void RestoreOriginals_with_no_room_for_a_temporary_file_patches_the_file_in_place()
+    {
+        var (live, payload) = SameSizePair();
+        var fake = DeviceWithLive((Dev1, (byte[])live.Clone()));   // the fake patches its own copy
+        fake.CanPatch = true;
+        ThemeApplier applier = PatchingApplier(fake);
+        Assert.True(applier.Apply(MakePack(null, (Path1, payload))).Success);
+        Assert.Empty(fake.Patches);   // room enough then: the normal path
+        Assert.Equal(payload, fake.Files[Dev1]);
+        fake.Free = 1000;   // less than the margin alone
+        fake.Writes.Clear();
+
+        ApplyResult result = applier.RestoreOriginals();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(live, fake.Files[Dev1]);
+        Assert.Equal(live, fake.Files[Backup1]);
+        Assert.DoesNotContain(fake.Writes, OnSystemSide);   // no .tmp, no whole-file write
+        Assert.Empty(Temporaries(fake));
+        Assert.NotEmpty(fake.Patches);
+    }
+
+    [Fact]
+    public void An_in_place_write_sends_only_the_pieces_that_differ_and_neighbours_together()
+    {
+        var (live, payload) = SameSizePair();
+        var fake = DeviceWithLive((Dev1, (byte[])live.Clone()));   // the fake patches its own copy
+        fake.CanPatch = true;
+        fake.Free = 1000;
+
+        ApplyResult result = PatchingApplier(fake).Apply(MakePack(null, (Path1, payload)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(payload, fake.Files[Dev1]);
+        Assert.Equal(live, fake.Files[Backup1]);
+        Assert.Equal(new[] { (Dev1, 0L, 64), (Dev1, 320L, 128), (Dev1, 768L, 64) }, fake.Patches);
+        Assert.DoesNotContain(fake.Writes, OnSystemSide);
+        Assert.Empty(Temporaries(fake));
+    }
+
+    [Fact]
+    public void An_in_place_patch_is_cut_at_the_most_one_patch_carries()
+    {
+        var (live, payload) = SameSizePair();
+        var fake = DeviceWithLive((Dev1, (byte[])live.Clone()));   // the fake patches its own copy
+        fake.CanPatch = true;
+        fake.Free = 1000;
+
+        var applier = new ThemeApplier(fake, () => FixedNow) { PatchChunkBytes = PieceBytes, PatchRunBytes = PieceBytes };
+        Assert.True(applier.Apply(MakePack(null, (Path1, payload))).Success);
+
+        Assert.Equal(new[] { (Dev1, 0L, 64), (Dev1, 320L, 64), (Dev1, 384L, 64), (Dev1, 768L, 64) }, fake.Patches);
+        Assert.Equal(payload, fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void A_file_that_already_holds_the_data_is_not_patched_at_all()
+    {
+        var (live, payload) = SameSizePair();
+        var fake = DeviceWithLive((Dev1, (byte[])live.Clone()));   // the fake patches its own copy
+        fake.CanPatch = true;
+        ThemeApplier applier = PatchingApplier(fake);
+        Assert.True(applier.Apply(MakePack(null, (Path1, payload))).Success);
+        fake.Free = 1000;
+
+        Assert.True(applier.Apply(MakePack(null, (Path1, payload))).Success);
+
+        Assert.Empty(fake.Patches);
+        Assert.Equal(payload, fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void With_no_room_and_a_file_of_another_size_the_message_is_not_enough_space()
+    {
+        byte[] live = Live("one");   // 8 bytes; the theme's file is longer
+        var fake = DeviceWithLive((Dev1, (byte[])live.Clone()));   // the fake patches its own copy
+        fake.CanPatch = true;
+        ThemeApplier applier = PatchingApplier(fake);
+        Assert.True(applier.Apply(SingleTargetPack()).Success);
+        fake.Free = 1000;
+
+        ApplyResult result = applier.RestoreOriginals();
+
+        Assert.False(result.Success);
+        Assert.Contains("not enough space for " + Dev1, result.Message);
+        Assert.Empty(fake.Patches);
+        Assert.Empty(Temporaries(fake));
+        Assert.Equal(Zst("one"), fake.Files[Dev1]);
+
+        ApplyResult apply = applier.Apply(MakePack(null, (Path1, Zst("three"))));
+        Assert.False(apply.Success);
+        Assert.Contains("not enough space for " + Dev1, apply.Message);
+        Assert.Empty(fake.Patches);
+    }
+
+    [Fact]
+    public void With_no_room_and_a_device_that_cannot_patch_the_message_is_not_enough_space()
+    {
+        var (live, payload) = SameSizePair();
+        var fake = DeviceWithLive((Dev1, (byte[])live.Clone()));   // the fake patches its own copy
+        fake.Free = 1000;
+        Assert.False(fake.CanPatch);
+
+        ApplyResult result = PatchingApplier(fake).Apply(MakePack(null, (Path1, payload)));
+
+        Assert.False(result.Success);
+        Assert.Contains("not enough space for " + Dev1, result.Message);
+        Assert.Empty(fake.Patches);
+        Assert.Equal(live, fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void With_room_the_normal_path_is_used_even_on_a_device_that_can_patch()
+    {
+        var (live, payload) = SameSizePair();
+        var fake = DeviceWithLive((Dev1, (byte[])live.Clone()));   // the fake patches its own copy
+        fake.CanPatch = true;
+        fake.Free = 10 * 1024 * 1024;
+        ThemeApplier applier = PatchingApplier(fake);
+
+        Assert.True(applier.Apply(MakePack(null, (Path1, payload))).Success);
+        Assert.Contains(Dev1 + ".tmp", fake.Writes);
+        Assert.True(applier.RestoreOriginals().Success);
+
+        Assert.Empty(fake.Patches);
+        Assert.Equal(live, fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void A_patch_that_fails_half_way_is_finished_by_running_the_restore_again()
+    {
+        var (live, payload) = SameSizePair();
+        var fake = DeviceWithLive((Dev1, (byte[])live.Clone()));   // the fake patches its own copy
+        fake.CanPatch = true;
+        ThemeApplier applier = PatchingApplier(fake);
+        Assert.True(applier.Apply(MakePack(null, (Path1, payload))).Success);
+        fake.Free = 1000;
+        fake.FailPatchNumber = 2;   // the first range is back, the second is not
+
+        ApplyResult result = applier.RestoreOriginals();
+
+        Assert.False(result.Success);
+        Assert.Contains("patch", result.Message);
+        Assert.NotEqual(live, fake.Files[Dev1]);
+        Assert.NotEqual(payload, fake.Files[Dev1]);   // old and new ranges mixed
+        Assert.Equal(live, fake.Files[Backup1]);
+
+        ApplyResult again = PatchingApplier(fake).RestoreOriginals();
+
+        Assert.True(again.Success, again.Message);
+        Assert.Equal(live, fake.Files[Dev1]);
+        // The mix was not taken for a file the system replaced, so it never became the backup.
+        Assert.Equal(live, fake.Files[Backup1]);
+        Assert.DoesNotContain(fake.Files.Keys, k => k.Contains("/backup/replaced/", StringComparison.Ordinal));
+        Assert.Empty(Temporaries(fake));
+    }
+
+    [Fact]
+    public void A_patch_that_fails_during_an_apply_is_rolled_back_in_place()
+    {
+        var (live, payload) = SameSizePair();
+        var fake = DeviceWithLive((Dev1, (byte[])live.Clone()));   // the fake patches its own copy
+        fake.CanPatch = true;
+        fake.Free = 1000;
+        fake.FailPatchNumber = 2;
+
+        ApplyResult result = PatchingApplier(fake).Apply(MakePack(null, (Path1, payload)));
+
+        Assert.False(result.Success);
+        Assert.Contains("Rolled back 1 target(s)", result.Message);
+        Assert.Equal(live, fake.Files[Dev1]);
+        Assert.DoesNotContain(fake.Writes, OnSystemSide);
+        Assert.Empty(Temporaries(fake));
+    }
+
+    [Fact]
+    public void A_patch_never_goes_past_the_end_of_the_file()
+    {
+        var fake = DeviceWithLive((Dev1, new byte[100]));
+        fake.CanPatch = true;
+
+        Assert.Throws<InvalidOperationException>(() => ((IDeviceFiles)fake).PatchFile(Dev1, 90, new byte[11]));
+        ((IDeviceFiles)fake).PatchFile(Dev1, 90, new byte[10]);
+
+        Assert.Equal(100, fake.Files[Dev1].Length);
+    }
+
     // ---- music volume -------------------------------------------------------
 
     [Fact]
@@ -1259,6 +1472,33 @@ public class ThemeApplierTests
         public List<string> Deleted { get; } = new();
 
         public long FreeBytes(string path) => Free;
+
+        /// <summary>Whether the device patches files in place (ThemeHelper v11); off by default, as for a device that cannot.</summary>
+        public bool CanPatch { get; set; }
+
+        /// <summary>Every in-place patch as (path, offset, length), in order.</summary>
+        public List<(string Path, long Offset, int Length)> Patches { get; } = new();
+
+        /// <summary>The nth patch (from 1) throws before it writes anything, once, as a helper that stops half-way would.</summary>
+        public int FailPatchNumber { get; set; }
+
+        private int _patchCalls;
+
+        void IDeviceFiles.PatchFile(string path, long offset, ReadOnlySpan<byte> data)
+        {
+            if (!Files.TryGetValue(path, out byte[]? bytes) || offset < 0 || offset + data.Length > bytes.Length)
+                throw new InvalidOperationException($"patch {path} at {offset} failed: PATCH rc=-22");
+            if (FailPatchNumber > 0 && ++_patchCalls == FailPatchNumber)
+            {
+                FailPatchNumber = 0;
+                _patchCalls = 0;
+                throw new InvalidOperationException($"patch {path} at {offset} failed: connection lost");
+            }
+            data.CopyTo(bytes.AsSpan((int)offset));
+            Patches.Add((path, offset, data.Length));
+        }
+
+        bool IDeviceFiles.CanPatch => CanPatch;
 
         public void WriteAllBytes(string path, byte[] data)
         {

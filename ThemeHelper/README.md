@@ -39,6 +39,12 @@ research payload (not part of the public repository), with the same low-level id
   - `FREE <path>` (v10; any confined path) returns `OK free=<KiB>`, the space left for an unprivileged writer on the
     filesystem of the path's folder (`statfs`), or `FREE rc=<n>`. The app checks it before each write (issue #13).
   - `READ <path>` returns `OK <size>` then the raw bytes, streamed in 32 KiB chunks.
+  - `PATCH <path> <offset> <len>` (v11) followed by `<len>` raw bytes (at most 32 MiB) overwrites that range of a file that
+    already exists in a theme root, with no free space needed (issue #13: a restore on a filesystem with no room for the
+    `.tmp`). Not for `.tmp` paths or the app's folder. The file is opened without create and truncate and is never made
+    longer: a range past its end is refused. Streamed in 32 KiB chunks; the seek is the raw `lseek` syscall, so nothing new
+    is imported. Replies `PATCH rc=0`, or `PATCH rc=<error>` (`-22` for a range past the end) after the body is read and
+    dropped; a refused header (`ERR badpath`) or an incomplete body closes the connection.
   - `WRITE <path>.tmp <len>` followed by `<len>` raw bytes (at most 160 MiB: the icon container is about
     100 MB before firmware 13.00). In a theme root only `.tmp` paths are accepted. Streamed in 32 KiB chunks. Replies
     `WRITE wrote=<n>`, or `WRITE rc=<error>` when the file cannot be opened. A refused header (`ERR badpath`)

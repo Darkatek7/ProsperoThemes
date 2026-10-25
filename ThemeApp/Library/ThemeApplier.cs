@@ -52,6 +52,18 @@ public interface IDeviceFiles
     /// unknown: then nothing is checked.
     /// </summary>
     long FreeBytes(string path) => -1;
+
+    /// <summary>
+    /// Whether <see cref="PatchFile"/> works. The helper does it from v11; by default not, then a file is only ever
+    /// replaced through a new ".tmp".
+    /// </summary>
+    bool CanPatch => false;
+
+    /// <summary>
+    /// Overwrites <paramref name="data"/> at <paramref name="offset"/> of an existing file, which keeps its size. Needs no
+    /// free space, unlike <see cref="WriteFile"/> plus <see cref="Move"/> (issue #13).
+    /// </summary>
+    void PatchFile(string path, long offset, ReadOnlySpan<byte> data) => throw new NotSupportedException("this device cannot patch files in place");
 }
 
 /// <summary>
@@ -200,6 +212,15 @@ public sealed class ThemeApplier
     /// as <see cref="StepMusic"/>. Music the codec cannot read is written as it is, with a note.
     /// </summary>
     public double MusicVolume { get; init; } = 1.0;
+
+    /// <summary>
+    /// The piece a file is compared in when it is written in place (<see cref="WriteInPlace"/>): only pieces that differ are
+    /// sent, and neighbouring ones together up to <see cref="PatchRunBytes"/> in one patch.
+    /// </summary>
+    public int PatchChunkBytes { get; init; } = 1024 * 1024;
+
+    /// <summary>The most one in-place patch carries (ThemeHelper accepts 32 MiB).</summary>
+    public int PatchRunBytes { get; init; } = 8 * 1024 * 1024;
 
     /// <summary>
     /// Logical paths of files this run found changed with no original on the console: the backup is gone and the
@@ -416,7 +437,8 @@ public sealed class ThemeApplier
                 : pack.Payload(plan.Target).Length;
             string folder = ParentOf(plan.Device);
             if (!freeIn.TryGetValue(folder, out long free)) freeIn[folder] = free = _files.FreeBytes(plan.Device);
-            if (free >= 0 && free < bytes + SpaceMargin)
+            // No room for a new file is no problem for a file of the same size on a device that can patch (WriteInPlace).
+            if (free >= 0 && free < bytes + SpaceMargin && !CanWriteInPlace(plan.Device, bytes))
                 return NoRoom(plan.Device, bytes, free);
         }
         return null;
@@ -1316,7 +1338,9 @@ public sealed class ThemeApplier
     /// <summary>
     /// Writes to <c>{device}.tmp</c>, renames over the device path, then reads back (as a streamed hash) and
     /// compares. The hash is recorded in <see cref="WrittenRecord"/>. <paramref name="renamed"/> runs once the
-    /// device file is replaced: a write that fails before that has left the device file as it was.
+    /// device file is replaced: a write that fails before that has left the device file as it was. Where the
+    /// filesystem has no room for the new file next to the old one, a file of the same size is written in place instead
+    /// (<see cref="WriteInPlace"/>); then <paramref name="renamed"/> runs before the first byte is overwritten.
     /// </summary>
     private void WriteVerified(string device, ReadOnlySpan<byte> data, string expectedSha256, Action? renamed = null)
     {
@@ -1324,18 +1348,26 @@ public sealed class ThemeApplier
         // A leftover of a write that failed before (issue #13: half an icon container filled /system_ex), then the room
         // for the whole new file next to the old one: the rename frees the old one only once the new one is complete.
         RemoveTemporary(tmp);
-        EnsureRoom(device, data.Length);
-        try
+        if (!HasRoom(device, data.Length, out long free))
         {
-            _files.WriteFile(tmp, data);
-            _files.Move(tmp, device);
+            if (!CanWriteInPlace(device, data.Length))
+                throw new IOException(NoRoom(device, data.Length, free));
+            WriteInPlace(device, data, renamed);
         }
-        catch
+        else
         {
-            RemoveTemporary(tmp);
-            throw;
+            try
+            {
+                _files.WriteFile(tmp, data);
+                _files.Move(tmp, device);
+            }
+            catch
+            {
+                RemoveTemporary(tmp);
+                throw;
+            }
+            renamed?.Invoke();
         }
-        renamed?.Invoke();
 
         string actual = _files.Hash(device);
         if (!string.Equals(actual, expectedSha256, StringComparison.Ordinal))
@@ -1346,12 +1378,62 @@ public sealed class ThemeApplier
     /// <summary>Room a write keeps free on top of the file itself.</summary>
     public const long SpaceMargin = 1024 * 1024;
 
-    /// <summary>Throws when the filesystem of <paramref name="device"/> has no room for a new file of <paramref name="bytes"/>.</summary>
-    private void EnsureRoom(string device, long bytes)
+    /// <summary>
+    /// Whether the filesystem of <paramref name="device"/> has room for a new file of <paramref name="bytes"/> next to the
+    /// old one; unknown room (-1) counts as room. <paramref name="free"/> is what <see cref="IDeviceFiles.FreeBytes"/> said.
+    /// </summary>
+    private bool HasRoom(string device, long bytes, out long free)
     {
-        long free = _files.FreeBytes(device);
-        if (free >= 0 && free < bytes + SpaceMargin)
-            throw new IOException(NoRoom(device, bytes, free));
+        free = _files.FreeBytes(device);
+        return free < 0 || free >= bytes + SpaceMargin;
+    }
+
+    /// <summary>Whether <paramref name="device"/> can be overwritten where it is: it exists with exactly <paramref name="bytes"/> bytes.</summary>
+    private bool CanWriteInPlace(string device, long bytes) =>
+        _files.CanPatch && bytes > 0 && _files.Length(device) == bytes;
+
+    /// <summary>
+    /// Makes <paramref name="device"/> hold <paramref name="data"/> without a new file, for a filesystem with no room for
+    /// the ".tmp" (issue #13: 49 MB free on /system_ex, a 106 MB icon container). Themed and stock containers have the same
+    /// size and differ only in some ranges, so the live file is compared with the data piece by piece
+    /// (<see cref="PatchChunkBytes"/>) and only the pieces that differ are overwritten, neighbours together. The live file is
+    /// read whole as <see cref="FileBytes"/> (outside the managed heap, like every large file) and let go before the
+    /// caller verifies. Unlike a rename this changes the file the system may have open, so it is the fallback only and is
+    /// done in one quick pass.
+    /// <para>
+    /// A pass that stops half-way leaves old and new ranges mixed. The record of what the app wrote there is dropped first,
+    /// so the mix is not taken for a file the system replaced (which would make it the backup); running the same restore or
+    /// apply again compares the mix with the data and finishes it.
+    /// </para>
+    /// </summary>
+    private void WriteInPlace(string device, ReadOnlySpan<byte> data, Action? renamed)
+    {
+        using FileBytes live = _files.ReadFile(device);
+        if (live.Length != data.Length)
+            throw new IOException($"{device} changed size while it was being written ({live.Length} bytes, expected {data.Length})");
+        ForgetWritten(device);
+        renamed?.Invoke();
+
+        ReadOnlySpan<byte> have = live.Span;
+        int chunk = Math.Max(1, PatchChunkBytes), run = Math.Max(chunk, PatchRunBytes);
+        for (int start = 0; start < data.Length;)
+        {
+            int end = Math.Min(start + chunk, data.Length);
+            if (have[start..end].SequenceEqual(data[start..end]))
+            {
+                start = end;
+                continue;
+            }
+            // Neighbouring pieces that differ go in one patch, up to the most one patch carries.
+            while (end < data.Length && end - start < run)
+            {
+                int next = Math.Min(end + chunk, data.Length);
+                if (have[end..next].SequenceEqual(data[end..next])) break;
+                end = next;
+            }
+            _files.PatchFile(device, start, data[start..end]);
+            start = end;
+        }
     }
 
     private static string NoRoom(string device, long bytes, long free) =>
@@ -1398,6 +1480,20 @@ public sealed class ThemeApplier
     {
         if (record.TryGetValue(key, out string? known) && known == sha256) return;
         record[key] = sha256;
+        SaveRecord(name, record);
+    }
+
+    /// <summary>
+    /// Drops what the app last wrote to <paramref name="device"/> from <see cref="WrittenRecord"/>, as a file written
+    /// in place is about to stop matching it. Without a record the file counts as the app's own (<see cref="IsReplaced"/>).
+    /// </summary>
+    private void ForgetWritten(string device)
+    {
+        if (Written().Remove(device)) SaveRecord(WrittenRecord, Written());
+    }
+
+    private void SaveRecord(string name, Dictionary<string, string> record)
+    {
         string path = $"{_dataRoot}/{name}";
         _files.CreateDirectoryRecursive(ParentOf(path));
         string text = string.Concat(record.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => $"{e.Value} {e.Key}\n"));

@@ -26,7 +26,10 @@
 //   - LEFTOVERS AND SPACE (v10). UNLINK also removes a "<file>.tmp" anywhere a WRITE may create one (a write that failed
 //     half-way, issue #13), never any other file outside the app's folder. FREE answers the free space of the filesystem
 //     that holds a confined path (statfs of its folder, in KiB), so the app can refuse a write that would not fit.
-//   - NARROW COMMAND SET. PING, REMOUNT, STAT, FREE, READ, WRITE, RENAME, LIST, MKDIR, UNLINK, DELETE, RESTARTSHELL, HEN, QUIT.
+//   - IN PLACE (v11). PATCH <path> <offset> <len> overwrites a range of an EXISTING file of a theme root (not the app's folder,
+//     not a ".tmp") with the <len> raw bytes that follow, for a restore on a filesystem with no room for the ".tmp" (issue #13).
+//     The file is opened without O_CREAT and O_TRUNC and is never made longer: a range past its end is refused.
+//   - NARROW COMMAND SET. PING, REMOUNT, STAT, FREE, READ, WRITE, PATCH, RENAME, LIST, MKDIR, UNLINK, DELETE, RESTARTSHELL, HEN, QUIT.
 //     There is no RMDIR, SOTEST, KILL or any other diagnostic command. HEN (v9) only says which HEN runs (one fixed stat).
 //   - ONE PROCESS. RESTARTSHELL ends SceShellUI (the home screen) and nothing else, so it reloads the system
 //     icons, tile icons and sounds a theme wrote; the system starts it again within about a second. It
@@ -78,6 +81,8 @@ internal static unsafe class Program
     // about 100 MB before it, with room. WRITE streams through one chunk, so this is not a memory limit. The
     // app's ThemeApplier.MaxFileBytes is the same number.
     private const int MaxWrite = 160 * 1024 * 1024;
+    // The most one PATCH overwrites; the app sends a file in pieces of at most 8 MiB, so this is only a bound.
+    private const int MaxPatch = 32 * 1024 * 1024;
 
     // open(2) flags, as the unjail sample uses them on this platform.
     private const int OpenReadOnly = 0x0000;
@@ -90,7 +95,7 @@ internal static unsafe class Program
     private const int SysNmount = 378;
 
     // Build tag announced on PING, so a client can tell which helper revision it is talking to.
-    private const int BuildTag = 10;
+    private const int BuildTag = 11;
 
     // /system_ex is remounted once per boot. A second MNT_UPDATE on the already writable mount was the
     // last thing before a console hang (2026-10-13), so it is not repeated: not within this helper's
@@ -251,6 +256,31 @@ internal static unsafe class Program
                     return;
                 }
                 if (!ServeWrite(client, path, wanted, scratch))
+                    return;
+                continue;
+            }
+
+            // PATCH: "PATCH <path> <offset> <len>", then <len> bytes. Only a file that exists in a theme root, never a ".tmp"
+            // and never the app's folder. Like WRITE, a refused header ends the connection, so the body is never parsed as commands.
+            if (StartsWith(line, "PATCH "))
+            {
+                byte* cursor = line + 6;
+                while (*cursor != 0 && *cursor != (byte)' ') cursor++;
+                if (*cursor != (byte)' ') { Send(client, "ERR badpath\n"u8); return; }
+                *cursor = 0;
+                byte* numbers = cursor + 1;
+                byte* second = numbers;
+                while (*second != 0 && *second != (byte)' ') second++;
+                if (*second != (byte)' ') { Send(client, "ERR badpath\n"u8); return; }
+                int offset = ParseInt(numbers);
+                int wanted = ParseInt(second + 1);
+                byte* path = ConfinedPathFrom(line + 6, scratch);
+                if (path == null || IsDataPath(path) || EndsWithTmp(path) || offset < 0 || wanted <= 0 || wanted > MaxPatch)
+                {
+                    Send(client, "ERR badpath\n"u8);
+                    return;
+                }
+                if (!ServePatch(client, path, offset, wanted, scratch))
                     return;
                 continue;
             }
@@ -452,6 +482,79 @@ internal static unsafe class Program
             }
         }
         SendResult(client, "WRITE", "wrote="u8, done);
+        return done == wanted;
+    }
+
+    // lseek(2) from the file's start, as a raw syscall like the other calls here that the helper does not import.
+    private const int SeekSet = 0;
+    // errno EINVAL as a negative result: a range that reaches past the end of the file.
+    private const int InvalidRange = -22;
+
+    /// <summary>
+    /// Overwrites <paramref name="wanted"/> bytes of an existing file from <paramref name="offset"/>, streamed through
+    /// the one chunk. The file is opened read-write without O_CREAT and O_TRUNC and its size is checked first, so it never
+    /// grows or shrinks. A file that cannot be opened or a range past its end is answered with "PATCH rc=&lt;error&gt;"
+    /// after the body is read and dropped. True when all of the body was received (the answer is sent either way); on
+    /// false the caller ends the connection.
+    /// </summary>
+    private static bool ServePatch(int client, byte* path, int offset, int wanted, byte* scratch)
+    {
+        SceKernelStat info = default;
+        int rc = KernelFile.stat(path, &info);
+        if (rc != 0)
+            rc = (int)PayloadCrt.Syscall(PayloadCrt.SYS_stat, (long)(nint)path, (long)(nint)(&info));
+        if (rc != 0)
+        {
+            Drain(client, wanted, scratch);
+            SendResult(client, "PATCH", "rc="u8, rc);
+            return true;
+        }
+        if ((long)offset + wanted > info.Size)
+        {
+            Drain(client, wanted, scratch);
+            SendResult(client, "PATCH", "rc="u8, InvalidRange);
+            return true;
+        }
+
+        int fd = KernelFile.sceKernelOpen(path, OpenReadWrite, 0);
+        if (fd < 0)
+            fd = (int)PayloadCrt.Syscall(PayloadCrt.SYS_open, (long)(nint)path, OpenReadWrite, 0);
+        if (fd < 0)
+        {
+            Drain(client, wanted, scratch);
+            SendResult(client, "PATCH", "rc="u8, fd);
+            return true;
+        }
+        long seek = offset == 0 ? 0 : PayloadCrt.Syscall(PayloadCrt.SYS_lseek, fd, offset, SeekSet);
+        if (seek != offset)
+        {
+            KernelFile.sceKernelClose(fd);
+            Drain(client, wanted, scratch);
+            SendResult(client, "PATCH", "rc="u8, seek < 0 ? (int)seek : -1);
+            return true;
+        }
+
+        // The path lives in scratch, but stat and open have consumed it, so scratch can now carry data.
+        int done = 0, received = 0;
+        while (done < wanted)
+        {
+            int want = wanted - done > StreamChunk ? StreamChunk : wanted - done;
+            int got = ReadExact(client, scratch, want);
+            if (got <= 0) break;
+            received += got;
+
+            long wrote = KernelFile.sceKernelWrite(fd, scratch, (nuint)got);
+            if (wrote < 0)
+                wrote = PayloadCrt.Syscall(PayloadCrt.SYS_write, fd, (long)(nint)scratch, got);
+            if (wrote <= 0) break;
+            done += (int)wrote;
+            if (wrote < got) break;
+        }
+
+        KernelFile.sceKernelClose(fd);
+        if (received < wanted)
+            Drain(client, wanted - received, scratch);
+        SendResult(client, "PATCH", "rc="u8, done == wanted ? 0 : -1);
         return done == wanted;
     }
 

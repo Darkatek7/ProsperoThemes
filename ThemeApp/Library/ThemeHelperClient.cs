@@ -22,7 +22,7 @@ public static class ThemeHelperClient
     public const int Port = 9071;
     public const int LoaderPort = 9021;
     /// <summary>The build tag this app expects; ThemeHelper/Program.cs BuildTag.</summary>
-    public const int ExpectedTag = 10;
+    public const int ExpectedTag = 11;
     /// <summary>The start of the problem <see cref="EnsureRunning"/> reports when another build of the helper holds the port.</summary>
     public const string DifferentHelperPrefix = "A different theme helper is already running";
     public const string ElfPath = DeviceThemeLibrary.AssetRoot + "/ThemeHelper.elf";
@@ -212,6 +212,17 @@ public static class ThemeHelperClient
         if (reply != "WRITE wrote=" + data.Length) throw new InvalidOperationException($"write {path} failed: {reply}");
     }
 
+    /// <summary>
+    /// Overwrites <paramref name="data"/> at <paramref name="offset"/> of a file that exists (PATCH, helper v11). The file
+    /// never grows: the helper refuses a range past its end, and a ".tmp" or the app's folder. Needs no free space.
+    /// </summary>
+    public static void Patch(string path, long offset, ReadOnlySpan<byte> data)
+    {
+        if (data.IsEmpty) return;
+        string reply = Request($"PATCH {path} {offset} {data.Length}", data, out _);
+        if (reply != "PATCH rc=0") throw new InvalidOperationException($"patch {path} at {offset} failed: {reply}");
+    }
+
     /// <summary>Sub-folder names of /user/app/, /user/appmeta/ or a folder in the app's own folder.</summary>
     public static IReadOnlyList<string> List(string path) => ListEntries(path).Folders;
 
@@ -397,7 +408,7 @@ public static class ThemeHelperClient
             readData = data;
         }
         // A WRITE that did not complete ends the connection on the helper's side: nothing more to send.
-        if (body.IsEmpty || reply == "WRITE wrote=" + body.Length)
+        if (body.IsEmpty || reply == "WRITE wrote=" + body.Length || reply == "PATCH rc=0")
             connection.SendAll("QUIT\n"u8);
         return reply;
     }
@@ -473,6 +484,14 @@ public sealed class HelperDeviceFiles : IDeviceFiles
     }
 
     public long FreeBytes(string path) => IsThemeRoot(path) ? ThemeHelperClient.Free(path) : -1;
+
+    public bool CanPatch => true;
+
+    public void PatchFile(string path, long offset, ReadOnlySpan<byte> data)
+    {
+        if (!IsThemeRoot(path)) throw new NotSupportedException($"the theme helper patches only theme files, not {path}");
+        ThemeHelperClient.Patch(path, offset, data);
+    }
 
     public void CreateDirectoryRecursive(string path)
     {

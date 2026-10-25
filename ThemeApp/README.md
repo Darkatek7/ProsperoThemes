@@ -69,6 +69,16 @@ launch evidence are recorded separately below.
   asks ThemeHelper for the free space (`FREE`) before an apply writes anything and again before each write, refuses with
   "not enough space for <file>: X MiB needed, Y MiB free" (1 MiB margin), deletes a `.tmp` left by an earlier write
   first, and deletes its own `.tmp` when a write fails (`UNLINK` of a `.tmp`).
+- **In place when there is no room** (helper v11): the icon container is the same size themed and stock (icons and sounds
+  patch it same-size), so when a write would fail the room check, the target exists with exactly the new data's size and
+  the helper can patch, `ThemeApplier.WriteInPlace` compares the live file with the new data in 1 MiB pieces and overwrites
+  only the pieces that differ (`PATCH <path> <offset> <len>`, neighbouring pieces together, at most 8 MiB per patch), then
+  verifies by the streamed hash as always. Restore defaults and apply both use it, and only as the fallback: with room the
+  `.tmp` and rename path is unchanged. The live file is read as `FileBytes` (outside the managed heap). A pass that stops
+  half-way leaves old and new ranges mixed; the app first drops the file's `written.txt` entry, so the mix is not taken
+  for a file the system replaced, and running the same restore or apply again finishes it. Another size, or a helper
+  without `PATCH`, keeps the "not enough space" message. Unlike a rename this writes into the file the home screen may
+  have open; the home screen reads the container when it starts (see `LoadsWithShell`), so the change shows after its restart. Measured on 13.00 (2026-10-25, helper v11): with 20 MB free on `/system_ex`, applying a theme with a sound in the 39 MB container patched it in place (no `.tmp`), and the home screen restart loaded it and stayed stable; Restore defaults (icons and sounds) then put it back in place with 12 MB free, byte for byte the catalog's stock SHA-256, and the restart was stable again. The raw `lseek` syscall works in the payload.
 - **Originals from USB** (issue #13): the USB import also reads `prospero-themes/originals/<logical path>` (the same tree as
   `backup/original` on the same firmware) and takes a file as the backup only when the catalog lists it with that size and
   SHA-256, and it resolves to a console file (`ThemeApplier.ImportOriginal`). A different backup moves to
