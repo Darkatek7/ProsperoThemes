@@ -124,11 +124,15 @@ public sealed class PreviewController : IDisposable
         if (_renderer.Preview.Wanted is { } key && !_pictureJob) LoadPicture(key);
     }
 
-    /// <summary>Square in the preview: starts the music excerpt, or stops it. Does nothing for a pack without music.</summary>
+    /// <summary>
+    /// Square in the preview: starts the music, or stops it. The pack's MP3 excerpt plays when it has one, else the first
+    /// part of its home music (ATRAC9). Does nothing for a pack without music.
+    /// </summary>
     public void ToggleMusic()
     {
         if (_entry is null || _model is null) return;
         if (_assets?.Get(_model.MusicFile) is { } mp3) _renderer.PreviewMusicPlaying = _audio.ToggleMusic(mp3);
+        else if (_assets?.Get(_model.MusicAt9File) is { } at9) _renderer.PreviewMusicPlaying = _audio.ToggleAtrac9Music(at9);
     }
 
     private void Open(ThemeLibraryEntry entry)
@@ -161,6 +165,34 @@ public sealed class PreviewController : IDisposable
             _assets = assets;
             _renderer.Preview.Apply(load);
             _audio.SetClips(ClipsOf(model, assets));
+        });
+        if (entry.Preview is { } cover) LoadSmoothCover(cover, generation);
+    }
+
+    /// <summary>
+    /// The cover behind the system tiles, scaled to the screen bilinearly on the worker. The renderer makes the first one at
+    /// once on the frame thread with a nearest-neighbour stretch; packs carry small covers (the creator writes 640x360), so
+    /// every pixel of it is a 3x3 block. This one replaces it when it is here. A cover that already is screen-sized gains
+    /// nothing and is left alone; one that cannot be made leaves the quick one.
+    /// </summary>
+    private void LoadSmoothCover(byte[] bytes, int generation)
+    {
+        (int Width, int Height)? size = ImageHeader.JpegSize(bytes) ?? ImageHeader.PngSize(bytes);
+        if (size is not { } measured || measured.Width > 2560 || measured.Height > 2560
+            || (measured.Width == Theme.ScreenWidth && measured.Height == Theme.ScreenHeight)) return;
+        PreviewPicture? picture = null;
+        _worker.Run(() =>
+        {
+            try
+            {
+                using PixelBuffer source = _decode(bytes);
+                picture = ThemeRenderer.BuildPreviewPicture(source, smooth: true);
+            }
+            catch { picture?.Dispose(); picture = null; }
+        }, () =>
+        {
+            if (generation != _generation) picture?.Dispose();
+            else if (picture is not null) _renderer.Preview.AddPicture(PreviewModel.CoverKey, picture);
         });
     }
 

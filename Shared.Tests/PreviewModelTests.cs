@@ -344,6 +344,51 @@ public class PreviewModelTests
         Assert.Equal(0xFF, mp3[info.Start]);
     }
 
+    // ---- The home music ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Without_an_mp3_excerpt_the_home_music_target_is_the_music()
+    {
+        PreviewModel model = PreviewModel.Of(Manifest([Target("vsh_asset/bgm_home.at9", "music/bgm_home.at9", "sound")]));
+
+        Assert.Null(model.MusicFile);
+        Assert.Equal("music/bgm_home.at9", model.MusicAt9File);
+        Assert.True(model.HasMusic);
+        Assert.Equal(["music/bgm_home.at9"], model.Files());
+    }
+
+    [Fact]
+    public void The_mp3_excerpt_is_preferred_and_the_home_music_is_then_not_read()
+    {
+        PreviewModel model = PreviewModel.Of(Manifest([Target("vsh_asset/bgm_home.at9", "music/bgm_home.at9", "sound")], Previews(music: "previews/music.mp3")));
+
+        Assert.Equal("previews/music.mp3", model.MusicFile);
+        Assert.Null(model.MusicAt9File);
+        Assert.True(model.HasMusic);
+        Assert.Equal(["previews/music.mp3"], model.Files());
+    }
+
+    [Fact]
+    public void Other_music_files_and_other_targets_are_no_home_music()
+    {
+        PreviewModel model = PreviewModel.Of(Manifest([Target("vsh_asset/bgm_onboarding.at9", "music/other.at9", "sound"), Target("vsh_asset/bg_hub_default.dds.zst", "bg.zst")]));
+
+        Assert.Null(model.MusicAt9File);
+        Assert.False(model.HasMusic);
+        Assert.Empty(model.Files());
+    }
+
+    [Fact]
+    public void The_assets_take_the_home_music_whole_up_to_the_size_of_a_pack_payload()
+    {
+        PreviewModel model = PreviewModel.Of(Manifest([Target("vsh_asset/bgm_home.at9", "music/bgm_home.at9", "sound")]));
+        byte[] music = new byte[9_000_000];   // the console's own is about this big
+
+        PreviewAssets assets = PreviewAssets.Load(model, Archive(Manifest(), ("music/bgm_home.at9", music)));
+
+        Assert.Equal(music.Length, assets.Get("music/bgm_home.at9")!.Length);
+    }
+
     // ---- The files of a pack ----------------------------------------------------------------------------------------
 
     [Fact]

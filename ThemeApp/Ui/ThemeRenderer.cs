@@ -69,6 +69,10 @@ public sealed partial class ThemeRenderer : IDisposable
     public IReadOnlySet<string> CommunityInLibrary { get; set; } = new HashSet<string>();
     /// <summary>Store ids with a newer version than the library holds; their cards carry an "Update" badge.</summary>
     public IReadOnlySet<string> CommunityUpdates { get; set; } = new HashSet<string>();
+    /// <summary>Store ids whose download waits in the queue; their cards carry a "Queued" badge. The app hands in the queue's live set.</summary>
+    public IReadOnlySet<string> CommunityQueued { get; set; } = new HashSet<string>();
+    /// <summary>The store id that downloads now (null for none); its card carries a "Downloading" badge.</summary>
+    public string? CommunityDownloading { get; set; }
     /// <summary>The community card under the cursor, for the footer's Download/Update hint.</summary>
     public string? SelectedCommunityId { get; set; }
     /// <summary>

@@ -6,14 +6,16 @@ namespace ProsperoThemes.App.Library;
 
 /// <summary>
 /// The bytes a theme's preview shows or plays, out of its pack: tile icons, control-centre icons, the pictures behind the
-/// tiles, the UI sounds and the music excerpt. They are the pack's own files, still encoded (PNG, JPEG, VAG, MP3); the
+/// tiles, the UI sounds and the music (the MP3 excerpt, or else the home music as ATRAC9). They are the pack's own files, still encoded (PNG, JPEG, VAG, MP3, ATRAC9); the
 /// pictures are decoded one at a time when a tile needs them. Only the files <see cref="PreviewModel"/> names are
 /// read, so a pack with tens of megabytes of backgrounds costs no more than its small previews.
 /// </summary>
 public sealed class PreviewAssets
 {
     // Per kind of file, to keep a pack from filling the heap with something that is not a preview.
-    public const int MaxTileIcon = 1 << 20, MaxControlIcon = 256 << 10, MaxPicture = 2 << 20, MaxSound = 512 << 10, MaxMusic = 3 << 20;
+    public const int MaxTileIcon = 1 << 20, MaxControlIcon = 256 << 10, MaxPicture = 2 << 20, MaxSound = 512 << 10, MaxMusic = 3 << 20,
+        // The theme's own home music (ATRAC9, a few MB; the pack format caps a payload at 32 MiB).
+        MaxMusicAt9 = 32 << 20;
 
     private readonly Dictionary<string, byte[]> _files;
 
@@ -45,6 +47,7 @@ public sealed class PreviewAssets
         foreach (string file in model.SoundFiles.Values) Take(file, MaxSound);
         Take(model.AllAppsFile, MaxPicture);
         Take(model.MusicFile, MaxMusic);
+        Take(model.MusicAt9File, MaxMusicAt9);
         return new PreviewAssets(files);
 
         void TakeTile(PreviewTile tile)

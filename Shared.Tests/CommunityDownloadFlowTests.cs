@@ -409,7 +409,7 @@ public class CommunityDownloadFlowTests
         ThemeLibraryEntry entry = StoreEntry(manifest);
         Assert.True(scene.Show(entry, archive));
         Assert.True(scene.Controller.IsOpen);
-        Assert.Equal(1, scene.Worker.Pending);                      // read off the frame thread
+        Assert.Equal(2, scene.Worker.Pending);                      // read off the frame thread: the pack, and the smooth cover
         scene.Worker.RunAll();
         scene.Frames(3);
 

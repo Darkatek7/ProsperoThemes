@@ -1997,6 +1997,124 @@ public static class Atrac9Codec
     }
 
     /// <summary>
+    /// The first <paramref name="maxSeconds"/> of the music of an .at9 file (after the encoder delay) as 16-bit stereo PCM,
+    /// interleaved left, right, for a preview that plays the excerpt. Multichannel music is mixed down the usual way: the front
+    /// pair as it is, the centre channel into both sides at -3 dB, every further pair (surround, rear) into its own side at
+    /// -6 dB, and the LFE channel left out (it is not even synthesized); a mono file plays on both sides. The excerpt starts with
+    /// a few milliseconds of fade-in and ends with a quarter of a second of fade-out, so that it can be played in a loop without
+    /// a click. A file shorter than <paramref name="maxSeconds"/> gives all of it.
+    /// </summary>
+    /// <remarks>
+    /// Only the superframes of the excerpt are decoded, one frame at a time into a scratch window; the memory is the result
+    /// (about 5.5 MB for 30 s at 48 kHz) and a few frames per channel. It is CPU work (hundreds of milliseconds per 30 s on
+    /// a PC): never call it on a frame thread.
+    /// </remarks>
+    /// <param name="sampleRate">The file's sample rate.</param>
+    /// <exception cref="ThemePackException">The input is not an ATRAC9 file this codec reads, or it is damaged.</exception>
+    public static short[] DecodeStereo(byte[] at9, double maxSeconds, out int sampleRate)
+    {
+        ArgumentNullException.ThrowIfNull(at9);
+        try
+        {
+            return DecodeExcerpt(at9, maxSeconds, out sampleRate);
+        }
+        catch (Exception e) when (e is IndexOutOfRangeException or ArgumentException or NullReferenceException or OverflowException)
+        {
+            throw new ThemePackException("the ATRAC9 file is damaged", e);
+        }
+    }
+
+    private const float CentreGain = 0.707f, SurroundGain = 0.5f;
+    private const double FadeInSeconds = 0.02, FadeOutSeconds = 0.25;
+
+    private static short[] DecodeExcerpt(byte[] at9, double maxSeconds, out int sampleRate)
+    {
+        At9File file = At9File.Parse(at9);
+        At9Config cfg = file.Config;
+        sampleRate = cfg.SampleRate;
+        long total = (long)file.Superframes * cfg.SuperframeSamples;
+        int delay = (int)Math.Min(file.Fact is null ? 0 : file.Fact[2], total);
+        long length = Math.Min(file.Fact is null ? total : file.Fact[0], total - delay);
+        long wanted = Math.Min(length, (long)(Math.Max(0, maxSeconds) * cfg.SampleRate));
+        if (wanted <= 0 || wanted > int.MaxValue / 2) return [];
+
+        // Which channel goes where: the gains into the left and right side, and the channels that are not wanted (LFE).
+        var left = new float[cfg.ChannelCount];
+        var right = new float[cfg.ChannelCount];
+        var scratch = new float[]?[cfg.ChannelCount];
+        int front = Array.IndexOf(cfg.Blocks, At9.Stereo), monos = 0;
+        foreach (int type in cfg.Blocks) if (type == At9.Mono) monos++;
+        for (int bi = 0, c = 0, mono = 0; bi < cfg.Blocks.Length; bi++)
+        {
+            switch (cfg.Blocks[bi])
+            {
+                case At9.Stereo:
+                    float gain = bi == front ? 1f : SurroundGain;
+                    (left[c], right[c + 1]) = (gain, gain);
+                    c += 2;
+                    break;
+                case At9.Mono:
+                    if (front >= 0) (left[c], right[c]) = (CentreGain, CentreGain);
+                    else if (monos >= 2) (left[c], right[c]) = mono == 0 ? (1f, 0f) : (0f, 1f);
+                    else (left[c], right[c]) = (1f, 1f);
+                    mono++;
+                    c++;
+                    break;
+                default:
+                    c++;   // the LFE channel
+                    break;
+            }
+        }
+        for (int c = 0; c < scratch.Length; c++)
+            if (left[c] != 0 || right[c] != 0) scratch[c] = new float[cfg.FrameSamples];
+
+        var output = new short[wanted * 2];
+        long superframes = Math.Min(file.Superframes, (delay + wanted + cfg.SuperframeSamples - 1) / cfg.SuperframeSamples);
+        var decoder = new At9Decoder(file);
+        for (int s = 0; s < superframes; s++)
+        {
+            decoder.BeginSuperframe(s);
+            for (int f = 0; f < cfg.FramesPerSuperframe; f++)
+            {
+                decoder.DecodeFrame(f, scratch, 0);
+                long first = (long)s * cfg.SuperframeSamples + (long)f * cfg.FrameSamples - delay;
+                for (int i = Math.Max(0, (int)Math.Min(-first, cfg.FrameSamples)); i < cfg.FrameSamples && first + i < wanted; i++)
+                {
+                    float l = 0, r = 0;
+                    for (int c = 0; c < scratch.Length; c++)
+                    {
+                        if (scratch[c] is not { } samples) continue;
+                        l += samples[i] * left[c];
+                        r += samples[i] * right[c];
+                    }
+                    long at = (first + i) * 2;
+                    output[at] = ToPcm16(l);
+                    output[at + 1] = ToPcm16(r);
+                }
+            }
+        }
+
+        int fadeIn = (int)Math.Min(wanted / 2, (long)(FadeInSeconds * cfg.SampleRate));
+        int fadeOut = (int)Math.Min(wanted / 2, (long)(FadeOutSeconds * cfg.SampleRate));
+        for (int i = 0; i < fadeIn; i++)
+        {
+            float k = (float)i / fadeIn;
+            output[2 * i] = (short)(output[2 * i] * k);
+            output[2 * i + 1] = (short)(output[2 * i + 1] * k);
+        }
+        for (int i = 0; i < fadeOut; i++)
+        {
+            long at = (wanted - 1 - i) * 2;
+            float k = (float)i / fadeOut;
+            output[at] = (short)(output[at] * k);
+            output[at + 1] = (short)(output[at + 1] * k);
+        }
+        return output;
+    }
+
+    private static short ToPcm16(float v) => (short)Math.Clamp((int)MathF.Round(v * 32767f), short.MinValue, short.MaxValue);
+
+    /// <summary>
     /// Encodes stereo PCM into an .at9 laid out like <paramref name="stock"/> (same ATRAC9 config, so the same channel layout, rate
     /// and bitrate; its audio, if it has any, sets the limits). <paramref name="left"/> and <paramref name="right"/> are at the stock
     /// sample rate in -1..1; the first block carries them and every other block is silent. A file with a loop gets the layout of the

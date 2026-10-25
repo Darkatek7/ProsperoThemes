@@ -535,7 +535,7 @@ if (args.Contains("--screenshots"))
     browser.Update(UiInput.None with { PageDown = true });
     browser.StoreUrl = "http://192.168.0.5:8080"; Save("system", ThemeView.System);
     // The store knows of a later release (AppUpdate): the version row says so.
-    renderer.AppVersion = "01.000.033";
+    renderer.AppVersion = "01.000.034";
     renderer.NewerVersion = "01.000.022"; Save("system-update", ThemeView.System);
     renderer.NewerVersion = "";
     renderer.UpdateState = AppUpdate.State.None;
@@ -558,7 +558,7 @@ if (args.Contains("--screenshots"))
     browser.Update(up);
     renderer.NewerVersion = "01.000.027";
     renderer.UpdateState = AppUpdate.State.Ready;
-    renderer.AppUpdateText = AppUpdate.DialogText("01.000.034", "01.000.033", 8_576_241);
+    renderer.AppUpdateText = AppUpdate.DialogText("01.000.035", "01.000.034", 8_576_241);
     Save("system-app-update", ThemeView.System);
     browser.Update(press, appUpdate: AppUpdate.State.Ready); Save("dialog-app-update", ThemeView.System, DialogKind.AppUpdate);
     browser.Update(down, appUpdate: AppUpdate.State.Ready); Save("dialog-app-update-cancel", ThemeView.System, DialogKind.AppUpdate);

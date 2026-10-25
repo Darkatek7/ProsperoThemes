@@ -148,6 +148,7 @@ internal static class PreviewKit
         public void SetClips(IReadOnlyDictionary<PreviewSound, byte[]> vags) { Clips = vags; Calls.Add("clips " + vags.Count); }
         public void Play(PreviewSound sound) { Played.Add(sound); Calls.Add("play " + sound); }
         public bool ToggleMusic(byte[] mp3) { MusicPlaying = !MusicPlaying; MusicStarted = mp3; Calls.Add("music " + MusicPlaying); return MusicPlaying; }
+        public bool ToggleAtrac9Music(byte[] at9) { MusicPlaying = !MusicPlaying; MusicStarted = at9; Calls.Add("music at9 " + MusicPlaying); return MusicPlaying; }
         public void Close() { Closed++; MusicPlaying = false; Calls.Add("close"); }
         public void Dispose() { }
     }

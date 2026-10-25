@@ -8,7 +8,8 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
   and leads the row; Triangle sorts the rest by name or by newest. When you combine parts of several themes, the
   row ends with "Save current look", which keeps that mix as a theme of its own in your library.
 - **Themes:** download themes other people published at [themes.darkatek7.com](https://themes.darkatek7.com),
-  sort them by top rated, most downloaded or new, and like the ones you enjoy. More themes load as you scroll down. Themes already in your library carry
+  sort them by top rated, most downloaded or new, and like the ones you enjoy. More themes load as you scroll down.
+  Downloads queue up: press X on several themes and they download one after another. Themes already in your library carry
   an "In library" badge; when a creator publishes a new version, the card says "Update". A theme you liked shows a
   heart, and Triangle on it removes the like. The Search chip finds themes by name, author or description.
   Themes with AI-generated pictures carry an "AI" badge; the No AI chip hides them, and the System tab's "AI themes"
@@ -76,7 +77,7 @@ open the app: close it and start it again.
 | Library, "Your avatars" row | Down from the themes reaches the row (the screen slides up); Left and Right move along it, Up or Circle goes back to the themes. X on an avatar asks "Set as profile picture"; X on Console picture asks to put back the picture the console had before. Triangle removes an avatar (it goes to the attic folder, not deleted). Options reloads the library. The avatar in use is marked "In use". |
 | Details | X applies the theme (it asks first). Square opens the preview. Circle goes back. |
 | Apply dialog | D-pad chooses, X confirms, Circle cancels. |
-| Preview | X shows or hides the home overlay. Square plays the theme's music. Circle goes back. |
+| Preview | X shows or hides the home overlay. Square plays the theme's music (its preview excerpt, or else the first 30 seconds of its home music). Circle goes back. |
 | Themes | X on a theme asks "Download", "Download and apply" or "Cancel" (an update says "Update"); the second goes on to the same apply questions as the Details screen, and nothing is applied before you confirm there. Square previews the theme without adding it to your library (picture, home row, sounds; Square again plays its music, Circle comes back). Triangle likes, or removes your like. Options refreshes the list. D-pad up from the first row reaches the chips: Left and Right move, X filters, Square changes the sort, Down goes back to the themes. X on Search opens a keyboard; Options searches, and X on the chip with a term shows every theme again. X on No AI hides or shows themes with AI pictures. |
 | Avatars | Square changes the sort (Top rated, Most downloaded or New). X on an avatar asks "Download", "Download and set" or "Cancel"; avatars already in your library say "In library". Triangle likes, or removes your like. Options refreshes the list. Circle goes back to the Library. |
 | USB Import | X imports themes, avatars and original system files from USB. |
@@ -205,7 +206,7 @@ sent with that question. A firmware report goes to the store only when you choos
 GPL-3.0, like the SharpProspero SDK it is built with. The Inter font is under the SIL Open Font License
 (`ThemeApp/assets/fonts/OFL.txt`).
 
-`Shared/Atrac9Codec.cs` and `Shared/Atrac9Tables.cs` (the home music volume) are a C# port of the ATRAC9 encoder by
+`Shared/Atrac9Codec.cs` and `Shared/Atrac9Tables.cs` (the home music volume and the music in the preview) are a C# port of the ATRAC9 encoder by
 [Blaze414](https://github.com/Blaze414/ps5-theme), GPL-3.0-or-later, which in turn follows the MIT-licensed
 [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9) by Alex Barney.
 

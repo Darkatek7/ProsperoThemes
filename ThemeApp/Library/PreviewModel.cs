@@ -70,6 +70,9 @@ public sealed class PreviewModel
         ("NPXS40075", "Media Gallery", "rnps/NPXS40075/appdb/default/icon0.png", PreviewTab.Media, 1),
     ];
 
+    /// <summary>The logical path of the console's home music; a pack that changes it carries the whole ATRAC9 file.</summary>
+    public const string HomeMusicPath = AssetRoots.VshAsset + "/bgm_home.at9";
+
     /// <summary>The media hub: its tiles sit in the Media section.</summary>
     private const string MediaRoot = "rnps/NPXS40016/";
 
@@ -118,13 +121,14 @@ public sealed class PreviewModel
     private readonly Dictionary<string, string> _pictureFiles = new(StringComparer.Ordinal);
 
     private PreviewModel(IReadOnlyList<PreviewTile> games, IReadOnlyList<PreviewTile> media, IReadOnlyList<PreviewControl> controls,
-        string? allApps, string? music, IReadOnlyDictionary<string, string> sounds)
+        string? allApps, string? music, string? musicAt9, IReadOnlyDictionary<string, string> sounds)
     {
         Games = games;
         Media = media;
         Controls = controls;
         AllAppsFile = allApps;
         MusicFile = music;
+        MusicAt9File = musicAt9;
         SoundFiles = sounds;
     }
 
@@ -135,6 +139,13 @@ public sealed class PreviewModel
     public string? AllAppsFile { get; }
     /// <summary>Archive path of the MP3 excerpt of the home music, or null.</summary>
     public string? MusicFile { get; }
+    /// <summary>
+    /// Archive path of the theme's own home music (the payload of the <c>bgm_home.at9</c> target, a whole ATRAC9 file), for
+    /// a pack without an MP3 excerpt; null when it has the excerpt (which is preferred) or no home music.
+    /// </summary>
+    public string? MusicAt9File { get; }
+    /// <summary>Whether the preview has music to play: the MP3 excerpt, else the pack's ATRAC9 home music.</summary>
+    public bool HasMusic => MusicFile is not null || MusicAt9File is not null;
     /// <summary>Clip name (<c>psfx_focus_move</c>, ...) to the archive path of the pack's VAG for it.</summary>
     public IReadOnlyDictionary<string, string> SoundFiles { get; }
 
@@ -173,6 +184,7 @@ public sealed class PreviewModel
         foreach (string file in SoundFiles.Values) files.Add(file);
         if (AllAppsFile is not null) files.Add(AllAppsFile);
         if (MusicFile is not null) files.Add(MusicFile);
+        if (MusicAt9File is not null) files.Add(MusicAt9File);
         return files;
     }
 
@@ -271,7 +283,13 @@ public sealed class PreviewModel
                 foreach (string wanted in Clips.Values)
                     if (clip == wanted) sounds[clip] = target.File;
 
-        var model = new PreviewModel(games, media, controls, previews.AllApps, previews.Music, sounds);
+        // Home music: only needed when the pack has no MP3 excerpt of it (the MP3 is preferred, it is small and plays at once).
+        string? musicAt9 = null;
+        if (previews.Music is null)
+            foreach (ThemePackTarget target in manifest.Targets)
+                if (target.Path == HomeMusicPath && target.File.Length > 0) { musicAt9 = target.File; break; }
+
+        var model = new PreviewModel(games, media, controls, previews.AllApps, previews.Music, musicAt9, sounds);
         foreach (var (key, file) in pictures) model._pictureFiles[key] = file;
         return model;
     }

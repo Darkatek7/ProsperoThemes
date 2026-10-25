@@ -53,7 +53,7 @@ launch evidence are recorded separately below.
   defaults never writes an old firmware's file back.
   A file whose backup is gone (deleted from `/data`) is never taken for an original when it is a theme's:
   `backup/originals.txt` keeps the hash of every original the app saved or put back, and the bundled
-  `catalog/<firmware>.json` (StockCatalog: 9.60, 10.01, 10.60, 11.20, 11.60, 12.40, 12.70, 13.00, 13.20, 13.40, 13.42, 13.60) has the stock hash of each asset
+  `catalog/<firmware>.json` (StockCatalog: 9.60, 10.01, 10.40, 10.60, 11.20, 11.40, 11.60, 12.00, 12.20, 12.40, 12.70, 13.00, 13.20, 13.40, 13.42, 13.60) has the stock hash of each asset
   and of the icon container. A tile icon then comes back from the firmware's own copy in
   `/system_ex/rnps/apps` (on 13.00, 8 of the 9 icons are identical to it; Sony's servers updated NPXS40305).
   Any other such file has no original left on the console: Restore defaults leaves it and names it. A backup that
@@ -156,6 +156,15 @@ launch evidence are recorded separately below.
   shared `AskApply`): the parts to tick, the app background scope question, or the plain question. Nothing is applied before
   that question is confirmed, and none opens while the app is busy. A failed download never goes on; if the user has left the
   Themes tab (or another question is open) when the scan ends, the download notice is all there is.
+- **Download queue** (Themes tab): X, Download on another card while a download (or any other job) runs does not say "Please wait"
+  but queues it: the notice reads `Queued “name” · 2 waiting`, and the card carries a "Queued" badge (the one downloading,
+  "Downloading"). The downloads run strictly one at a time, in the order they were asked for (`DownloadQueue`, which holds the
+  store records, so sorting, a category chip or a search leaves the queue alone), each right after the one before and before
+  the list's next page, its pictures or the avatar list. A download pressed while list pictures load still stops them and runs
+  first; the others follow it. A theme that waits or downloads already is not queued twice ("already queued"). The library is
+  scanned once, after the last one (a finished card says "In library" at once), and "Download and apply" asks to apply only when
+  no other download waits behind it, so a run of downloads ends in one question for its last pack. The next download waits while
+  the apply question is open. Avatar downloads do not queue yet (they still say "Please wait").
 - **Preview before download** (Square on a card): fetches the pack without keeping it and opens the same fullscreen preview the
   library has (home row with the pack's tile icons, background following the focus, control centre, UI sounds, Square for the
   music, Circle back to the card). The pack is downloaded with `GetWithRetry` on the store queue (so card pictures stop for it
@@ -224,7 +233,9 @@ The full-screen preview shows a theme the way the console would, using the piece
   transparent; the app cannot draw SVG) or a neutral drawn stand-in where the pack has none.
 - **Sounds.** Moving the focus plays the pack's focus-move clip (`vag` target with `resource` `psfx_focus_move`),
   X the confirm clip (`psfx_enter`), Circle the back clip (`psfx_cancel`), and the end of a row `psfx_cannot_move`;
-  a clip the pack lacks stays silent. Square plays `previews.music` (an MP3 excerpt) in a loop.
+  a clip the pack lacks stays silent. Square plays `previews.music` (an MP3 excerpt) in a loop; a pack without one
+  plays the first 30 s of its own home music instead (the `bgm_home.at9` target's ATRAC9 payload, `PreviewModel.MusicAt9File`).
+  The MP3 is preferred when a pack has both.
 
 How it is made cheap enough for the console: the pack is read on a worker when the preview opens (only the files
 `Library/PreviewModel.cs` names; a pack's big backgrounds are never inflated); tile art and icons are scaled once;
@@ -245,6 +256,13 @@ resolved at run time: `sceKernelDlsym` finds no export in an app). They are not 
 `tools/check-needed-modules.ps1`, so the build warns about them until a console has started the app with them.
 If the app stops starting, create `NullPreviewAudio` instead of `ConsolePreviewAudio` in `Program.cs`: the class is
 then never used, and the trimmed build has no audio need entries.
+
+The home music (ATRAC9) is not decoded by libSceAudiodec but by the C# codec (`Atrac9Codec.DecodeStereo`, the same decoder as
+the volume change): the first 30 s of the file are decoded on the music's own thread, mixed down to stereo (front pair, centre at
+-3 dB, surrounds at -6 dB, no LFE), faded at both ends for the loop and played through the same mixer, so it needs no new
+native import. On a PC (Release) the 30 s of the console's own 8.9 MB `bgm_home.at9` decode in about 75 ms (180 ms the first
+time, tables included) and the whole file in 0.6 s; the console, ahead-of-time compiled, has not been timed yet. The PCM
+(5.5 MB) is kept while the preview is open, so Square again does not decode it again.
 
 ## Avatars
 

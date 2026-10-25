@@ -140,7 +140,7 @@ public sealed partial class ThemeRenderer
     }
 
     private HintItem[] PreviewHints(ThemeBrowser browser, PreviewModel model) =>
-        PreviewHintSets[(browser.PreviewScene == PreviewScene.Home ? 0 : 3) + (model.MusicFile is null ? 0 : PreviewMusicPlaying ? 2 : 1)];
+        PreviewHintSets[(browser.PreviewScene == PreviewScene.Home ? 0 : 3) + (!model.HasMusic ? 0 : PreviewMusicPlaying ? 2 : 1)];
 
     // ---- The picture -----------------------------------------------------------------------------------------------
 
@@ -226,7 +226,8 @@ public sealed partial class ThemeRenderer
     }
 
     // The theme's cover as the first picture, made on the frame thread like the covers of the other screens (the pack's own
-    // pictures are made on the worker).
+    // pictures are made on the worker). It is a quick nearest-neighbour stretch, so it is here at once; the preview controller
+    // replaces it with a smooth one made on the worker (PreviewController.LoadSmoothCover).
     private void EnsureCover(ThemeLibraryEntry? selected)
     {
         if (Preview.HasPicture(PreviewModel.CoverKey)) return;

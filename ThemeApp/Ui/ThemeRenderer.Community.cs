@@ -103,7 +103,8 @@ public sealed partial class ThemeRenderer
     // ---- State ------------------------------------------------------------------------------------------------------------
 
     // What a baked card shows, besides the theme itself: the flags below.
-    private const byte CommunityFlagLiked = 1, CommunityFlagUpdate = 2, CommunityFlagInLibrary = 4, CommunityFlagPreview = 8, CommunityFlagWaiting = 16;
+    private const byte CommunityFlagLiked = 1, CommunityFlagUpdate = 2, CommunityFlagInLibrary = 4, CommunityFlagPreview = 8, CommunityFlagWaiting = 16,
+        CommunityFlagQueued = 32, CommunityFlagDownloading = 64;
     private readonly record struct CommunityStamp(CommunityTheme Theme, byte Flags);
     private readonly Dictionary<string, CommunityStamp> _communityStamps = new();
     // Scroll in pixels of the grid (eased toward the row the focus needs), and the first visible row it eases toward.
@@ -472,6 +473,8 @@ public sealed partial class ThemeRenderer
         if (CommunityLiked.Contains(t.Id)) flags |= CommunityFlagLiked;
         if (CommunityUpdates.Contains(t.Id)) flags |= CommunityFlagUpdate;
         if (CommunityInLibrary.Contains(t.Id)) flags |= CommunityFlagInLibrary;
+        if (CommunityQueued.Contains(t.Id)) flags |= CommunityFlagQueued;
+        if (CommunityDownloading == t.Id) flags |= CommunityFlagDownloading;
         if (CommunityPreviews.ContainsKey(t.Id) && !_failedThumbs.Contains(t.Id)) flags |= CommunityFlagPreview;
         else if (CommunityPicturesLoading && CommunityPictureWaiting(t)) flags |= CommunityFlagWaiting;
         return flags;
@@ -509,11 +512,14 @@ public sealed partial class ThemeRenderer
         bool preview = DrawCommunityPicture(c, t, wantPreview, (flags & CommunityFlagWaiting) != 0);
 
         // Badges on the picture: the state of the pack at the right, the heart of a liked theme at the left.
+        // A download in the queue or on its way says so instead: that is what the card is about right now.
         bool update = (flags & CommunityFlagUpdate) != 0;
-        if (update || (flags & CommunityFlagInLibrary) != 0)
+        bool downloading = (flags & CommunityFlagDownloading) != 0, queued = (flags & CommunityFlagQueued) != 0;
+        if (downloading || queued || update || (flags & CommunityFlagInLibrary) != 0)
         {
-            string text = update ? "Update" : "In library";
-            Badge(c, text, CommunityCardW - (_small.MeasureText(text) + 52) - 14, 14, update ? Warn : Accent);
+            string text = downloading ? "Downloading" : queued ? "Queued" : update ? "Update" : "In library";
+            Color fill = downloading ? Accent : queued ? Theme.White : update ? Warn : Accent;
+            Badge(c, text, CommunityCardW - (_small.MeasureText(text) + 52) - 14, 14, fill);
         }
         bool liked = (flags & CommunityFlagLiked) != 0;
         if (liked)

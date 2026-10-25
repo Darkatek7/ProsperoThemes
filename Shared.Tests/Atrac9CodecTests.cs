@@ -253,6 +253,88 @@ public class Atrac9CodecTests
         throw new InvalidOperationException("no data chunk");
     }
 
+    // ---- the preview's excerpt ------------------------------------------------------------------------------------
+
+    private static short Pcm(double v) => (short)Math.Clamp((int)Math.Round(v * 32767.0), short.MinValue, short.MaxValue);
+
+    // The fact chunk of a file: its sample count and its encoder delay.
+    private static (int Samples, int Delay) Fact(byte[] file)
+    {
+        for (int p = 12; p + 8 <= file.Length;)
+        {
+            int size = BitConverter.ToInt32(file, p + 4);
+            if (file[p] == 'f' && file[p + 1] == 'a' && file[p + 2] == 'c' && file[p + 3] == 't')
+                return (BitConverter.ToInt32(file, p + 8), BitConverter.ToInt32(file, p + 16));
+            p += 8 + size + (size & 1);
+        }
+        throw new InvalidOperationException("no fact chunk");
+    }
+
+    [Fact]
+    public void DecodeStereo_mixes_the_six_channels_down_and_leaves_out_the_lfe()
+    {
+        byte[] file = Read("synth-6ch.at9");
+        float[][] channels = Atrac9Codec.Decode(file);
+        (int count, int delay) = Fact(file);
+
+        short[] pcm = Atrac9Codec.DecodeStereo(file, 1000, out int rate);
+
+        Assert.Equal(48000, rate);
+        Assert.Equal(6, channels.Length);
+        Assert.Equal(2 * count, pcm.Length);   // the music itself: the encoder delay is skipped, nothing after its end
+        // Front pair, the centre at -3 dB and the surround pair at -6 dB; the LFE (channel 3) does not take part.
+        for (int i = count / 4; i < count / 4 + 2000; i++)
+        {
+            int at = delay + i;
+            double l = channels[0][at] + 0.707f * channels[2][at] + 0.5f * channels[4][at];
+            double r = channels[1][at] + 0.707f * channels[2][at] + 0.5f * channels[5][at];
+            Assert.InRange(pcm[2 * i] - Pcm(l), -1, 1);
+            Assert.InRange(pcm[2 * i + 1] - Pcm(r), -1, 1);
+        }
+    }
+
+    [Fact]
+    public void DecodeStereo_stops_at_the_requested_length_and_fades_the_edges_for_a_loop()
+    {
+        byte[] file = Read("synth-6ch.at9");
+
+        short[] pcm = Atrac9Codec.DecodeStereo(file, 1.0, out int rate);
+
+        Assert.Equal(2 * rate, pcm.Length);   // one second of stereo
+        Assert.Equal(0, pcm[0]);               // fades in from silence
+        Assert.Equal(0, pcm[^1]);              // and out to it
+        Assert.Equal(0, pcm[^2]);
+        int Peak(int from, int to) { int p = 0; for (int i = from; i < to; i++) p = Math.Max(p, Math.Abs((int)pcm[i])); return p; }
+        Assert.True(Peak(0, pcm.Length) > 0);
+        Assert.True(Peak(pcm.Length - 100, pcm.Length) < Peak(pcm.Length / 2, pcm.Length / 2 + 4000));
+    }
+
+    [Fact]
+    public void DecodeStereo_of_a_short_file_gives_all_of_it_and_a_stereo_file_is_not_changed_by_the_mix()
+    {
+        int n = 30000;
+        byte[] stereo = Atrac9Codec.Encode(Read("synth-template.at9"), Synth(n, 0), Synth(n, 1), 0).Bytes;
+        float[][] channels = Atrac9Codec.Decode(stereo);
+        (int count, int delay) = Fact(stereo);
+
+        short[] pcm = Atrac9Codec.DecodeStereo(stereo, 30, out _);
+
+        Assert.Equal(2 * count, pcm.Length);   // asked for far more than there is
+        for (int i = 1000; i < 1100; i++)
+        {
+            Assert.Equal(Pcm(channels[0][delay + i]), pcm[2 * i]);
+            Assert.Equal(Pcm(channels[1][delay + i]), pcm[2 * i + 1]);
+        }
+    }
+
+    [Fact]
+    public void DecodeStereo_refuses_what_is_not_an_atrac9_file_and_gives_nothing_for_no_time()
+    {
+        Assert.Throws<ThemePackException>(() => Atrac9Codec.DecodeStereo(new byte[100], 30, out _));
+        Assert.Throws<ThemePackException>(() => Atrac9Codec.DecodeStereo(Read("reference.json"), 30, out _));
+        Assert.Empty(Atrac9Codec.DecodeStereo(Read("synth-6ch.at9"), 0, out _));
+    }
+
     // ---- the console's own files (not in the repository) ---------------------------------------------------------
 
     private static byte[]? ConsoleFile(string name)

@@ -630,7 +630,7 @@ public class PreviewScreenTests
         scene.Press(UiInput.None, square: true);
 
         Assert.True(scene.Controller.IsOpen);
-        Assert.Equal(1, scene.Worker.Pending);                    // nothing was read on this thread
+        Assert.Equal(2, scene.Worker.Pending);                    // nothing was read on this thread (the pack, and the smooth cover)
         Assert.True(scene.Renderer.Preview.IsEmpty);
         Assert.Equal(["clips 0"], scene.Audio.Calls);             // the earlier theme's sounds are taken away at once
         scene.Worker.RunAll();
@@ -682,6 +682,43 @@ public class PreviewScreenTests
     }
 
     [Fact]
+    public void The_cover_is_stretched_at_once_and_then_replaced_by_a_smooth_one_made_on_the_worker()
+    {
+        (ThemePackManifest manifest, byte[] archive) = Pictures();
+        byte[]? cover = null;
+        // The cover decodes to columns of black and white: a nearest-neighbour stretch keeps only those two colours, a
+        // bilinear one mixes them at every edge.
+        PixelBuffer Stripes(byte[] bytes)
+        {
+            if (!ReferenceEquals(bytes, cover)) return Decode(bytes);
+            var stripes = new PixelBuffer(64, 36);
+            for (int x = 0; x < 64; x++)
+                Paint.FillRect(stripes.AsSurface(), x, 0, 1, 36, x % 2 == 0 ? Color.FromRgb(0, 0, 0) : Color.FromRgb(255, 255, 255));
+            return stripes;
+        }
+        using var scene = new Scene(manifest, archive, Stripes);
+        cover = scene.Entries[0].Preview;
+        static int Colours(PreviewPicture picture)
+        {
+            var seen = new HashSet<uint>();
+            for (int x = 0; x < 1920; x++) seen.Add(PixelAt(picture.Full, x, 540));
+            return seen.Count;
+        }
+
+        scene.Press(UiInput.None, square: true);
+        scene.Renderer.Draw(scene.Canvas.AsSurface(), scene.Browser, scene.Entries, scene.Time, 1.0 / 60);   // the worker has not answered
+        PreviewPicture quick = scene.Renderer.Preview.Picture(PreviewModel.CoverKey)!;
+        Assert.Equal(2, Colours(quick));
+
+        scene.Worker.RunAll();
+        PreviewPicture smooth = scene.Renderer.Preview.Picture(PreviewModel.CoverKey)!;
+        Assert.NotSame(quick, smooth);
+        Assert.True(Colours(smooth) > 2);
+        scene.Frames(2);   // and it is the one drawn from now on
+        Assert.Same(smooth, scene.Renderer.Preview.Picture(PreviewModel.CoverKey));
+    }
+
+    [Fact]
     public void A_rescan_that_replaces_the_entry_closes_the_preview_and_opens_it_again()
     {
         (ThemePackManifest manifest, byte[] archive) = WithSounds();
@@ -693,7 +730,7 @@ public class PreviewScreenTests
         scene.Controller.Update(scene.Entries);
 
         Assert.Equal(1, scene.Audio.Closed);
-        Assert.Equal(1, scene.Worker.Pending);
+        Assert.Equal(2, scene.Worker.Pending);   // the pack again, and its smooth cover
         scene.Worker.RunAll();
         Assert.True(scene.Controller.IsOpen);
     }
@@ -758,6 +795,66 @@ public class PreviewScreenTests
         early.Press(UiInput.None, square: true);
         Assert.DoesNotContain(early.Audio.Calls, c => c.StartsWith("music"));
         Assert.False(early.Renderer.PreviewMusicPlaying);
+    }
+
+    private const string HomeMusic = "vsh_asset/bgm_home.at9";
+
+    // A pack whose only music is the home music (an ATRAC9 file as the payload of the bgm_home.at9 target), no MP3 excerpt.
+    private static (ThemePackManifest Manifest, byte[] Archive) WithHomeMusicOnly()
+    {
+        ThemePackManifest manifest = Manifest([Target(HomeMusic, "music/bgm_home.at9", "sound")]);
+        return (manifest, Archive(manifest, ("music/bgm_home.at9", [7, 7, 7, 7])));
+    }
+
+    [Fact]
+    public void Square_plays_the_home_music_of_a_pack_that_has_no_mp3_excerpt()
+    {
+        (ThemePackManifest manifest, byte[] archive) = WithHomeMusicOnly();
+        using var scene = new Scene(manifest, archive);
+        scene.Open();
+
+        scene.Press(UiInput.None, square: true);
+        Assert.Equal(new byte[] { 7, 7, 7, 7 }, scene.Audio.MusicStarted);
+        Assert.True(scene.Renderer.PreviewMusicPlaying);
+
+        scene.Press(UiInput.None, square: true);
+        Assert.False(scene.Renderer.PreviewMusicPlaying);
+        Assert.Equal(["music at9 True", "music at9 False"], scene.Audio.Calls.Where(c => c.StartsWith("music")).ToArray());
+    }
+
+    [Fact]
+    public void The_mp3_excerpt_is_played_instead_of_the_home_music_when_a_pack_has_both()
+    {
+        ThemePackManifest manifest = Manifest([Target(HomeMusic, "music/bgm_home.at9", "sound")], Previews(music: "previews/music.mp3"));
+        using var scene = new Scene(manifest, Archive(manifest, ("music/bgm_home.at9", [7, 7, 7, 7]), ("previews/music.mp3", [9, 9, 9])));
+        scene.Open();
+
+        scene.Press(UiInput.None, square: true);
+
+        Assert.Equal(new byte[] { 9, 9, 9 }, scene.Audio.MusicStarted);
+        Assert.Equal(["music True"], scene.Audio.Calls.Where(c => c.StartsWith("music")).ToArray());
+    }
+
+    [Fact]
+    public void The_footer_shows_the_music_hint_for_a_pack_with_only_the_home_music()
+    {
+        ThemePackManifest silent = Manifest();
+        (ThemePackManifest home, byte[] homeArchive) = WithHomeMusicOnly();
+        using var quiet = new Scene(silent, Archive(silent));
+        using var music = new Scene(home, homeArchive);
+        quiet.Open();
+        music.Open();
+        quiet.Frames(70);
+        music.Frames(70);
+
+        int FirstInk(Scene s)
+        {
+            for (int x = 900; x < Theme.ContentRight; x++)
+                for (int y = 990; y < 1020; y++)
+                    if (s.Pixel(x, y) != s.Pixel(900, y)) return x;
+            return -1;
+        }
+        Assert.True(FirstInk(music) < FirstInk(quiet) - 100);
     }
 
     [Fact]

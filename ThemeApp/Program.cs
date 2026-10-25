@@ -94,6 +94,11 @@ internal sealed class ThemeApp : ProsperoApp
     private bool _listLoading, _reloadList, _previewsMissing;
     private volatile bool _stopList, _listStopped, _listPosted;
     private Action? _queuedJob;
+    // The downloads the user asked for while the app was busy, run one after another (StartQueuedDownload). Holds the store records,
+    // not list positions, so a reload of the list leaves it alone. _downloadFailures counts the failed ones of the run, so the
+    // notice of the last one can say so (each next "Downloading…" notice replaces the result of the one before).
+    private readonly DownloadQueue<CommunityTheme> _downloadQueue = new(theme => theme.Id);
+    private int _downloadFailures;
     // The list on screen comes a page at a time (CommunityList.PageSize): the page loaded last, the store's total for it (-1 when
     // it did not say) and whether the store has more after it. _communityRetryAt is the focused card when a page failed: the
     // next page is asked for again once the focus has moved, not on every frame (-1 for none).
@@ -133,6 +138,8 @@ internal sealed class ThemeApp : ProsperoApp
         try { SystemModule.Load(SystemModuleId.JpegDec); _jpegAvailable = true; }
         catch { _jpegAvailable = false; }
         _renderer = new ThemeRenderer(name => FileSystem.ReadAllBytes(DeviceThemeLibrary.AssetRoot + "/" + name), DecodeCover);
+        // The queue's own set of waiting ids, which the cards' "Queued" badges read (it is never replaced).
+        _renderer.CommunityQueued = _downloadQueue.PendingIds;
         // ConsolePreviewAudio is the one class that links libSceAudioOut and libSceAudiodec. NullPreviewAudio here leaves the
         // preview silent and, because the class is then never used, takes both need entries out of the build.
         _preview = new PreviewController(_renderer, _browser, new ConsolePreviewAudio(), DecodeCover,
@@ -597,6 +604,8 @@ internal sealed class ThemeApp : ProsperoApp
             _avatarScanAfterWork = false;
             StartAvatarScan();
         }
+        // The queued store downloads go before everything below: the list's pages, pictures and the avatar list wait for them.
+        if (!_busy) StartQueuedDownload();
         // The Avatars tab's list or pictures, asked for while a job ran or stopped for one.
         if (!_busy && _avatarListWanted) StartAvatarStoreList();
         else if (!_busy && _avatarPreviewsMissing) StartAvatarPreviews();
@@ -711,6 +720,7 @@ internal sealed class ThemeApp : ProsperoApp
         }
         _preview.Update(_entries);
         _renderer.SelectedCommunityId = SelectedCommunity()?.Id;
+        _renderer.CommunityDownloading = _downloadQueue.ActiveId;
         _renderer.Draw(context.Surface, _browser, _entries, context.TotalSeconds, context.DeltaSeconds);
         _stats.Record((float)context.DeltaSeconds);
         if (context.Pressed(ScePadButton.R3)) _showStats = !_showStats;
@@ -1131,15 +1141,17 @@ internal sealed class ThemeApp : ProsperoApp
     /// error state. A result without text posts no notice (and takes the progress notice down, unless the job had no
     /// progress text either). Without a store address nothing is sent. Returns whether the job started now.
     /// While list pictures load, the job is queued instead: the pictures stop after the one on its way, the job runs, and
-    /// the rest of the pictures follow.
+    /// the rest of the pictures follow. <paramref name="finished"/> runs on the frame thread when the job is over, with its result,
+    /// before the next queued job or download starts.
     /// </summary>
-    private bool StartCommunityWork(string busyText, Func<StoreHttpClient, StoreResult> work, bool loadsList = false)
+    private bool StartCommunityWork(string busyText, Func<StoreHttpClient, StoreResult> work, bool loadsList = false,
+        Action<StoreResult>? finished = null)
     {
         if (_busy)
         {
             if (_listLoading && _queuedJob is null)
             {
-                _queuedJob = () => StartCommunityWork(busyText, work, loadsList);
+                _queuedJob = () => StartCommunityWork(busyText, work, loadsList, finished);
                 _stopList = true;
                 if (busyText.Length > 0) _renderer.Notify(busyText, NoticeLevel.Info);
             }
@@ -1175,6 +1187,7 @@ internal sealed class ThemeApp : ProsperoApp
                 else if (busyText.Length > 0) _renderer.ClearNotice();
                 _renderer.Busy = false;
                 _busy = false;
+                finished?.Invoke(result);
                 _listLoading = false;
                 _renderer.CommunityPicturesLoading = false;
                 if (_listStopped)
@@ -1190,6 +1203,8 @@ internal sealed class ThemeApp : ProsperoApp
                     next();
                     return;
                 }
+                // The queued downloads come before the list and its pictures, which go on when the queue is empty.
+                if (StartQueuedDownload()) return;
                 // A sort or a category chip pressed while this job ran moved the pills and chips but not the list (another
                 // job refused it with "Please wait"; a list load stopped early for it). Load it now, with the sort and
                 // category they show. A list stopped before it arrived is loaded again even when the pills went back to it.
@@ -1562,14 +1577,66 @@ internal sealed class ThemeApp : ProsperoApp
     }
 
     /// <summary>
-    /// Downloads a store theme into the library. With <paramref name="thenApply"/> the scan that follows goes on to the apply
-    /// question for that pack (<see cref="OfferApply"/>); a download that fails never does.
+    /// X on a store card: downloads the theme into the library, or, while the app is busy (another download, a list load, an
+    /// apply, a scan…) or other downloads wait already, puts it at the end of the download queue (<see cref="StartQueuedDownload"/>
+    /// runs them one after another). A theme that waits or downloads already is not queued twice. A download pressed while list
+    /// pictures load stops the pictures and runs as soon as the one on its way is in; the others follow it. With
+    /// <paramref name="thenApply"/> the scan that follows goes on to the apply question for that pack (<see cref="OfferApply"/>);
+    /// a download that fails never does.
     /// </summary>
     private void StartCommunityDownload(CommunityTheme theme, bool thenApply = false)
     {
+        if (_downloadQueue.Contains(theme.Id))
+        {
+            _renderer.Notify("“" + theme.Name + "” is already queued", NoticeLevel.Info);
+            return;
+        }
+        // Not busy and nothing waiting: it starts at once, as it always did.
+        if (!_busy && _downloadQueue.Count == 0)
+        {
+            RunCommunityDownload(theme, thenApply);
+            return;
+        }
+        _downloadQueue.Enqueue(theme, thenApply);
+        _renderer.Notify("Queued “" + theme.Name + "” · " + _downloadQueue.Count + " waiting", NoticeLevel.Info);
+        if (!_busy) return;   // held back by the apply question: OnFrame starts it when that is answered
+        // The pictures of a list hold the worker for a long time: they stop after the one on its way, and the job that ends them
+        // starts the first download of the queue (a like queued already runs first, then this).
+        if (_listLoading && _queuedJob is null)
+        {
+            _queuedJob = () => StartQueuedDownload();
+            _stopList = true;
+        }
+        else if (_avatarListLoading) _stopAvatarList = true;
+    }
+
+    /// <summary>
+    /// Starts the oldest queued download when the app is idle; false when nothing started. It runs from the end of every store
+    /// job and from OnFrame, before the list's paging and pictures, so the downloads follow each other with nothing in between.
+    /// A theme list may be reloaded meanwhile: the queue holds the store's records. While the question to apply a pack is open,
+    /// the next download waits for the answer (an apply refused with "Please wait" while a download runs would be the worse).
+    /// "Download and apply" asks to apply only when no other download waits behind it: the run's last pack is the one to apply,
+    /// and one question for it is simpler than a question for every pack. Without a store address nothing can run, so the queue
+    /// is dropped.
+    /// </summary>
+    private bool StartQueuedDownload()
+    {
+        if (_busy || _downloadQueue.Count == 0) return false;
+        if (_browser.Dialog is DialogKind.ApplyParts or DialogKind.ApplyScope) return false;
+        _downloadQueue.TryDequeue(out CommunityTheme theme, out bool thenApply);
+        if (RunCommunityDownload(theme, thenApply)) return true;
+        _downloadQueue.Finish();
+        _downloadQueue.Clear();
+        return false;
+    }
+
+    /// <summary>Downloads one store theme now (the app is idle). Returns whether the job started.</summary>
+    private bool RunCommunityDownload(CommunityTheme theme, bool thenApply)
+    {
         // The pack an earlier download of this theme stored; an update replaces it in the library.
         string? previous = _downloads.TryGetValue(theme.Id, out string? recorded) ? recorded : null;
-        StartCommunityWork("Downloading “" + theme.Name + "”…", http =>
+        string waiting = _downloadQueue.Count > 0 ? " · " + _downloadQueue.Count + " waiting" : "";
+        bool started = StartCommunityWork("Downloading “" + theme.Name + "”…" + waiting, http =>
         {
             HttpResponse answer = http.GetWithRetry(theme.DownloadUrl);
             if (!answer.IsSuccess) return new StoreResult("Download failed (" + answer.StatusCode + ").", NoticeLevel.Error);
@@ -1585,7 +1652,7 @@ internal sealed class ThemeApp : ProsperoApp
             _results.Post(() =>
             {
                 _downloads[theme.Id] = digest;
-                if (thenApply) _applyAfterScan = digest;
+                if (thenApply && _downloadQueue.Count == 0) _applyAfterScan = digest;
                 try { AppData.Files.WriteAllText(CommunityList.DownloadsPath, CommunityList.SerializeDownloads(_downloads)); }
                 catch { /* the badge lasts until the app quits */ }
                 // The store counted this download; show it without reloading the list.
@@ -1594,6 +1661,9 @@ internal sealed class ThemeApp : ProsperoApp
                 if (i >= 0) updated[i] = updated[i] with { Downloads = updated[i].Downloads + 1 };
                 _community = updated;
                 _renderer.Community = updated;
+                // The card says "In library" at once: the scan that makes it official waits until the queue is through.
+                _renderer.CommunityInLibrary = new HashSet<string>(_renderer.CommunityInLibrary, StringComparer.Ordinal) { theme.Id };
+                _renderer.CommunityUpdates = new HashSet<string>(_renderer.CommunityUpdates.Where(id => id != theme.Id), StringComparer.Ordinal);
                 _rescanAfterWork = true;
             });
             if (replaced)
@@ -1602,7 +1672,19 @@ internal sealed class ThemeApp : ProsperoApp
             return added
                 ? new StoreResult("“" + theme.Name + "” is now in your library.", NoticeLevel.Success)
                 : new StoreResult("“" + theme.Name + "” is already in your library.", NoticeLevel.Info);
+        }, finished: result =>
+        {
+            _downloadQueue.Finish();
+            if (result.Level == NoticeLevel.Error) _downloadFailures++;
+            if (_downloadQueue.Count > 0) return;
+            // The last of a run: the notice of an earlier failure was replaced by the next "Downloading…", so it is said here.
+            int earlier = result.Level == NoticeLevel.Error ? _downloadFailures - 1 : _downloadFailures;
+            _downloadFailures = 0;
+            if (earlier > 0)
+                _renderer.Notify(result.Message + " " + earlier + (earlier == 1 ? " earlier download" : " earlier downloads") + " failed.", NoticeLevel.Error);
         });
+        if (started) _downloadQueue.Begin(theme.Id);
+        return started;
     }
 
     /// <summary>Marks the store themes whose pack is in the library (after a scan, a list load or a download).</summary>
@@ -1730,6 +1812,8 @@ internal sealed class ThemeApp : ProsperoApp
                     next();
                     return;
                 }
+                // A theme download queued on the Themes tab goes before that tab's list goes on.
+                if (StartQueuedDownload()) return;
                 // The Themes tab's list may have been stopped for this job; it goes on now.
                 if (_reloadList) StartCommunityList();
                 else if (_previewsMissing) StartCommunityPreviews();

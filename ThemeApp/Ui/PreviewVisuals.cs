@@ -87,8 +87,9 @@ public sealed class PreviewVisuals : IDisposable
     /// <summary>Tile art is 128 px square; control-centre icons 64 px.</summary>
     public const int TileSize = 128, GlyphSize = 64;
     /// <summary>
-    /// Pictures kept at once: the cover, which is never the one to go (it is the only picture made on the frame thread, and
-    /// every system tile comes back to it), and four others, the least recently used of which makes room for a new one.
+    /// Pictures kept at once: the cover, which is never the one to go (a quick one is made on the frame thread and a smooth
+    /// one replaces it, and every system tile comes back to it), and four others, the least recently used of which makes
+    /// room for a new one.
     /// </summary>
     public const int MaxPictures = 5;
 

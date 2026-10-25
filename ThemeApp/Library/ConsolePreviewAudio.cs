@@ -6,13 +6,16 @@ using SharpProspero.Audio;
 using SharpProspero.Interop.Audio;
 using SharpProspero.Interop.Sysmodule;
 using SharpProspero.Modules;
+using ProsperoThemes.Shared;
 
 namespace ProsperoThemes.App.Library;
 
 /// <summary>
 /// The sound of the preview on the console: the SDK's <see cref="AudioOutDevice"/> (libSceAudioOut) fed by an
 /// <see cref="AudioMixer"/> for the UI clips and another for the music, with the MP3 excerpt decoded by
-/// <see cref="AudioDecoder"/> (libSceAudiodec, whose module is loaded through the sysmodule service first).
+/// <see cref="AudioDecoder"/> (libSceAudiodec, whose module is loaded through the sysmodule service first). A theme's
+/// own home music (ATRAC9) is decoded by the C# codec instead (<see cref="Atrac9Codec.DecodeStereo"/>, its first thirty
+/// seconds): no further native call, and the same output loop.
 /// </summary>
 /// <remarks>
 /// Nothing here runs on the frame thread but a lock-guarded queue write. The output port is opened by the audio thread
@@ -25,7 +28,7 @@ namespace ProsperoThemes.App.Library;
 /// </remarks>
 public sealed class ConsolePreviewAudio : IPreviewAudio
 {
-    private const int SampleRate = 48000, Grain = 512, MaxMusicSeconds = 90;
+    private const int SampleRate = 48000, Grain = 512, MaxMusicSeconds = 90, MaxAtrac9Seconds = 30;
     private const float ClipVolume = 0.9f, MusicVolume = 0.6f;
     // How long the port stays open after the preview closed, for the clips still playing (the back clip of leaving).
     private const long CloseGraceMs = 1500;
@@ -41,6 +44,9 @@ public sealed class ConsolePreviewAudio : IPreviewAudio
     private bool _closeRequested, _failed;
     private MusicState _music;
     private int _musicGeneration;
+    // The PCM of the last music decoded and the bytes it came from, so that Square again does not decode it again; dropped on Close.
+    private byte[]? _decodedFrom;
+    private PcmAudio _decoded;
 
     public bool MusicPlaying
     {
@@ -68,9 +74,14 @@ public sealed class ConsolePreviewAudio : IPreviewAudio
         }
     }
 
-    public bool ToggleMusic(byte[] mp3)
+    public bool ToggleMusic(byte[] mp3) => Toggle(mp3, atrac9: false);
+
+    public bool ToggleAtrac9Music(byte[] at9) => Toggle(at9, atrac9: true);
+
+    private bool Toggle(byte[] data, bool atrac9)
     {
         int generation;
+        PcmAudio? cached = null;
         lock (_gate)
         {
             if (_music != MusicState.Off)
@@ -83,8 +94,9 @@ public sealed class ConsolePreviewAudio : IPreviewAudio
             if (_failed) return false;
             _music = MusicState.Decoding;
             generation = ++_musicGeneration;
+            if (ReferenceEquals(_decodedFrom, data)) cached = _decoded;
         }
-        new Thread(() => DecodeAndPlay(mp3, generation)) { IsBackground = true, Name = "PreviewMusic" }.Start();
+        new Thread(() => DecodeAndPlay(data, atrac9, cached, generation)) { IsBackground = true, Name = "PreviewMusic" }.Start();
         return true;
     }
 
@@ -99,6 +111,8 @@ public sealed class ConsolePreviewAudio : IPreviewAudio
                 _commands.Enqueue(new Command(Kind.StopMusic, default));
             }
             _closeRequested = true;
+            _decodedFrom = null;
+            _decoded = default;
         }
     }
 
@@ -113,6 +127,8 @@ public sealed class ConsolePreviewAudio : IPreviewAudio
             _commands.Clear();
             _commands.Enqueue(new Command(Kind.StopMusic, default));
             _closeRequested = true;
+            _decodedFrom = null;
+            _decoded = default;
             _clips = new Dictionary<PreviewSound, PcmAudio>();
         }
         thread?.Join(3000);
@@ -127,14 +143,22 @@ public sealed class ConsolePreviewAudio : IPreviewAudio
         _thread.Start();
     }
 
-    private void DecodeAndPlay(byte[] mp3, int generation)
+    private void DecodeAndPlay(byte[] data, bool atrac9, PcmAudio? cached, int generation)
     {
-        PcmAudio? pcm = null;
-        try { pcm = DecodeMp3(mp3); }
-        catch { /* silent */ }
+        PcmAudio? pcm = cached;
+        if (pcm is null)
+        {
+            try { pcm = atrac9 ? DecodeAtrac9(data) : DecodeMp3(data); }
+            catch { /* silent */ }
+        }
         lock (_gate)
         {
             if (generation != _musicGeneration) return;
+            if (cached is null && pcm is { } decoded)
+            {
+                _decodedFrom = data;
+                _decoded = decoded;
+            }
             if (pcm is not { } audio || _failed)
             {
                 _music = MusicState.Off;
@@ -208,6 +232,15 @@ public sealed class ConsolePreviewAudio : IPreviewAudio
             try { device?.Dispose(); }
             catch { /* the port is gone either way */ }
         }
+    }
+
+    // The first thirty seconds of the theme's home music as 48 kHz stereo PCM, or null when the file cannot be decoded.
+    private static PcmAudio? DecodeAtrac9(byte[] at9)
+    {
+        short[] samples = Atrac9Codec.DecodeStereo(at9, MaxAtrac9Seconds, out int rate);
+        if (samples.Length < 2 * 1024) return null;
+        var pcm = new PcmAudio(samples, rate, 2);
+        return rate == SampleRate ? pcm : AudioClip.Resample(pcm, SampleRate);
     }
 
     // The whole excerpt as 48 kHz PCM, or null when it cannot be decoded. The decoder reports no rate or channel count for

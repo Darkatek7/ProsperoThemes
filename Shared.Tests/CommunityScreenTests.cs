@@ -655,8 +655,60 @@ public unsafe class CommunityScreenTests
         screen.Renderer.CommunityLiked = new HashSet<string> { "id1" };
         screen.Renderer.CommunityUpdates = new HashSet<string> { "id2" };
         screen.Renderer.CommunityInLibrary = new HashSet<string> { "id3" };
+        screen.Renderer.CommunityQueued = new HashSet<string> { "id4" };
+        screen.Renderer.CommunityDownloading = "id5";
         screen.Renderer.CommunityListSort = 0;
         Assert.True(Steady(screen) <= baseline, "the community grid allocates in a steady frame");
+    }
+
+    [Fact]
+    public void A_queued_theme_and_the_one_downloading_show_their_state_on_the_card()
+    {
+        using var screen = new Screen(4);
+        var queue = new DownloadQueue<CommunityTheme>(t => t.Id);
+        screen.Renderer.CommunityQueued = queue.PendingIds;   // the app hands in the queue's live set
+        Surface s = screen.Settle();
+        // The badge corner of a card: the state of the pack sits at the right of the picture.
+        long Corner(int card)
+        {
+            long hash = 17;
+            for (int y = ThemeRenderer.CommunityGridTop + 14; y < ThemeRenderer.CommunityGridTop + 54; y++)
+                for (int x = CardX(card) + ThemeRenderer.CommunityCardW - 220; x < CardX(card) + ThemeRenderer.CommunityCardW - 14; x++)
+                    hash = unchecked(hash * 31 + Px(s, x, y));
+            return hash;
+        }
+        long plain = Corner(1), neighbour = Corner(0);
+        int bakes = screen.Renderer.CommunityBakes;
+
+        queue.Enqueue(screen.Items[1]);
+        s = screen.Settle();
+        long queued = Corner(1);
+        Assert.NotEqual(plain, queued);
+        Assert.Equal(neighbour, Corner(0));
+        Assert.Equal(bakes + 1, screen.Renderer.CommunityBakes);   // only the card that changed is made again
+
+        // It is taken from the queue and downloads: another badge.
+        queue.TryDequeue(out _, out _);
+        screen.Renderer.CommunityDownloading = queue.ActiveId;
+        s = screen.Settle();
+        long downloading = Corner(1);
+        Assert.NotEqual(plain, downloading);
+        Assert.NotEqual(queued, downloading);
+
+        // Done: the card is as it was (the library badge comes with the scan).
+        queue.Finish();
+        screen.Renderer.CommunityDownloading = queue.ActiveId;
+        s = screen.Settle();
+        Assert.Equal(plain, Corner(1));
+
+        // A queued update shows "Queued" in place of "Update".
+        screen.Renderer.CommunityUpdates = new HashSet<string> { "id1" };
+        s = screen.Settle();
+        long update = Corner(1);
+        queue.Enqueue(screen.Items[1]);
+        s = screen.Settle();
+        Assert.NotEqual(update, Corner(1));
+        Assert.Equal(queued, Corner(1));
     }
 
     [Fact]
