@@ -46,6 +46,12 @@ public interface IDeviceFiles
 
     /// <summary><see cref="WriteAllBytes"/> from any memory, such as a <see cref="FileBytes"/>. By default through a managed copy.</summary>
     void WriteFile(string path, ReadOnlySpan<byte> data) => WriteAllBytes(path, data.ToArray());
+
+    /// <summary>
+    /// Bytes free for a new file next to <paramref name="path"/> (on its filesystem), or -1 when unknown. By default
+    /// unknown: then nothing is checked.
+    /// </summary>
+    long FreeBytes(string path) => -1;
 }
 
 /// <summary>
@@ -266,6 +272,8 @@ public sealed class ThemeApplier
             }
             if (plans.Count == 0)
                 return Fail($"nothing in this theme fits this console, so nothing was written. Skipped: {string.Join("; ", Skipped)}");
+            if (Unroomy(pack, plans) is { } room)
+                return Fail(room + ". Nothing was written.");
 
             try
             {
@@ -389,6 +397,29 @@ public sealed class ThemeApplier
             _unpacked = null;
             if (containers is not null) Release(containers);
         }
+    }
+
+    /// <summary>
+    /// Why a file of <paramref name="plans"/> would not fit next to its old one, or null. Each write needs room for its
+    /// whole new file before the old one goes, so this catches what can never fit (a 106 MB icon container on a full
+    /// /system_ex) before anything is written; the check before each write (<see cref="EnsureRoom"/>) stays the rule.
+    /// </summary>
+    private string? Unroomy(ThemePack pack, List<Plan> plans)
+    {
+        var freeIn = new Dictionary<string, long>(StringComparer.Ordinal);   // one question per folder
+        foreach (IGrouping<string, Plan> file in plans.GroupBy(p => p.Device, StringComparer.Ordinal))
+        {
+            Plan plan = file.First();
+            // A container patch and an unpacked background keep the console file's size; other payloads are their own.
+            long bytes = plan.Unpack || file.Any(p => ThemePack.IsPatchLayer(p.Target.Layer))
+                ? _files.Length(plan.Device)
+                : pack.Payload(plan.Target).Length;
+            string folder = ParentOf(plan.Device);
+            if (!freeIn.TryGetValue(folder, out long free)) freeIn[folder] = free = _files.FreeBytes(plan.Device);
+            if (free >= 0 && free < bytes + SpaceMargin)
+                return NoRoom(plan.Device, bytes, free);
+        }
+        return null;
     }
 
     private static void Release(Dictionary<string, FileBytes> containers)
@@ -1290,14 +1321,55 @@ public sealed class ThemeApplier
     private void WriteVerified(string device, ReadOnlySpan<byte> data, string expectedSha256, Action? renamed = null)
     {
         string tmp = device + ".tmp";
-        _files.WriteFile(tmp, data);
-        _files.Move(tmp, device);
+        // A leftover of a write that failed before (issue #13: half an icon container filled /system_ex), then the room
+        // for the whole new file next to the old one: the rename frees the old one only once the new one is complete.
+        RemoveTemporary(tmp);
+        EnsureRoom(device, data.Length);
+        try
+        {
+            _files.WriteFile(tmp, data);
+            _files.Move(tmp, device);
+        }
+        catch
+        {
+            RemoveTemporary(tmp);
+            throw;
+        }
         renamed?.Invoke();
 
         string actual = _files.Hash(device);
         if (!string.Equals(actual, expectedSha256, StringComparison.Ordinal))
             throw new InvalidOperationException($"verification failed for {device}: read back {actual}, expected {expectedSha256}");
         RecordWritten(device, actual);
+    }
+
+    /// <summary>Room a write keeps free on top of the file itself.</summary>
+    public const long SpaceMargin = 1024 * 1024;
+
+    /// <summary>Throws when the filesystem of <paramref name="device"/> has no room for a new file of <paramref name="bytes"/>.</summary>
+    private void EnsureRoom(string device, long bytes)
+    {
+        long free = _files.FreeBytes(device);
+        if (free >= 0 && free < bytes + SpaceMargin)
+            throw new IOException(NoRoom(device, bytes, free));
+    }
+
+    private static string NoRoom(string device, long bytes, long free) =>
+        $"not enough space for {device}: {Mib(bytes + SpaceMargin)} MiB needed, {Mib(free)} MiB free";
+
+    private static string Mib(long bytes) => (bytes / (1024.0 * 1024)).ToString("0.0", CultureInfo.InvariantCulture);
+
+    /// <summary>Deletes a <c>.tmp</c> a write left; a failure here never hides the error that left it.</summary>
+    private void RemoveTemporary(string tmp)
+    {
+        try
+        {
+            if (_files.Exists(tmp)) _files.DeleteFile(tmp);
+        }
+        catch
+        {
+            // Still there: the next write of this file tries again.
+        }
     }
 
     private Dictionary<string, string> Written() => _written ??= ReadRecord(WrittenRecord);

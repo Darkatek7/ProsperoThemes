@@ -67,6 +67,7 @@ public sealed class PreviewModel
         ("NPXS40054", "Music Home", "rnps/NPXS40016/appdb/NPXS40054/icon0.png", PreviewTab.Media, 5),
         ("NPXS40056", "All Apps", "rnps/NPXS40016/appdb/NPXS40056/icon0.png", PreviewTab.Media, 4),
         ("NPXS40305", "Live TV on PS5", "rnps/NPXS40016/appdb/NPXS40305/icon0.png", PreviewTab.Media, 3),
+        ("NPXS40075", "Media Gallery", "rnps/NPXS40075/appdb/default/icon0.png", PreviewTab.Media, 1),
     ];
 
     /// <summary>The media hub: its tiles sit in the Media section.</summary>

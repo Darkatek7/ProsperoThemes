@@ -36,6 +36,7 @@ public static class FirmwareReport
         "rnps/NPXS40016/appdb/NPXS40054/icon0.png",
         "rnps/NPXS40016/appdb/NPXS40056/icon0.png",
         "rnps/NPXS40016/appdb/NPXS40305/icon0.png",
+        "rnps/NPXS40075/appdb/default/icon0.png",
         "rnps/NPXS40063/appdb/default/icon0.png",
     ];
 

@@ -23,7 +23,10 @@
 //   - AVATARS (v9). Inside /system_data/priv/cache/profile/0x<8 hex>/ the avatar and picture files only (HelperPaths.IsAvatarPath;
 //     never version.json): STAT, READ, LIST, WRITE (.tmp, at most 1 MiB), RENAME of that .tmp, and DELETE. LIST of the profile
 //     folder itself reports only its sub-folder names, so the app can find the 0x... folder.
-//   - NARROW COMMAND SET. PING, REMOUNT, STAT, READ, WRITE, RENAME, LIST, MKDIR, UNLINK, DELETE, RESTARTSHELL, HEN, QUIT.
+//   - LEFTOVERS AND SPACE (v10). UNLINK also removes a "<file>.tmp" anywhere a WRITE may create one (a write that failed
+//     half-way, issue #13), never any other file outside the app's folder. FREE answers the free space of the filesystem
+//     that holds a confined path (statfs of its folder, in KiB), so the app can refuse a write that would not fit.
+//   - NARROW COMMAND SET. PING, REMOUNT, STAT, FREE, READ, WRITE, RENAME, LIST, MKDIR, UNLINK, DELETE, RESTARTSHELL, HEN, QUIT.
 //     There is no RMDIR, SOTEST, KILL or any other diagnostic command. HEN (v9) only says which HEN runs (one fixed stat).
 //   - ONE PROCESS. RESTARTSHELL ends SceShellUI (the home screen) and nothing else, so it reloads the system
 //     icons, tile icons and sounds a theme wrote; the system starts it again within about a second. It
@@ -87,7 +90,7 @@ internal static unsafe class Program
     private const int SysNmount = 378;
 
     // Build tag announced on PING, so a client can tell which helper revision it is talking to.
-    private const int BuildTag = 9;
+    private const int BuildTag = 10;
 
     // /system_ex is remounted once per boot. A second MNT_UPDATE on the already writable mount was the
     // last thing before a console hang (2026-10-13), so it is not repeated: not within this helper's
@@ -204,6 +207,24 @@ internal static unsafe class Program
                 continue;
             }
 
+            // FREE: the space left (KiB, for an unprivileged writer) on the filesystem of a confined path's folder.
+            if (StartsWith(line, "FREE "))
+            {
+                byte* path = AllowedPathFrom(line + 5, scratch);
+                if (path == null) { Send(client, "ERR badpath\n"u8); continue; }
+                int slash = Length(path) - 1;
+                while (slash > 0 && path[slash] != (byte)'/') slash--;
+                if (slash > 0) path[slash] = 0;
+                FreeBsdStatfs info = default;
+                int rc = PayloadMount.statfs(path, &info);
+                if (rc != 0) { SendResult(client, "FREE", "rc="u8, rc); continue; }
+                long kib = info.f_bavail <= 0 ? 0 : (long)((ulong)info.f_bavail * info.f_bsize / 1024);
+                Send(client, "OK free="u8);
+                SendInt(client, kib > int.MaxValue ? int.MaxValue : (int)kib);
+                Send(client, "\n"u8);
+                continue;
+            }
+
             if (StartsWith(line, "READ "))
             {
                 byte* path = AllowedPathFrom(line + 5, scratch);
@@ -262,7 +283,7 @@ internal static unsafe class Program
                 continue;
             }
 
-            // MKDIR and UNLINK: only in the app's own folder (MKDIR also for the folder itself).
+            // MKDIR: only in the app's own folder (also the folder itself). UNLINK: there, and a ".tmp" anywhere a WRITE may make one.
             if (StartsWith(line, "MKDIR "))
             {
                 byte* path = PathFrom(line + 6, scratch);
@@ -282,7 +303,7 @@ internal static unsafe class Program
             if (StartsWith(line, "UNLINK "))
             {
                 byte* path = PathFrom(line + 7, scratch);
-                if (path == null || !IsDataPath(path)) { Send(client, "ERR badpath\n"u8); continue; }
+                if (path == null || !(IsDataPath(path) || IsAllowed(path) && EndsWithTmp(path))) { Send(client, "ERR badpath\n"u8); continue; }
                 int rc = KernelFile.sceKernelUnlink(path);
                 if (rc != 0)
                     rc = (int)PayloadCrt.Syscall(PayloadCrt.SYS_unlink, (long)(nint)path);

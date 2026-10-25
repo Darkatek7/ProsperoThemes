@@ -63,6 +63,12 @@ launch evidence are recorded separately below.
   (made from another tool's theme, as on a 12.40 console whose 13 tile backgrounds were one picture) is never written
   back nor recorded as an original, and a first apply keeps no backup of such a live file; both are named. The System tab shows the firmware
   (`SystemInfo.SystemSoftwareVersion`, "13.000.040" on the test console); `state.json` records it.
+- **Room before each write** (issue #13, helper v10): every console file is written as `<file>.tmp` and renamed over the
+  old one, so its filesystem needs room for the whole new file first. A 12.40 console with a full `/system_ex` was left
+  with half an icon container (`Sce.PlayStation.PUI_UI3.rco.tmp`, 52 MB of 106 MB) that the next boot kept. Now the app
+  asks ThemeHelper for the free space (`FREE`) before an apply writes anything and again before each write, refuses with
+  "not enough space for <file>: X MiB needed, Y MiB free" (1 MiB margin), deletes a `.tmp` left by an earlier write
+  first, and deletes its own `.tmp` when a write fails (`UNLINK` of a `.tmp`).
 - **Originals from USB** (issue #13): the USB import also reads `prospero-themes/originals/<logical path>` (the same tree as
   `backup/original` on the same firmware) and takes a file as the backup only when the catalog lists it with that size and
   SHA-256, and it resolves to a console file (`ThemeApplier.ImportOriginal`). A different backup moves to

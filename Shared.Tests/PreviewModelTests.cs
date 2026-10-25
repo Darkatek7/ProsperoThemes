@@ -24,11 +24,12 @@ public class PreviewModelTests
         PreviewModel model = PreviewModel.Of(Manifest());
 
         Assert.Equal(["PlayStation Store", "PlayStation Plus", "Game Library", "App Library", "Welcome", "Demo game", "Demo racing game", "Demo adventure"], Names(model.Games));
-        Assert.Equal(["Discover", "Music Home", "All Apps", "Live TV on PS5", "Prospero Themes", "Demo video app", "Demo music app"], Names(model.Media));
+        Assert.Equal(["Discover", "Music Home", "All Apps", "Live TV on PS5", "Media Gallery", "Prospero Themes", "Demo video app", "Demo music app"], Names(model.Media));
+        Assert.Contains(model.Media, t => t.Id == "NPXS40075" && t.Name == "Media Gallery" && t.Kind == PreviewTileKind.System);
         Assert.All(model.Games.Concat(model.Media).Where(t => t.Kind == PreviewTileKind.System), t => Assert.Null(t.IconFile));
         Assert.All(model.Games.Concat(model.Media).Where(t => t.Kind == PreviewTileKind.System), t => Assert.StartsWith("NPXS", t.Id));
         Assert.Equal(8, model.Tiles(PreviewTab.Games).Count);
-        Assert.Equal(7, model.Tiles(PreviewTab.Media).Count);
+        Assert.Equal(8, model.Tiles(PreviewTab.Media).Count);
         Assert.Null(model.MusicFile);
         Assert.Null(model.AllAppsFile);
         Assert.Empty(model.SoundFiles);
@@ -67,8 +68,8 @@ public class PreviewModelTests
         Assert.Equal(("NPXS40099", "NPXS40099", PreviewTileKind.System), (added.Id, added.Name, added.Kind));
         Assert.Equal("assets/again.png", added.IconFile);   // the later target of a path wins, as in the applier
         Assert.Equal(1, model.Games.Count(t => t.Id == "NPXS40099"));
-        Assert.Equal("NPXS40777", model.Media[4].Id);
-        Assert.Equal("assets/hub.png", model.Media[4].IconFile);
+        Assert.Equal("NPXS40777", model.Media[5].Id);
+        Assert.Equal("assets/hub.png", model.Media[5].IconFile);
         Assert.Equal("Demo game", model.Games[6].Name);   // the stand-ins follow
     }
 

@@ -44,7 +44,7 @@ Install it from the homebrew catalog ([homebrew.page](https://homebrew.page/), P
 3. ShadowMountPlus registers it, and Prospero Themes appears on the home screen.
 
 Your library, backups and settings live in `/data/prospero-themes/`, so updating the app keeps them. A release with
-a new ThemeHelper (01.000.022 is one) needs one console restart after the update, because a running payload cannot
+a new ThemeHelper (01.000.031 is the latest) needs one console restart after the update, because a running payload cannot
 be replaced; the app says so when it finds the old helper.
 
 ## Update in the app
@@ -102,6 +102,11 @@ drive under `prospero-themes/originals/`, in the same folders (`prospero-themes/
 USB import. The app takes a file only when its size and SHA-256 are exactly those of your firmware's original (from the
 bundled catalog); anything else is skipped and counted. An imported original replaces the backup (the old one is kept
 under `backup/replaced/`), and Restore defaults then puts it back. The app does not provide these files.
+
+**Room first.** Each file is written next to the old one as a `.tmp` file and then renamed over it, so its folder needs
+room for the whole new file. Before an apply writes anything, the app checks the free space for every file it will
+write; when it is short it stops with "not enough space for <file>: X MiB needed, Y MiB free. Nothing was written."
+A `.tmp` left by an earlier write that failed is deleted first, and a write that fails deletes its own `.tmp`.
 
 ## Other firmware versions
 

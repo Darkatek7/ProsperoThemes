@@ -36,6 +36,8 @@ research payload (not part of the public repository), with the same low-level id
   - `PING` returns `OK PONG 9071 v<tag>`, the build tag (`BuildTag` in `Program.cs`, `ExpectedTag` in the app).
   - `REMOUNT` remounts `/system_ex` read-write (exfatfs, same options as DevProbe). `EBUSY` counts as success.
   - `STAT <path>` returns `OK size=<n>`.
+  - `FREE <path>` (v10; any confined path) returns `OK free=<KiB>`, the space left for an unprivileged writer on the
+    filesystem of the path's folder (`statfs`), or `FREE rc=<n>`. The app checks it before each write (issue #13).
   - `READ <path>` returns `OK <size>` then the raw bytes, streamed in 32 KiB chunks.
   - `WRITE <path>.tmp <len>` followed by `<len>` raw bytes (at most 160 MiB: the icon container is about
     100 MB before firmware 13.00). In a theme root only `.tmp` paths are accepted. Streamed in 32 KiB chunks. Replies
@@ -49,7 +51,8 @@ research payload (not part of the public repository), with the same low-level id
     `ERR opendir`.
   - `MKDIR <path>` (the app's folder or a folder in it) replies `MKDIR rc=<n>`; "already exists" is
     `0x80020011` as a signed number.
-  - `UNLINK <path>` (a file in the app's folder) replies `UNLINK rc=<n>`.
+  - `UNLINK <path>` (a file in the app's folder, or since v10 a `<file>.tmp` anywhere `WRITE` may create one: the
+    leftover of a write that failed half-way) replies `UNLINK rc=<n>`.
   - `DELETE <path>` (v9; an avatar file or its `.tmp`, nothing else) replies `DELETE rc=<n>`.
   - `RESTARTSHELL <n>` (v8), then `n` lines `<backup> <target>` (at most 64): ends `SceShellUI`, the home screen,
     and nothing else, so it reads the system icons, tile icons and UI sounds again. Each backup must lie in the app's

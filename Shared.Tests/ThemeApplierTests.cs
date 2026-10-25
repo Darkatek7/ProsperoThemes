@@ -659,6 +659,158 @@ public class ThemeApplierTests
         Assert.Equal(live2, fake.Files[Dev2]);
     }
 
+    // ---- free space (issue #13) ---------------------------------------------
+
+    private static IEnumerable<string> Temporaries(FakeDeviceFiles fake) =>
+        fake.Files.Keys.Where(k => k.EndsWith(".tmp", StringComparison.Ordinal));
+
+    private static Dictionary<string, byte[]> SystemSide(FakeDeviceFiles fake) =>
+        fake.Files.Where(f => f.Key.StartsWith("/system_ex/", StringComparison.Ordinal))
+            .ToDictionary(f => f.Key, f => (byte[])f.Value.Clone(), StringComparer.Ordinal);
+
+    [Fact]
+    public void A_write_that_fails_half_way_leaves_no_temporary_file_and_is_rolled_back()
+    {
+        byte[] live1 = Live("one"), live2 = Live("two");
+        var fake = DeviceWithLive((Dev1, live1), (Dev2, live2));
+        fake.FailWriteTo = Dev2 + ".tmp";
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, Zst("one")), (Path2, Zst("two"))));
+
+        Assert.False(result.Success);
+        Assert.Contains("no space left on device", result.Message);
+        Assert.Contains("Rolled back 1 target(s)", result.Message);
+        Assert.Contains(Dev2 + ".tmp", fake.Writes);   // the half file was written, then removed
+        Assert.Empty(Temporaries(fake));
+        Assert.Equal(live1, fake.Files[Dev1]);
+        Assert.Equal(live2, fake.Files[Dev2]);
+        Assert.False(fake.Files.ContainsKey(StatePath));
+    }
+
+    [Fact]
+    public void A_single_write_that_fails_half_way_keeps_the_old_file_and_leaves_no_temporary_file()
+    {
+        byte[] live = Live("one");
+        var fake = DeviceWithLive((Dev1, live));
+        fake.FailWriteTo = Dev1 + ".tmp";
+
+        ApplyResult result = Applier(fake).Apply(SingleTargetPack());
+
+        Assert.False(result.Success);
+        Assert.Contains("no space left on device", result.Message);
+        Assert.Contains("Nothing had been written yet", result.Message);
+        Assert.Empty(Temporaries(fake));
+        Assert.Equal(live, fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void A_temporary_file_an_earlier_failed_write_left_is_gone_after_a_successful_apply()
+    {
+        var fake = DeviceWithLive((Dev1, Live("one")));
+        fake.Files[Dev1 + ".tmp"] = new byte[1000];   // half a file from the earlier attempt
+
+        ApplyResult result = Applier(fake).Apply(SingleTargetPack());
+
+        Assert.True(result.Success, result.Message);
+        Assert.Contains(Dev1 + ".tmp", fake.Deleted);   // removed before the new write, not only replaced by it
+        Assert.Empty(Temporaries(fake));
+        Assert.Equal(Zst("one"), fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void A_target_that_cannot_fit_stops_the_apply_before_anything_is_written()
+    {
+        byte[] live = Live("one");
+        byte[] payload = Zst("one");
+        var fake = DeviceWithLive((Dev1, live));
+        fake.Free = payload.Length + ThemeApplier.SpaceMargin - 1;
+        Dictionary<string, byte[]> before = SystemSide(fake);
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, payload)));
+
+        Assert.False(result.Success);
+        Assert.Contains("not enough space", result.Message);
+        Assert.Contains(Dev1, result.Message);
+        Assert.Contains("Nothing was written", result.Message);
+        Assert.Equal(0, fake.Remounts);
+        Assert.DoesNotContain(fake.Writes, w => w.StartsWith("/system_ex/", StringComparison.Ordinal));
+        Assert.Empty(Temporaries(fake));
+        Assert.Equal(before.Keys.OrderBy(k => k, StringComparer.Ordinal), SystemSide(fake).Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Equal(live, fake.Files[Dev1]);
+        // The backup, made before the room is checked, is a copy of the file that is still live.
+        if (fake.Files.TryGetValue(Backup1, out byte[]? backup)) Assert.Equal(live, backup);
+        Assert.False(fake.Files.ContainsKey(StatePath));
+    }
+
+    [Fact]
+    public void A_second_target_that_cannot_fit_stops_the_apply_before_the_first_is_written()
+    {
+        byte[] live1 = Live("one"), live2 = Live("two");
+        byte[] big = new byte[3 * 1024 * 1024];
+        new byte[] { 0x28, 0xB5, 0x2F, 0xFD }.CopyTo(big, 0);
+        var fake = DeviceWithLive((Dev1, live1), (Dev2, live2));
+        fake.Free = 2 * 1024 * 1024;   // room for the small payload, not for the big one
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, Zst("one")), (Path2, big)));
+
+        Assert.False(result.Success);
+        Assert.Contains("not enough space for " + Dev2, result.Message);
+        Assert.Contains("Nothing was written", result.Message);
+        Assert.Equal(live1, fake.Files[Dev1]);
+        Assert.Equal(live2, fake.Files[Dev2]);
+        Assert.DoesNotContain(fake.Writes, w => w.StartsWith("/system_ex/", StringComparison.Ordinal));
+        Assert.Equal(0, fake.Remounts);
+    }
+
+    [Fact]
+    public void With_enough_free_space_the_apply_succeeds()
+    {
+        byte[] payload = Zst("one");
+        var fake = DeviceWithLive((Dev1, Live("one")));
+        fake.Free = payload.Length + ThemeApplier.SpaceMargin;   // exactly the room a write needs
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, payload)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(payload, fake.Files[Dev1]);
+        Assert.Empty(Temporaries(fake));
+    }
+
+    [Fact]
+    public void With_unknown_free_space_nothing_is_checked_and_the_apply_succeeds()
+    {
+        byte[] payload = Zst("one");
+        var fake = DeviceWithLive((Dev1, Live("one")));
+        Assert.Equal(-1, fake.Free);
+
+        ApplyResult result = Applier(fake).Apply(MakePack(null, (Path1, payload)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(payload, fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void RestoreOriginals_on_a_console_with_too_little_space_reports_the_file_and_leaves_no_temporary_file()
+    {
+        byte[] live = Live("one");
+        var fake = DeviceWithLive((Dev1, live));
+        ThemeApplier applier = Applier(fake);
+        Assert.True(applier.Apply(SingleTargetPack()).Success);
+        fake.Free = 1000;   // less than the margin alone
+
+        ApplyResult result = applier.RestoreOriginals();
+
+        Assert.False(result.Success);
+        Assert.Contains("not enough space", result.Message);
+        Assert.Contains(Dev1, result.Message);
+        Assert.Empty(Temporaries(fake));
+        Assert.Equal(Zst("one"), fake.Files[Dev1]);   // still the theme's file, whole
+
+        fake.Free = -1;
+        Assert.True(applier.RestoreOriginals().Success);
+        Assert.Equal(live, fake.Files[Dev1]);
+    }
+
     [Fact]
     public void Restore_puts_the_backup_bytes_back()
     {
@@ -1097,11 +1249,27 @@ public class ThemeApplierTests
         /// <summary>Writes to these paths throw, as the helper's refusal of a file over its write limit does.</summary>
         public HashSet<string> RefusedWrites { get; } = new(StringComparer.Ordinal);
 
+        /// <summary>Bytes free that <see cref="FreeBytes"/> reports for every path; -1 is unknown, then nothing is checked.</summary>
+        public long Free { get; set; } = -1;
+
+        /// <summary>A write to this path stores the first half of the data, then throws as a full disk does.</summary>
+        public string? FailWriteTo { get; set; }
+
+        /// <summary>Paths deleted with DeleteFile that existed, in order.</summary>
+        public List<string> Deleted { get; } = new();
+
+        public long FreeBytes(string path) => Free;
+
         public void WriteAllBytes(string path, byte[] data)
         {
             if (RefusedWrites.Contains(path))
                 throw new InvalidOperationException($"write {path} failed: refused");
             Writes.Add(path);
+            if (FailWriteTo == path)
+            {
+                Files[path] = data[..(data.Length / 2)];
+                throw new IOException("no space left on device");
+            }
             Files[path] = (byte[])data.Clone();
         }
 
@@ -1119,7 +1287,10 @@ public class ThemeApplierTests
             Files[to] = bytes;
         }
 
-        public void DeleteFile(string path) => Files.Remove(path);
+        public void DeleteFile(string path)
+        {
+            if (Files.Remove(path)) Deleted.Add(path);
+        }
 
         public void CreateDirectoryRecursive(string path)
         {

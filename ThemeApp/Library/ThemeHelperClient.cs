@@ -22,7 +22,7 @@ public static class ThemeHelperClient
     public const int Port = 9071;
     public const int LoaderPort = 9021;
     /// <summary>The build tag this app expects; ThemeHelper/Program.cs BuildTag.</summary>
-    public const int ExpectedTag = 9;
+    public const int ExpectedTag = 10;
     /// <summary>The start of the problem <see cref="EnsureRunning"/> reports when another build of the helper holds the port.</summary>
     public const string DifferentHelperPrefix = "A different theme helper is already running";
     public const string ElfPath = DeviceThemeLibrary.AssetRoot + "/ThemeHelper.elf";
@@ -283,6 +283,16 @@ public static class ThemeHelperClient
     }
 
     /// <summary>Deletes an avatar file (or its .tmp) in a profile folder; the helper refuses every other path (v9).</summary>
+    /// <summary>
+    /// Bytes free on the filesystem that holds <paramref name="path"/> (FREE, helper v10), or -1 when the helper cannot
+    /// say: then the caller writes without the check, as before.
+    /// </summary>
+    public static long Free(string path)
+    {
+        string reply = Request("FREE " + path, null, out _);
+        return reply.StartsWith("OK free=", StringComparison.Ordinal) && long.TryParse(reply.AsSpan(8), out long kib) ? kib * 1024 : -1;
+    }
+
     public static void Delete(string path)
     {
         string reply = Request("DELETE " + path, null, out _);
@@ -455,9 +465,14 @@ public sealed class HelperDeviceFiles : IDeviceFiles
 
     public void DeleteFile(string path)
     {
-        if (IsThemeRoot(path)) throw new InvalidOperationException("the theme helper does not delete files");
-        _local.DeleteFile(path);
+        // In a theme root only the leftover of a write (UNLINK of "<file>.tmp", helper v10); never a theme file itself.
+        if (IsThemeRoot(path) && !path.EndsWith(".tmp", StringComparison.Ordinal))
+            throw new InvalidOperationException("the theme helper does not delete files");
+        if (IsThemeRoot(path)) ThemeHelperClient.Unlink(path);
+        else _local.DeleteFile(path);
     }
+
+    public long FreeBytes(string path) => IsThemeRoot(path) ? ThemeHelperClient.Free(path) : -1;
 
     public void CreateDirectoryRecursive(string path)
     {
