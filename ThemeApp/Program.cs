@@ -631,7 +631,8 @@ internal sealed class ThemeApp : ProsperoApp
             case ThemeAction.PreviewMusic: _preview.ToggleMusic(); break;
             case ThemeAction.ImportUsb:
                 _avatarScanAfterWork = true;   // the import also takes avatars
-                StartWork(DeviceThemeLibrary.ImportUsb, announce: true);
+                StockCatalog stock = _stock;   // the import also takes this firmware's originals
+                StartWork(() => DeviceThemeLibrary.ImportUsb(stock), announce: true);
                 break;
             case ThemeAction.Reload:
                 _avatarScanAfterWork = true;

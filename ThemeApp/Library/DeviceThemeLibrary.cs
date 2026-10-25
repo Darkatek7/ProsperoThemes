@@ -55,10 +55,17 @@ public static class DeviceThemeLibrary
     }
 
     /// <summary>
-    /// Copies the theme packs on a connected USB drive into the library, and its avatar packs (<c>.p5avatar</c>) into the app's
-    /// avatars (<see cref="AvatarLibrary"/>).
+    /// Where a USB drive holds original system files: by logical path, the same tree as the app's own backups
+    /// (<see cref="ThemeApplier.BackupFolder"/>) on the same firmware.
     /// </summary>
-    public static LibrarySnapshot ImportUsb()
+    public const string OriginalsFolder = "prospero-themes/originals";
+
+    /// <summary>
+    /// Copies the theme packs on a connected USB drive into the library, its avatar packs (<c>.p5avatar</c>) into the app's
+    /// avatars (<see cref="AvatarLibrary"/>), and the original system files in <see cref="OriginalsFolder"/> that
+    /// <paramref name="stock"/> knows into the backups (<see cref="ImportOriginals"/>).
+    /// </summary>
+    public static LibrarySnapshot ImportUsb(StockCatalog stock)
     {
         int imported = 0, existing = 0, rejected = 0, found = 0, avatars = 0;
         string? lastError = null;
@@ -95,12 +102,56 @@ public static class DeviceThemeLibrary
             }
             if (found > MaxPacks) break;
         }
+        string? originals = ImportOriginals(stock);
         var snapshot = Scan();
-        string result = found == 0 ? "No theme packs or avatars found on a connected USB drive." :
+        string result = found == 0 ? originals is null ? "No theme packs or avatars found on a connected USB drive." : "" :
             $"{imported} imported · {existing} already in library · {rejected} skipped";
         if (avatars > 0) result += avatars == 1 ? " · 1 avatar imported" : $" · {avatars} avatars imported";
+        if (originals is not null) result += (result.Length > 0 ? " · " : "") + originals;
         if (lastError is not null) result += " · " + lastError;
         return snapshot with { Message = result };
+    }
+
+    /// <summary>
+    /// Takes the files in <see cref="OriginalsFolder"/> on the first USB drive that has one as the backups of the console's
+    /// files, through <see cref="ThemeApplier.ImportOriginal"/>: only a file <paramref name="stock"/> lists, with its size and
+    /// SHA-256, so nothing but this firmware's own file ever becomes an original. Restore defaults then puts them back.
+    /// Files are read one at a time, a large one outside the managed heap. Null when no drive has the folder.
+    /// </summary>
+    private static string? ImportOriginals(StockCatalog stock)
+    {
+        string? folder = null;
+        for (int usb = 0; usb < 8 && folder is null; usb++)
+            if (FileSystem.Exists($"/mnt/usb{usb}/{OriginalsFolder}")) folder = $"/mnt/usb{usb}/{OriginalsFolder}";
+        if (folder is null) return null;
+        if (stock.Count == 0) return "Originals skipped: the app has no catalog of this firmware to check them against.";
+        var applier = new ThemeApplier(Files, HelperDeviceFiles.UnixSeconds) { Stock = stock };
+        int imported = 0, there = 0, wrong = 0;
+        string? error = null;
+        foreach (string logical in stock.Paths)
+        {
+            string path = folder + "/" + logical;
+            if (!FileSystem.Exists(path)) continue;
+            try
+            {
+                long size = FileSystem.GetFileSize(path), expected = stock.StockBytes(logical);
+                if (expected > 0 && size != expected) { wrong++; continue; }
+                using FileBytes data = LargeFile.Read(path);
+                switch (applier.ImportOriginal(logical, data.Span))
+                {
+                    case ThemeApplier.OriginalImport.Imported: imported++; break;
+                    case ThemeApplier.OriginalImport.AlreadyThere: there++; break;
+                    default: wrong++; break;
+                }
+            }
+            catch (Exception ex) { error ??= logical.Split('/').Last() + ": " + ex.Message; }
+        }
+        if (imported + there + wrong == 0 && error is null) return "No originals of this firmware in " + OriginalsFolder + ".";
+        string result = $"{imported} original(s) imported";
+        if (there > 0) result += $" · {there} already there";
+        if (wrong > 0) result += $" · {wrong} not this firmware’s original";
+        if (error is not null) result += " · " + error;
+        return result;
     }
 
     /// <summary>

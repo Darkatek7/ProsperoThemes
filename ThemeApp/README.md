@@ -63,6 +63,13 @@ launch evidence are recorded separately below.
   (made from another tool's theme, as on a 12.40 console whose 13 tile backgrounds were one picture) is never written
   back nor recorded as an original, and a first apply keeps no backup of such a live file; both are named. The System tab shows the firmware
   (`SystemInfo.SystemSoftwareVersion`, "13.000.040" on the test console); `state.json` records it.
+- **Originals from USB** (issue #13): the USB import also reads `prospero-themes/originals/<logical path>` (the same tree as
+  `backup/original` on the same firmware) and takes a file as the backup only when the catalog lists it with that size and
+  SHA-256, and it resolves to a console file (`ThemeApplier.ImportOriginal`). A different backup moves to
+  `backup/replaced/<time>/`. A stock backup is then put back, and kept by an apply, whatever `backup/written.txt` says:
+  that record may predate it. Checked on 13.00 (2026-10-25): with themed backups of `bg_NPXS40053.dds.zst` and the 39 MB
+  icon container, Restore defaults left both themed; after the import ("2 original(s) imported") it wrote both back,
+  and the live hashes matched the catalog; a second import said "2 already there".
 - **Large files stay out of the managed heap:** the applier reads whole target files as `FileBytes`; from 16 MiB on
   (`LargeFile`) they sit in flexible memory. Before 13.00 the icon container is about 100 MB, and the 256 MiB heap could
   not take it: 12.40 failed with "preparing the backups failed, nothing was written: Arg_OutOfMemoryException" (issue

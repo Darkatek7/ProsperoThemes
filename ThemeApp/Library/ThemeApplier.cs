@@ -577,6 +577,41 @@ public sealed class ThemeApplier
         }
     }
 
+    /// <summary>What <see cref="ImportOriginal"/> did with a file.</summary>
+    public enum OriginalImport { Imported, AlreadyThere, NotListed, NotStock }
+
+    /// <summary>
+    /// Takes <paramref name="data"/> as the backup of <paramref name="logical"/> when it is this firmware's stock file: the
+    /// catalog (<see cref="Stock"/>) lists the path, the console has a file for it, and size and SHA-256 match. Then a later
+    /// Restore defaults puts it back, also where the app's own backup was made from a theme's file (one another tool, or
+    /// a theme before a factory reset, left on the console). A different backup is kept under <see cref="ReplacedFolder"/>.
+    /// Only the backup folder is written; the console's own files are left to the restore.
+    /// </summary>
+    public OriginalImport ImportOriginal(string logical, ReadOnlySpan<byte> data)
+    {
+        if (!Stock.TryStock(logical, out string stock) || !AssetRoots.TryResolve(logical, out _, out _))
+            return OriginalImport.NotListed;
+        long bytes = Stock.StockBytes(logical);
+        if (bytes > 0 && data.Length != bytes || ThemePack.Hash(data) != stock) return OriginalImport.NotStock;
+        string backup = $"{_dataRoot}/{BackupFolder}/{logical}";
+        OriginalImport result = OriginalImport.Imported;
+        if (_files.Exists(backup))
+        {
+            if (_files.Hash(backup) == stock) result = OriginalImport.AlreadyThere;
+            else
+            {
+                string stamp = FormatUtc(_clock()).Replace(":", "").Replace("-", "");
+                string aside = $"{_dataRoot}/{ReplacedFolder}/{stamp}/{logical}";
+                _files.CreateDirectoryRecursive(ParentOf(aside));
+                _files.Move(backup, aside);
+            }
+        }
+        if (result == OriginalImport.Imported) WriteBackup(logical, backup, data);
+        else RecordOriginal(logical, stock);
+        AddToIndex(logical);
+        return result;
+    }
+
     /// <summary>
     /// Which targets of <paramref name="manifest"/> have no file on this console, found the way an apply finds them (the
     /// tile icons of the shipped apps, plain .dds backgrounds, a title's own background) but only by asking whether the
@@ -855,7 +890,8 @@ public sealed class ThemeApplier
                 NoOriginal.Add(plan.Logical);   // a backup made from a theme's file: a restore will not put it back
             // A backup that is not this firmware's original while the live file is: the live file becomes the backup.
             wrongBackup = listed && stockHash != catalog && liveHash == catalog;
-            if (!wrongBackup && (liveHash == stockHash || !IsReplaced(plan.Device, liveHash)))
+            // A stock backup stays, whatever the record says (see RestoreOne).
+            if (!wrongBackup && (liveHash == stockHash || listed && stockHash == catalog || !IsReplaced(plan.Device, liveHash)))
                 return stock;
         }
         catch
@@ -1010,7 +1046,10 @@ public sealed class ThemeApplier
             }
             RecordOriginal(logical, originalHash);
             if (liveHash == originalHash) return true;
-            if (IsReplaced(device, liveHash))
+            // A backup the catalog knows as this firmware's stock file is put back whatever the record says: the record may
+            // be older than the backup (one imported with ImportOriginal over a theme's file the app never wrote).
+            bool stockBackup = Stock.TryStock(logical, out string listed) && originalHash == listed;
+            if (!stockBackup && IsReplaced(device, liveHash))
             {
                 RefreshFromLive(logical, backup, device);
                 return false;

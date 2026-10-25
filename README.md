@@ -79,7 +79,7 @@ open the app: close it and start it again.
 | Preview | X shows or hides the home overlay. Square plays the theme's music. Circle goes back. |
 | Themes | X on a theme asks "Download", "Download and apply" or "Cancel" (an update says "Update"); the second goes on to the same apply questions as the Details screen, and nothing is applied before you confirm there. Square previews the theme without adding it to your library (picture, home row, sounds; Square again plays its music, Circle comes back). Triangle likes, or removes your like. Options refreshes the list. D-pad up from the first row reaches the chips: Left and Right move, X filters, Square changes the sort, Down goes back to the themes. X on Search opens a keyboard; Options searches, and X on the chip with a term shows every theme again. X on No AI hides or shows themes with AI pictures. |
 | Avatars | Square changes the sort (Top rated, Most downloaded or New). X on an avatar asks "Download", "Download and set" or "Cancel"; avatars already in your library say "In library". Triangle likes, or removes your like. Options refreshes the list. Circle goes back to the Library. |
-| USB Import | X imports themes and avatars from USB. |
+| USB Import | X imports themes, avatars and original system files from USB. |
 | System | D-pad picks a row, X acts on it. On Sound volume and Music volume, Left and Right change the volume. On AI themes, X switches between Show and Hide. On App update, X asks to install a newer release (see "Update in the app"), or asks the store when none is known. |
 
 Results and progress ("Applying theme…", "Download failed (404).") appear as a short message at the bottom of the
@@ -94,6 +94,14 @@ start, so choose "Restore defaults" and press X to go ahead. It puts every chang
 app made before the first change. When a backup is gone, tile icons come back from the firmware's own copy; any
 other file the app can no longer find an original for is left as it is and named in the result. Applying a theme starts from the defaults too: whatever an earlier theme changed
 and the new one does not cover goes back to its original first, so themes never stack.
+
+**Originals from USB.** A file stays themed when the console no longer has its original, for example when a backup was
+made from a theme's file (a factory reset does not reset the system files). If you have the original files of your
+firmware, for example the app's own backups from before (`/data/prospero-themes/backup/original/`), copy them to a USB
+drive under `prospero-themes/originals/`, in the same folders (`prospero-themes/originals/vsh_asset/...`), and run the
+USB import. The app takes a file only when its size and SHA-256 are exactly those of your firmware's original (from the
+bundled catalog); anything else is skipped and counted. An imported original replaces the backup (the old one is kept
+under `backup/replaced/`), and Restore defaults then puts it back. The app does not provide these files.
 
 ## Other firmware versions
 

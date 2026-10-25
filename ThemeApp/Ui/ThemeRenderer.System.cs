@@ -162,7 +162,7 @@ public sealed partial class ThemeRenderer
         int top = y + 48;
         ClipLeft(_screenHeading, s, "Import from USB", left - SysHeadingOptical, top, White, inner);
         top += _screenHeading.LineHeight + 8;
-        ClipLeft(_body, s, "Copy theme packs and avatars from a USB drive into the app.", left, top, Muted, inner);
+        ClipLeft(_body, s, "Copy themes, avatars and originals from a USB drive.", left, top, Muted, inner);
         top += _body.LineHeight + 32;
 
         // The digit and the step text share a baseline that runs through the middle of the badge.

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using SharpProspero.Storage;
 
 namespace ProsperoThemes.App.Library;
@@ -16,17 +17,25 @@ public sealed class StockCatalog
     public const string Folder = "/app0/sce_sys/prospero-themes/catalog";
 
     /// <summary>A catalog that knows no file.</summary>
-    public static readonly StockCatalog Empty = new(new Dictionary<string, string>(StringComparer.Ordinal));
+    public static readonly StockCatalog Empty = new(new Dictionary<string, string>(StringComparer.Ordinal),
+        new Dictionary<string, long>(StringComparer.Ordinal));
 
     private readonly Dictionary<string, string> _stock;
+    private readonly Dictionary<string, long> _bytes;
 
-    private StockCatalog(Dictionary<string, string> stock) => _stock = stock;
+    private StockCatalog(Dictionary<string, string> stock, Dictionary<string, long> bytes) => (_stock, _bytes) = (stock, bytes);
 
     /// <summary>How many files the catalog knows.</summary>
     public int Count => _stock.Count;
 
     /// <summary>The stock SHA-256 of a logical path, when the catalog lists it.</summary>
     public bool TryStock(string logical, out string sha256) => _stock.TryGetValue(logical, out sha256!);
+
+    /// <summary>The size of the stock file in bytes, or 0 when the catalog does not say.</summary>
+    public long StockBytes(string logical) => _bytes.TryGetValue(logical, out long bytes) ? bytes : 0;
+
+    /// <summary>Every logical path the catalog has a stock hash for, in order.</summary>
+    public IEnumerable<string> Paths => _stock.Keys.OrderBy(p => p, StringComparer.Ordinal);
 
     /// <summary>
     /// The catalog name of a system software version as the console reports it: "13.000.012" is "13.00", the way
@@ -49,18 +58,22 @@ public sealed class StockCatalog
         if (string.IsNullOrWhiteSpace(json) || !JsonValue.TryParse(json, out JsonValue root) || root.Type != JsonType.Object)
             return Empty;
         var stock = new Dictionary<string, string>(StringComparer.Ordinal);
+        var bytes = new Dictionary<string, long>(StringComparer.Ordinal);
         JsonValue assets = root["assets"];
         if (assets.Type == JsonType.Array)
             for (int i = 0; i < assets.Count; i++)
-                Add(stock, assets[i]);
+                Add(stock, bytes, assets[i]);
         JsonValue container = root["icon_container"];
-        if (container.Type == JsonType.Object) Add(stock, container);
-        return stock.Count == 0 ? Empty : new StockCatalog(stock);
+        if (container.Type == JsonType.Object) Add(stock, bytes, container);
+        return stock.Count == 0 ? Empty : new StockCatalog(stock, bytes);
     }
 
-    private static void Add(Dictionary<string, string> stock, JsonValue entry)
+    private static void Add(Dictionary<string, string> stock, Dictionary<string, long> bytes, JsonValue entry)
     {
-        if (entry.GetString("path") is { Length: > 0 } path && entry.GetString("stock_sha256") is { Length: 64 } sha256)
-            stock[path] = sha256;
+        if (entry.GetString("path") is not { Length: > 0 } path || entry.GetString("stock_sha256") is not { Length: 64 } sha256)
+            return;
+        stock[path] = sha256;
+        double size = entry.GetNumber("stock_bytes");
+        if (size > 0 && size == Math.Floor(size)) bytes[path] = (long)size;
     }
 }

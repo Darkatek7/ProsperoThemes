@@ -808,6 +808,95 @@ public class ThemeApplierTests
         Assert.Equal(stock, fake.Files[Backup1]);
     }
 
+    // ---- originals imported from USB ----------------------------------------
+
+    private static StockCatalog CatalogWithSize(string logical, byte[] stock) => StockCatalog.Parse(
+        $$"""{"firmware":"12.40","assets":[{"path":"{{logical}}","stock_bytes":{{stock.Length}},"stock_sha256":"{{Sha(stock)}}"},{"path":"unknown/thing.bin","stock_bytes":{{stock.Length}},"stock_sha256":"{{Sha(stock)}}"}]}""");
+
+    // The issue #13 console: a theme's file is live, and the app's backup was made from it (after a factory reset).
+    private static FakeDeviceFiles ThemedWithThemedBackup()
+    {
+        var fake = DeviceWithLive((Dev1, Zst("theme")));
+        fake.Files[Backup1] = Zst("theme");
+        fake.Files["/data/prospero-themes/backup/index.txt"] = Encoding.UTF8.GetBytes(Path1 + "\n");
+        return fake;
+    }
+
+    [Fact]
+    public void An_imported_original_makes_restore_put_back_the_stock_file()
+    {
+        byte[] stock = Live("stock");
+        var fake = ThemedWithThemedBackup();
+        StockCatalog catalog = CatalogWithSize(Path1, stock);
+
+        ThemeApplier before = new(fake, () => FixedNow) { Stock = catalog };
+        before.RestoreOriginals();
+        Assert.Equal(new[] { Path1 }, before.NoOriginal);
+        Assert.Equal(Zst("theme"), fake.Files[Dev1]);
+
+        Assert.Equal(ThemeApplier.OriginalImport.Imported, new ThemeApplier(fake, () => FixedNow) { Stock = catalog }.ImportOriginal(Path1, stock));
+        Assert.Equal(stock, fake.Files[Backup1]);
+        Assert.Contains(fake.Files, f => f.Key.StartsWith("/data/prospero-themes/backup/replaced/", StringComparison.Ordinal)
+            && f.Key.EndsWith(Path1, StringComparison.Ordinal) && f.Value.SequenceEqual(Zst("theme")));
+
+        ThemeApplier after = new(fake, () => FixedNow) { Stock = catalog };
+        ApplyResult restore = after.RestoreOriginals();
+        Assert.True(restore.Success, restore.Message);
+        Assert.Empty(after.NoOriginal);
+        Assert.Equal(stock, fake.Files[Dev1]);
+    }
+
+    [Fact]
+    public void Only_this_firmwares_stock_file_is_imported()
+    {
+        byte[] stock = Live("stock");
+        var fake = ThemedWithThemedBackup();
+        var applier = new ThemeApplier(fake, () => FixedNow) { Stock = CatalogWithSize(Path1, stock) };
+
+        Assert.Equal(ThemeApplier.OriginalImport.NotStock, applier.ImportOriginal(Path1, Live("stocK")));
+        Assert.Equal(ThemeApplier.OriginalImport.NotStock, applier.ImportOriginal(Path1, Live("stock-longer")));
+        Assert.Equal(ThemeApplier.OriginalImport.NotListed, applier.ImportOriginal("vsh_asset/bg_image_load_error.dds.zst", stock));
+        // Listed, but no console file it could restore: the import would only promise a restore that never comes.
+        Assert.Equal(ThemeApplier.OriginalImport.NotListed, applier.ImportOriginal("unknown/thing.bin", stock));
+        Assert.Equal(Zst("theme"), fake.Files[Backup1]);
+        Assert.DoesNotContain(fake.Files, f => f.Key.Contains("/backup/replaced/", StringComparison.Ordinal));
+
+        Assert.Equal(ThemeApplier.OriginalImport.Imported, applier.ImportOriginal(Path1, stock));
+        Assert.Equal(ThemeApplier.OriginalImport.AlreadyThere, applier.ImportOriginal(Path1, stock));
+        Assert.Equal(stock, fake.Files[Backup1]);
+    }
+
+    [Fact]
+    public void A_stock_backup_stays_and_is_put_back_whatever_the_written_record_says()
+    {
+        byte[] stock = Live("stock");
+        var fake = ThemedWithThemedBackup();
+        StockCatalog catalog = CatalogWithSize(Path1, stock);
+        // A record older than the theme now on the console: on its own it would make the live file a system update's.
+        fake.Files["/data/prospero-themes/backup/written.txt"] = Encoding.UTF8.GetBytes($"{Sha(Zst("earlier"))} {Dev1}\n");
+        Assert.Equal(ThemeApplier.OriginalImport.Imported, new ThemeApplier(fake, () => FixedNow) { Stock = catalog }.ImportOriginal(Path1, stock));
+
+        ApplyResult apply = new ThemeApplier(fake, () => FixedNow) { Stock = catalog }.Apply(MakePack(null, (Path1, Frame(1000, "two"))));
+        Assert.True(apply.Success, apply.Message);
+        Assert.Equal(stock, fake.Files[Backup1]);
+
+        fake.Files["/data/prospero-themes/backup/written.txt"] = Encoding.UTF8.GetBytes($"{Sha(Zst("earlier"))} {Dev1}\n");
+        ApplyResult restore = new ThemeApplier(fake, () => FixedNow) { Stock = catalog }.RestoreOriginals();
+        Assert.True(restore.Success, restore.Message);
+        Assert.Equal(stock, fake.Files[Dev1]);
+        Assert.Equal(stock, fake.Files[Backup1]);
+    }
+
+    [Fact]
+    public void The_stock_catalog_knows_each_files_size()
+    {
+        string json = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "catalog", "12.40.json"));
+        StockCatalog catalog = StockCatalog.Parse(json);
+        Assert.Equal(105_968_720, catalog.StockBytes("vsh_asset/Sce.PlayStation.PUI_UI3.rco"));
+        Assert.Contains("vsh_asset/bg_hub_default.dds", catalog.Paths);
+        Assert.Equal(0, CatalogWith(Path1, Live("x")).StockBytes(Path1));
+    }
+
     // ---- backups that look like a theme's (no catalog) ------------------------
 
     private const string Rco = "vsh_asset/Sce.PlayStation.PUI_UI3.rco";
