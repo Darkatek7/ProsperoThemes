@@ -84,7 +84,12 @@ public sealed class PreviewModel
         ("Demo music app", PreviewTab.Media, 5, 335),
     ];
 
-    /// <summary>The control centre's row in the console's order, with the slot each button takes its icon from.</summary>
+    /// <summary>
+    /// The control centre's row in the console's order, with the slot each button takes its icon from. Measured on FW 13.00:
+    /// the Sound button shows the playing speaker (<c>iconid_sound_speaking</c>) and Accessories the controller with its
+    /// player number (<c>iconid_game_controller_1</c>), not the featured <c>iconid_sound</c> and
+    /// <c>iconid_ps5_wireless_controller</c>. Keep in step with <c>CONTROL_SHOWS</c> in web/app/src/lib/icon-labels.ts.
+    /// </summary>
     public static readonly IReadOnlyList<(string Slot, string Name)> ControlSlots =
     [
         ("iconid_home", "Home"),
@@ -94,9 +99,9 @@ public sealed class PreviewModel
         ("iconid_music", "Music"),
         ("iconid_download", "Downloads"),
         ("iconid_share_screen", "Share Screen"),
-        ("iconid_sound", "Sound"),
+        ("iconid_sound_speaking", "Sound"),
         ("iconid_mic", "Mic"),
-        ("iconid_ps5_wireless_controller", "Accessories"),
+        ("iconid_game_controller_1", "Accessories"),
         ("iconid_ps_user", "Profile"),
         ("iconid_power", "Power"),
     ];

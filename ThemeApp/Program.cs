@@ -94,6 +94,11 @@ internal sealed class ThemeApp : ProsperoApp
     private bool _listLoading, _reloadList, _previewsMissing;
     private volatile bool _stopList, _listStopped, _listPosted;
     private Action? _queuedJob;
+    // The list on screen comes a page at a time (CommunityList.PageSize): the page loaded last, the store's total for it (-1 when
+    // it did not say) and whether the store has more after it. _communityRetryAt is the focused card when a page failed: the
+    // next page is asked for again once the focus has moved, not on every frame (-1 for none).
+    private int _communityPage = 1, _communityTotal = -1, _communityRetryAt = -1;
+    private bool _communityMore;
     // The app's avatars (AvatarLibrary) and the user whose picture they set: the one who started the app (null when its id could
     // not be read). The Library's avatar row shows the list, so it is read after every library scan (_avatarScanAfterWork runs it
     // once the scan's job is done).
@@ -595,6 +600,8 @@ internal sealed class ThemeApp : ProsperoApp
         // The Avatars tab's list or pictures, asked for while a job ran or stopped for one.
         if (!_busy && _avatarListWanted) StartAvatarStoreList();
         else if (!_busy && _avatarPreviewsMissing) StartAvatarPreviews();
+        // The cursor is near the end of the Themes tab's list: its next page, when the store has one.
+        if (!_busy && _communityMore && _browser.CommunityNearEnd) StartCommunityMore();
         // A job's notice keeps the toast; the update notice waits until the app is idle.
         if (_updateNotice is not null && !_busy)
         {
@@ -975,6 +982,9 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.CommunityError = false;
         _renderer.CommunityListSort = -1;
         _renderer.CommunityListCategory = -1;
+        _communityPage = 1;
+        _communityTotal = _renderer.CommunityTotal = -1;
+        _communityMore = false;
         // The Avatars tab lists the same store.
         _avatarStore = Array.Empty<StoreAvatar>();
         _renderer.AvatarStore = _avatarStore;
@@ -1348,7 +1358,8 @@ internal sealed class ThemeApp : ProsperoApp
         {
             HttpResponse answer = http.GetWithRetry(CommunityList.ListUrl(baseUrl, sort, categoryId, query: query, hideAi: hideAi));
             if (!answer.IsSuccess) return new StoreResult("Store responded with status " + answer.StatusCode + ".", NoticeLevel.Error);
-            List<CommunityTheme> list = CommunityList.Parse(System.Text.Encoding.UTF8.GetString(answer.Body), baseUrl);
+            CommunityPage first = CommunityList.ParsePage(System.Text.Encoding.UTF8.GetString(answer.Body), baseUrl);
+            List<CommunityTheme> list = first.Items;
             // Asked to stop while the list was on its way: the old list stays on screen until the new one is here.
             if (_stopList)
             {
@@ -1361,6 +1372,11 @@ internal sealed class ThemeApp : ProsperoApp
                 _renderer.ResetCommunity();
                 _community = list;
                 _renderer.Community = list;
+                // Later pages of this list follow as the cursor nears its end (StartCommunityMore).
+                _communityPage = 1;
+                _communityTotal = _renderer.CommunityTotal = first.Total;
+                _communityMore = CommunityList.HasMore(first, 1);
+                _communityRetryAt = -1;
                 // The header names the sort and category this list came with, not the ones the pills and chips show now.
                 _renderer.CommunityListSort = (int)sort;
                 _renderer.CommunityListCategory = category;
@@ -1386,6 +1402,74 @@ internal sealed class ThemeApp : ProsperoApp
             _reloadList = false;
             _previewsMissing = false;
         }
+    }
+
+    /// <summary>
+    /// Loads the next page of the list on screen, with the sort, category, search and AI setting the list was loaded with, and
+    /// adds its themes to the end of it: the focus, the scroll and the pictures already here stay. The pages after the first
+    /// load as the cursor nears the end of the list (<see cref="ThemeBrowser.CommunityNearEnd"/>). Starts nothing while the pills
+    /// or chips show another list than the one on screen (that one is about to load, and a page of the old list would not
+    /// belong to it), while a stopped load is waiting to go on, or on a card where the last page failed. A page that arrives after
+    /// the list changed or a job asked the loads to stop is dropped; a theme the list holds already (the order can shift
+    /// between two requests) is not added again.
+    /// </summary>
+    private void StartCommunityMore()
+    {
+        if (_queuedJob is not null || _reloadList || _previewsMissing || _community.Count == 0 || _settings.StoreUrl.Length == 0) return;
+        if (_browser.CommunitySort != _listSort || _browser.CommunityCategory != _listCategory || _browser.CommunityQuery != _listQuery
+            || _browser.CommunityHideAi != _listHideAi || _browser.CommunitySelected == _communityRetryAt) return;
+        string baseUrl = _settings.StoreUrl, query = _listQuery;
+        var sort = (CommunitySort)_listSort;
+        string? categoryId = CommunityCategories.IdAt(_listCategory);
+        bool hideAi = _listHideAi;
+        int page = _communityPage + 1, focused = _browser.CommunitySelected;
+        IReadOnlyList<CommunityTheme> loaded = _community;
+        _stopList = false;
+        _listStopped = false;
+        _listPosted = true;   // the list is on screen already: a stop leaves only the pictures to catch up on
+        // No progress text: the spinner shows that a page is on its way, and a page that arrives needs no toast.
+        bool started = StartCommunityWork("", http =>
+        {
+            StoreResult Failed(string text)
+            {
+                _results.Post(() => _communityRetryAt = focused);
+                return new StoreResult(text, NoticeLevel.Error);
+            }
+            CommunityPage answer;
+            try
+            {
+                HttpResponse response = http.GetWithRetry(CommunityList.ListUrl(baseUrl, sort, categoryId, page, query: query, hideAi: hideAi));
+                if (!response.IsSuccess) return Failed("Can’t load more themes. Store responded with status " + response.StatusCode + ".");
+                answer = CommunityList.ParsePage(System.Text.Encoding.UTF8.GetString(response.Body), baseUrl);
+            }
+            catch (Exception ex) { return Failed("Can’t load more themes: " + ex.Message); }
+            if (_stopList)
+            {
+                _listStopped = true;
+                return new StoreResult("", NoticeLevel.Success);
+            }
+            List<CommunityTheme> fresh = CommunityList.NewThemes(loaded, answer.Items);
+            _results.Post(() =>
+            {
+                // Another sort, chip or search (or a job that needs the loads to stop) came while the page was on its way.
+                if (_stopList || !ReferenceEquals(_community, loaded)) return;
+                var grown = new List<CommunityTheme>(loaded.Count + fresh.Count);
+                grown.AddRange(loaded);
+                grown.AddRange(fresh);
+                _community = grown;
+                _renderer.Community = grown;
+                _communityPage = page;
+                if (answer.Total >= 0) _communityTotal = _renderer.CommunityTotal = answer.Total;
+                _communityMore = CommunityList.HasMore(answer, page);
+                _communityRetryAt = -1;
+                _renderer.CommunityPicturesLoading = true;
+                _browser.SetCommunityCount(grown.Count, keepQuestion: true);
+                RefreshCommunityBadges();
+            });
+            LoadPreviews(http, fresh);
+            return new StoreResult("", NoticeLevel.Success);
+        });
+        if (started) _listLoading = _renderer.CommunityPicturesLoading = true;
     }
 
     /// <summary>

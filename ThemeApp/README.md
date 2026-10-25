@@ -46,7 +46,7 @@ launch evidence are recorded separately below.
   the console's file (its backup when there is one): same DDS size and DXGI format, same PNG size, same
   zstd decoded size (a title's own `pic0.dds` may differ in size, the shell scales it). A file the
   console does not have, or does not match, is skipped and listed; so is an icon the RCO does not hold.
-  The untitled search icon (`#875`) is used only when it is the 13.00 element (length and hash).
+  The untitled icons (search `#875`; the power menu's restart `#705` and turn off `#708`) are used only when they are the 13.00 element (length and hash).
   `backup/written.txt` records what the app last wrote to each file: a live file that matches neither
   that nor its backup was replaced by the system (an update, or Sony's servers for `/mnt/rnps`); its old
   backup moves to `backup/replaced/<time>/` and the live file becomes the new default, so Restore

@@ -292,11 +292,32 @@ public sealed class ThemeBrowser
         return sound;
     }
 
-    public void SetCommunityCount(int count)
+    /// <summary>Cards in one row of the Community tab's grid.</summary>
+    public const int CommunityColumns = 4;
+    /// <summary>
+    /// How many rows below the focused one still count as "near the end" of the loaded list (see <see cref="CommunityNearEnd"/>):
+    /// the page after the loaded ones starts loading while the focus is still two rows short of the last card.
+    /// </summary>
+    public const int CommunityLoadAheadRows = 2;
+
+    /// <summary>
+    /// The focus is on a card in the last <see cref="CommunityLoadAheadRows"/> + 1 rows of the loaded list, on the Themes tab: the
+    /// moment to load the next page of the store's list. False while the filter chips have the focus, on another screen and
+    /// for an empty list. The app polls it each frame and decides on its own whether there is more to load.
+    /// </summary>
+    public bool CommunityNearEnd =>
+        View == ThemeView.Community && !CommunityChipFocused && _communityCount > 0 && CommunitySelected >= 0
+        && CommunitySelected / CommunityColumns >= (_communityCount - 1) / CommunityColumns - CommunityLoadAheadRows;
+
+    /// <summary>
+    /// The number of cards in the Community list; the focus is kept inside it. <paramref name="keepQuestion"/> is for cards added
+    /// at the end (the next page): the focused card is the same, so an open download question stays.
+    /// </summary>
+    public void SetCommunityCount(int count, bool keepQuestion = false)
     {
         _communityCount = Math.Max(0, count);
         // Another list under the question may put another theme on the selected card.
-        if (Dialog == DialogKind.CommunityDownload) Dialog = DialogKind.None;
+        if (Dialog == DialogKind.CommunityDownload && !keepQuestion) Dialog = DialogKind.None;
         CommunitySelected = _communityCount == 0 ? -1 : Math.Clamp(CommunitySelected < 0 ? 0 : CommunitySelected, 0, _communityCount - 1);
     }
 
@@ -621,7 +642,7 @@ public sealed class ThemeBrowser
     // chips (and with no cards) and previews the theme on a card; X on a card opens the download question.
     private void UpdateCommunity(UiInput input, bool preview, bool options, bool triangle, bool update)
     {
-        const int columns = 4;
+        const int columns = CommunityColumns;
         if (CommunityChipFocused)
         {
             int step = (input.Right ? 1 : 0) - (input.Left ? 1 : 0);

@@ -212,6 +212,82 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeAction.CommunityDownload, browser.TakeAction());
     }
 
+    // ---- Community: near the end of the loaded list (the next page loads) ---------------------------
+
+    [Fact]
+    public void The_focus_is_near_the_end_in_the_last_three_rows_of_the_loaded_list()
+    {
+        var browser = OnCommunity(24);   // 6 rows of 4
+        Assert.False(browser.CommunityNearEnd);
+        Press(browser, Down, 2);         // row 2
+        Assert.Equal(8, browser.CommunitySelected);
+        Assert.False(browser.CommunityNearEnd);
+        browser.Update(Down);            // row 3: two rows are left below it
+        Assert.Equal(12, browser.CommunitySelected);
+        Assert.True(browser.CommunityNearEnd);
+        browser.Update(Up);
+        Assert.False(browser.CommunityNearEnd);
+        Press(browser, Down, 3);         // the last row
+        Assert.Equal(20, browser.CommunitySelected);
+        Assert.True(browser.CommunityNearEnd);
+        browser.Update(Right);
+        Assert.True(browser.CommunityNearEnd);
+    }
+
+    [Fact]
+    public void A_short_last_row_counts_as_a_row()
+    {
+        var browser = OnCommunity(26);   // 7 rows, the last holds two cards
+        Press(browser, Down, 3);
+        Assert.Equal(12, browser.CommunitySelected);
+        Assert.False(browser.CommunityNearEnd);   // row 3 of 0..6 is three rows from the end
+        browser.Update(Down);
+        Assert.True(browser.CommunityNearEnd);
+    }
+
+    [Fact]
+    public void A_short_list_is_near_its_end_from_the_start_and_an_empty_one_never()
+    {
+        Assert.True(OnCommunity(10).CommunityNearEnd);
+        Assert.False(OnCommunity(0).CommunityNearEnd);
+    }
+
+    [Fact]
+    public void The_chips_another_tab_and_a_new_page_end_the_nearness()
+    {
+        var browser = OnCommunity(24);
+        Press(browser, Down, 5);
+        Assert.True(browser.CommunityNearEnd);
+        // More cards are added at the end: the focus is no longer near it, and stays where it is.
+        browser.SetCommunityCount(48);
+        Assert.Equal(20, browser.CommunitySelected);
+        Assert.False(browser.CommunityNearEnd);
+        browser.SetCommunityCount(24);
+        Assert.True(browser.CommunityNearEnd);
+        // The chip row above the grid does not ask for pages.
+        Press(browser, Up, 5);
+        browser.Update(Up);
+        Assert.True(browser.CommunityChipFocused);
+        Assert.False(browser.CommunityNearEnd);
+        browser.Update(UiInput.None with { PageUp = true });
+        Assert.NotEqual(ThemeView.Community, browser.View);
+        Assert.False(browser.CommunityNearEnd);
+    }
+
+    [Fact]
+    public void Cards_added_at_the_end_keep_the_download_question_open_but_another_list_closes_it()
+    {
+        var browser = OnCommunity(24);
+        Press(browser, Down, 5);
+        browser.Update(X);
+        Assert.Equal(DialogKind.CommunityDownload, browser.Dialog);
+        browser.SetCommunityCount(48, keepQuestion: true);
+        Assert.Equal(DialogKind.CommunityDownload, browser.Dialog);
+        Assert.Equal(20, browser.CommunitySelected);
+        browser.SetCommunityCount(24);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+    }
+
     [Fact]
     public void Up_from_a_lower_row_moves_in_the_grid_first()
     {

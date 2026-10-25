@@ -8,7 +8,7 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
   and leads the row; Triangle sorts the rest by name or by newest. When you combine parts of several themes, the
   row ends with "Save current look", which keeps that mix as a theme of its own in your library.
 - **Themes:** download themes other people published at [themes.darkatek7.com](https://themes.darkatek7.com),
-  sort them by top rated, most downloaded or new, and like the ones you enjoy. Themes already in your library carry
+  sort them by top rated, most downloaded or new, and like the ones you enjoy. More themes load as you scroll down. Themes already in your library carry
   an "In library" badge; when a creator publishes a new version, the card says "Update". A theme you liked shows a
   heart, and Triangle on it removes the like. The Search chip finds themes by name, author or description.
   Themes with AI-generated pictures carry an "AI" badge; the No AI chip hides them, and the System tab's "AI themes"
@@ -19,7 +19,7 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
   library. Avatar files (`.p5avatar`) go to your avatars.
 - **What a theme can change:** the home-screen background, including behind the system tiles (Game Library,
   Media Gallery, All Apps and the rest), the backgrounds behind app tiles (only apps without their own image, or
-  all apps), system icons (top bar and control center), the system tile icons, the UI sounds and the home music.
+  all apps), system icons (top bar, control center and power menu), the system tile icons, the UI sounds and the home music.
 - **Volume:** the System tab sets how loud a theme's UI sounds (25 % to start) and its home music (10 % to start)
   play. The app writes them again at that volume, from 10 % to 100 %.
 - **No console restart:** new icons and sounds show once the home screen restarts. After an apply or restore the

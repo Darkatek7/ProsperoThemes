@@ -27,13 +27,7 @@ public static class RcoSvg
     {
         // A few icons carry no <title>; they are named by alias (checked by content) or by position ("#875").
         if (Aliases.TryGetValue(name, out Untitled alias))
-        {
-            (int Offset, int Length) at = Nth(container, alias.Index);
-            ReadOnlySpan<byte> svg = container.Slice(at.Offset, at.Length);
-            if (at.Length != alias.Length || svg.IndexOf("<title>"u8) >= 0 || ThemePack.Hash(svg) != alias.Sha256)
-                throw new ThemePackException($"icon '{name}' is not at #{alias.Index} in this container (another firmware?)");
-            return at;
-        }
+            return FindUntitled(container, name, alias);
         if (name.Length > 1 && name[0] == '#' && int.TryParse(name.AsSpan(1), out int index))
             return Nth(container, index);
         (int Offset, int Length) hit = default;
@@ -64,14 +58,28 @@ public static class RcoSvg
     /// Untitled icons by name (FW 13.00, <c>Sce.PlayStation.PUI_UI3.rco</c>): the top-bar search magnifier is the
     /// 876th SVG in the container and has no <c>&lt;title&gt;</c>. Proven on hardware (recoloured red). Its stock
     /// length and hash are checked too, so a container in another order (another firmware) is refused instead
-    /// of having some other icon replaced.
+    /// of having some other icon replaced. The power menu's restart and turn off icons are
+    /// untitled the same way, at #705 and #708 (the rest mode entry uses the titled iconid_power).
     /// </summary>
-    private static readonly System.Collections.Generic.Dictionary<string, Untitled> Aliases = new(StringComparer.Ordinal)
+    internal static readonly System.Collections.Generic.Dictionary<string, Untitled> Aliases = new(StringComparer.Ordinal)
     {
         ["iconid_search"] = new(875, 512, "3d794839496e8e05ead9396ffe8a742ba3cba9a99b987919fd17dbc8bc9d35ca"),
+        // The power menu (control centre, Power), right after iconid_power_options.
+        ["iconid_power_restart"] = new(705, 598, "a2f1818226028c3054957c36d1630be4ff439e14a1aaee8c9f62d700d7dea278"),
+        ["iconid_power_off"] = new(708, 452, "af0820cd74e6f76df9d90ec2ce1d9d4685e2410050b4b52c099a6040481135d3"),
     };
 
-    private readonly record struct Untitled(int Index, int Length, string Sha256);
+    internal readonly record struct Untitled(int Index, int Length, string Sha256);
+
+    /// <summary>The icon at <paramref name="alias"/>'s position, if it is the one measured: same length, no title, same hash.</summary>
+    internal static (int Offset, int Length) FindUntitled(ReadOnlySpan<byte> container, string name, Untitled alias)
+    {
+        (int Offset, int Length) at = Nth(container, alias.Index);
+        ReadOnlySpan<byte> svg = container.Slice(at.Offset, at.Length);
+        if (at.Length != alias.Length || svg.IndexOf("<title>"u8) >= 0 || ThemePack.Hash(svg) != alias.Sha256)
+            throw new ThemePackException($"icon '{name}' is not at #{alias.Index} in this container (another firmware?)");
+        return at;
+    }
 
     private static (int Offset, int Length) Nth(ReadOnlySpan<byte> container, int index)
     {

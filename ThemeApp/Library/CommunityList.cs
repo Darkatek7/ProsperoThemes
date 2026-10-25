@@ -93,11 +93,20 @@ public static class CommunityCategories
 }
 
 /// <summary>
+/// One page of the store's list: its themes, the store's total for the request (-1 when the answer has none) and how many
+/// entries the answer listed, which is more than <c>Items.Count</c> when malformed ones were skipped.
+/// </summary>
+public sealed record CommunityPage(List<CommunityTheme> Items, int Total, int Listed);
+
+/// <summary>
 /// The store's wire format, parsed without the network, so the PC tests cover it. URLs in the answers are
 /// server-relative and are made absolute against the configured store address.
 /// </summary>
 public static class CommunityList
 {
+    /// <summary>The themes asked for per request. Every page of one list must use the same size, since the page number counts in it.</summary>
+    public const int PageSize = 24;
+
     public static string SortKey(CommunitySort sort) => sort switch
     {
         CommunitySort.Downloads => "downloads",
@@ -117,7 +126,7 @@ public static class CommunityList
     /// one the store lists every theme. The id is escaped, so only what the store would accept reaches it intact.
     /// <paramref name="hideAi"/> leaves out themes with AI-generated pictures (<c>ai=hide</c>).
     /// </summary>
-    public static string ListUrl(string baseUrl, CommunitySort sort, string? category = null, int page = 1, int pageSize = 24,
+    public static string ListUrl(string baseUrl, CommunitySort sort, string? category = null, int page = 1, int pageSize = PageSize,
         string? query = null, bool hideAi = false) =>
         $"{baseUrl.TrimEnd('/')}/api/themes?sort={SortKey(sort)}&page={page}&pageSize={pageSize}"
         + (string.IsNullOrEmpty(category) ? "" : "&category=" + Uri.EscapeDataString(category))
@@ -134,12 +143,19 @@ public static class CommunityList
 
     /// <summary>Parses <c>{ items: [...] }</c>; malformed entries are skipped, a malformed document throws.</summary>
     /// <remarks>Uses the SDK's parser: System.Text.Json's JsonDocument pulls OpenSSL imports into the module.</remarks>
-    public static List<CommunityTheme> Parse(string json, string baseUrl)
+    public static List<CommunityTheme> Parse(string json, string baseUrl) => ParsePage(json, baseUrl).Items;
+
+    /// <summary>
+    /// Parses a page of the list: the themes as <see cref="Parse"/> reads them, and the store's <c>total</c> (all themes the
+    /// request matches, over every page), or -1 when the answer has none (a store that predates it).
+    /// </summary>
+    public static CommunityPage ParsePage(string json, string baseUrl)
     {
         JsonValue root = JsonValue.Parse(json);
         var list = new List<CommunityTheme>();
+        int total = root["total"].Type == JsonType.Number ? Math.Max(0, root.GetInt("total")) : -1;
         JsonValue items = root["items"];
-        if (items.Type != JsonType.Array) return list;
+        if (items.Type != JsonType.Array) return new CommunityPage(list, total, 0);
         for (int i = 0; i < items.Count; i++)
         {
             JsonValue e = items[i];
@@ -160,7 +176,32 @@ public static class CommunityList
                 Ai = e.GetBool("ai"),
             });
         }
-        return list;
+        return new CommunityPage(list, total, items.Count);
+    }
+
+    /// <summary>
+    /// Whether the store has themes beyond page <paramref name="page"/> (of <paramref name="pageSize"/>). By the total when the
+    /// answer had one; else a page that came back full may be followed by more (<paramref name="returned"/> is the number of
+    /// entries the answer listed).
+    /// </summary>
+    public static bool HasMore(int total, int page, int pageSize, int returned) =>
+        returned > 0 && (total >= 0 ? (long)page * pageSize < total : returned >= pageSize);
+
+    /// <summary><see cref="HasMore(int,int,int,int)"/> for a parsed <paramref name="answer"/> to the request for <paramref name="page"/>.</summary>
+    public static bool HasMore(CommunityPage answer, int page, int pageSize = PageSize) => HasMore(answer.Total, page, pageSize, answer.Listed);
+
+    /// <summary>
+    /// The themes of <paramref name="page"/> that are not in <paramref name="loaded"/> yet, by id, each once: the order can
+    /// shift between two page requests (a like or a download moves a theme), so a theme may come twice.
+    /// </summary>
+    public static List<CommunityTheme> NewThemes(IEnumerable<CommunityTheme> loaded, IEnumerable<CommunityTheme> page)
+    {
+        var known = new HashSet<string>(StringComparer.Ordinal);
+        foreach (CommunityTheme t in loaded) known.Add(t.Id);
+        var fresh = new List<CommunityTheme>();
+        foreach (CommunityTheme t in page)
+            if (known.Add(t.Id)) fresh.Add(t);
+        return fresh;
     }
 
     /// <summary>

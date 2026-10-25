@@ -147,11 +147,27 @@ public class PreviewModelTests
         Assert.Equal(["Home", "Switcher", "Notifications", "Game Base", "Music", "Downloads", "Share Screen", "Sound", "Mic", "Accessories", "Profile", "Power"],
             model.Controls.Select(c => c.Name).ToArray());
         Assert.Equal(["iconid_home", "iconid_switcher", "iconid_notification", "iconid_game_base", "iconid_music", "iconid_download", "iconid_share_screen",
-            "iconid_sound", "iconid_mic", "iconid_ps5_wireless_controller", "iconid_ps_user", "iconid_power"], model.Controls.Select(c => c.Slot).ToArray());
+            "iconid_sound_speaking", "iconid_mic", "iconid_game_controller_1", "iconid_ps_user", "iconid_power"], model.Controls.Select(c => c.Slot).ToArray());
         Assert.Equal("previews/icons/iconid_game_base.png", model.Controls[3].IconFile);
         Assert.Equal("previews/icons/iconid_power.png", model.Controls[11].IconFile);
         Assert.Equal(2, model.Controls.Count(c => c.IconFile is not null));   // iconid_search is not one of the twelve
         Assert.Equal(PreviewModel.ControlSlots.Count, model.Controls.Count);
+    }
+
+    [Fact]
+    public void The_sound_and_accessories_buttons_take_the_icons_the_console_shows_there_not_the_featured_ones()
+    {
+        // FW 13.00: the bottom row draws iconid_sound_speaking and iconid_game_controller_1; the featured slots sit on the cards above.
+        PreviewModel featured = PreviewModel.Of(Manifest(previews: Previews(icons:
+            [("iconid_sound", "previews/icons/iconid_sound.png"), ("iconid_ps5_wireless_controller", "previews/icons/iconid_ps5_wireless_controller.png")])));
+        Assert.All(featured.Controls, c => Assert.Null(c.IconFile));
+
+        PreviewModel states = PreviewModel.Of(Manifest(previews: Previews(icons:
+            [("iconid_sound_speaking", "previews/icons/iconid_sound_speaking.png"), ("iconid_game_controller_1", "previews/icons/iconid_game_controller_1.png")])));
+        Assert.Equal("previews/icons/iconid_sound_speaking.png", states.Controls[7].IconFile);
+        Assert.Equal("previews/icons/iconid_game_controller_1.png", states.Controls[9].IconFile);
+        Assert.Equal(2, states.Controls.Count(c => c.IconFile is not null));
+        Assert.Contains("previews/icons/iconid_sound_speaking.png", states.Files());
     }
 
     [Fact]

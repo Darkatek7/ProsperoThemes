@@ -25,6 +25,11 @@ public sealed partial class ThemeRenderer
     /// <summary>The search term the list on screen was loaded with ("" for none), like <see cref="CommunityListCategory"/>.</summary>
     public string CommunityListQuery { get; set; } = "";
     /// <summary>
+    /// How many themes the store has for the list on screen (its <c>total</c>, over all pages), or -1 when it did not say. The
+    /// header counts this many when it is known, since the list loads a page at a time as the cursor nears its end.
+    /// </summary>
+    public int CommunityTotal { get; set; } = -1;
+    /// <summary>
     /// Whether the app is fetching the cards' pictures. Meanwhile a card still waiting for its picture shows a plain
     /// picture area with a moving shimmer instead of the placeholder art; once loading ends, the ones still without
     /// (failed, or none in the store) show the placeholder.
@@ -72,7 +77,7 @@ public sealed partial class ThemeRenderer
     // Four columns fill the width between the safe margins with even gaps. Two rows fill the height from the grid top
     // to the bottom of the content area, so the cards are as tall as the space allows: the picture takes what the
     // three text lines of the panel leave (a centre crop of the preview, about 2:1, never a stretch).
-    private const int CommunityColumns = 4, CommunityGap = 24, CommunityVisibleRows = 2;
+    private const int CommunityColumns = ThemeBrowser.CommunityColumns, CommunityGap = 24, CommunityVisibleRows = 2;
     internal const int CommunityCardW = (Theme.ContentWidth - (CommunityColumns - 1) * CommunityGap) / CommunityColumns;   // 414
     // The sort pills and the filter chips share one row under the eyebrow row; the grid starts below it with room for the
     // focus glow (12 px). The row is 8 px lower than the sort pills alone were, so the glow of a focused chip (12 px) stays
@@ -308,10 +313,12 @@ public sealed partial class ThemeRenderer
     private int CommunityLoadedCategory(ThemeBrowser browser) => CommunityListSort is >= 0 and <= 2 ? CommunityListCategory : browser.CommunityCategory;
     private string CommunityLoadedQuery(ThemeBrowser browser) => CommunityListSort is >= 0 and <= 2 ? CommunityListQuery : browser.CommunityQuery;
 
-    // "24 themes · Anime · Top rated" (without the category for all themes), from the sort and category the list was loaded
-    // with; formatted again only when one of them or the count changes.
-    private string CommunityCountText(int count, ThemeBrowser browser)
+    // "323 themes · Anime · Top rated" (without the category for all themes), from the sort and category the list was loaded
+    // with; formatted again only when one of them or the count changes. The count is the store's total when it is known (the
+    // list on screen holds the pages loaded so far), else the loaded cards.
+    internal string CommunityCountText(int count, ThemeBrowser browser)
     {
+        if (CommunityTotal > count) count = CommunityTotal;
         int sort = CommunityListSort is >= 0 and <= 2 ? CommunityListSort : browser.CommunitySort;
         int category = CommunityLoadedCategory(browser);
         if (category < -1 || category >= CommunityCategories.Count) category = -1;

@@ -268,6 +268,28 @@ public unsafe class CommunityScreenTests
     }
 
     [Fact]
+    public void The_count_line_counts_the_stores_total_once_it_is_known()
+    {
+        using var screen = new Screen(24);
+        screen.Renderer.CommunityListSort = (int)CommunitySort.Top;
+        screen.Renderer.CommunityListCategory = -1;
+        // A store that gives no total (or before the first answer): the loaded cards.
+        Assert.Equal("24 themes · Top rated", screen.Renderer.CommunityCountText(24, screen.Browser));
+        screen.Renderer.CommunityTotal = 323;
+        Assert.Equal("323 themes · Top rated", screen.Renderer.CommunityCountText(24, screen.Browser));
+        screen.Renderer.CommunityListCategory = 0;
+        screen.Renderer.CommunityTotal = 31;
+        Assert.Equal("31 themes · Anime · Top rated", screen.Renderer.CommunityCountText(24, screen.Browser));
+        // More cards than the total says (the store changed meanwhile): never fewer than are on screen.
+        screen.Renderer.CommunityTotal = 20;
+        Assert.Equal("24 themes · Anime · Top rated", screen.Renderer.CommunityCountText(24, screen.Browser));
+        screen.Renderer.CommunityTotal = 1;
+        screen.Renderer.CommunityListCategory = -1;
+        Assert.Equal("24 themes · Top rated", screen.Renderer.CommunityCountText(24, screen.Browser));
+        Assert.Equal("1 theme · Top rated", screen.Renderer.CommunityCountText(1, screen.Browser));
+    }
+
+    [Fact]
     public void An_empty_filtered_list_says_the_category_is_empty_not_the_store()
     {
         using var screen = new Screen(0);

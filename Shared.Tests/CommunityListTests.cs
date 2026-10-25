@@ -105,6 +105,81 @@ public class CommunityListTests
         Assert.Equal(-1, CommunityList.ParseLikes("nope"));
     }
 
+    // ---- Pages ------------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void A_page_carries_the_stores_total_beside_its_themes()
+    {
+        CommunityPage page = CommunityList.ParsePage(Json.Replace("\"total\":2", "\"total\":323"), "https://t.example");
+        Assert.Equal(2, page.Items.Count);   // the broken entry is left out
+        Assert.Equal(323, page.Total);
+        Assert.Equal(3, page.Listed);        // but it was listed
+        // Parse keeps giving the themes alone.
+        Assert.Equal(page.Items.Select(t => t.Id), CommunityList.Parse(Json, "https://t.example").Select(t => t.Id));
+    }
+
+    [Theory]
+    [InlineData("""{"items":[]}""")]
+    [InlineData("""{"items":[],"total":null}""")]
+    [InlineData("""{"items":[],"total":"many"}""")]
+    public void A_missing_or_unreadable_total_is_unknown(string json) =>
+        Assert.Equal(-1, CommunityList.ParsePage(json, "https://t.example").Total);
+
+    [Fact]
+    public void An_answer_without_items_is_an_empty_page_and_a_broken_document_still_throws()
+    {
+        CommunityPage page = CommunityList.ParsePage("""{"total":5}""", "https://t.example");
+        Assert.Empty(page.Items);
+        Assert.Equal(5, page.Total);
+        Assert.Equal(0, page.Listed);
+        Assert.ThrowsAny<Exception>(() => CommunityList.ParsePage("nope", "https://t.example"));
+    }
+
+    [Theory]
+    [InlineData(323, 1, 24, 24, true)]
+    [InlineData(323, 13, 24, 24, true)]
+    [InlineData(323, 14, 24, 11, false)]    // 14 * 24 = 336 reaches 323
+    [InlineData(48, 2, 24, 24, false)]      // the total ends on a full page: nothing after it
+    [InlineData(48, 1, 24, 24, true)]
+    [InlineData(0, 1, 24, 0, false)]
+    [InlineData(323, 5, 24, 0, false)]      // an empty page ends the list whatever the total says
+    [InlineData(-1, 1, 24, 24, true)]       // no total: a full page may have more
+    [InlineData(-1, 3, 24, 7, false)]
+    [InlineData(-1, 1, 24, 0, false)]
+    public void More_follows_from_the_total_or_else_from_a_full_page(int total, int page, int pageSize, int returned, bool more) =>
+        Assert.Equal(more, CommunityList.HasMore(total, page, pageSize, returned));
+
+    [Fact]
+    public void More_reads_a_parsed_page()
+    {
+        string json = "{\"items\":[" + string.Join(",", Enumerable.Range(0, CommunityList.PageSize).Select(i => ItemWith("t" + i, ""))) + "]";
+        Assert.True(CommunityList.HasMore(CommunityList.ParsePage(json + "}", "https://t.example"), 1));                    // full, no total
+        Assert.True(CommunityList.HasMore(CommunityList.ParsePage(json + ",\"total\":100}", "https://t.example"), 1));
+        Assert.False(CommunityList.HasMore(CommunityList.ParsePage(json + ",\"total\":24}", "https://t.example"), 1));
+        Assert.False(CommunityList.HasMore(CommunityList.ParsePage("""{"items":[]}""", "https://t.example"), 1));
+    }
+
+    [Fact]
+    public void A_later_page_asks_for_its_number_with_the_same_size()
+    {
+        Assert.Equal("https://t.example/api/themes?sort=top&page=3&pageSize=24&category=anime&q=blue&ai=hide",
+            CommunityList.ListUrl("https://t.example", CommunitySort.Top, "anime", page: 3, query: "blue", hideAi: true));
+        Assert.Equal(24, CommunityList.PageSize);
+    }
+
+    [Fact]
+    public void New_themes_skip_the_ones_already_loaded_and_repeats_within_the_page()
+    {
+        string json = "{\"items\":[" + string.Join(",", new[] { "a", "b", "c", "d" }.Select(id => ItemWith(id, ""))) + "]}";
+        var all = CommunityList.Parse(json, "https://t.example");
+        var loaded = all.Take(2).ToList();   // a, b
+        // Page 2 after the order shifted: b came again, c is new, d twice.
+        var page = new List<CommunityTheme> { all[1], all[2], all[3], all[3] };
+        Assert.Equal(["c", "d"], CommunityList.NewThemes(loaded, page).Select(t => t.Id));
+        Assert.Empty(CommunityList.NewThemes(all, page));
+        Assert.Equal(["a", "b"], loaded.Select(t => t.Id));   // the loaded list is not touched
+    }
+
     // ---- Categories -------------------------------------------------------------------------------------------------
 
     private static string ItemWith(string id, string categoriesField) =>

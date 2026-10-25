@@ -121,6 +121,71 @@ public class RcoSvgTests
         Assert.Contains("not at #875", error.Message);
     }
 
+    // The power menu's icons (FW 13.00): untitled, right after iconid_power_options.
+    private static readonly (string Slot, int Index, int Length)[] PowerMenu =
+    [
+        ("iconid_power_restart", 705, 598),
+        ("iconid_power_off", 708, 452),
+    ];
+
+    /// <summary>A container of 720 untitled icons; the one at <paramref name="index"/> is <paramref name="icon"/> when given.</summary>
+    private static byte[] Untitled720(int index, string? icon) =>
+        Encoding.UTF8.GetBytes(string.Concat(Enumerable.Range(0, 720).Select(i => i == index && icon is not null ? icon : $"<svg><path d=\"M{i}\"/></svg>")));
+
+    private static string UntitledOfLength(int length)
+    {
+        const string head = "<svg><path d=\"M0 0", tail = "\"/></svg>";
+        return head + new string('1', length - head.Length - tail.Length) + tail;
+    }
+
+    [Fact]
+    public void The_power_menus_icons_are_known_by_the_position_length_and_hash_measured_on_13_00()
+    {
+        foreach (var (slot, index, length) in PowerMenu)
+        {
+            Assert.True(RcoSvg.Aliases.TryGetValue(slot, out RcoSvg.Untitled alias), slot);
+            Assert.Equal(index, alias.Index);
+            Assert.Equal(length, alias.Length);
+            Assert.Matches("^[0-9a-f]{64}$", alias.Sha256);
+        }
+        Assert.Equal(3, RcoSvg.Aliases.Count);   // the search icon and the two above
+    }
+
+    [Fact]
+    public void An_untitled_icon_is_found_where_the_alias_says_and_refused_when_anything_differs()
+    {
+        // The real icons cannot be in the repository, so a stand-in of the same length gets its own hash.
+        foreach (var (slot, index, length) in PowerMenu)
+        {
+            string icon = UntitledOfLength(length);
+            var alias = new RcoSvg.Untitled(index, length, ThemePack.Hash(Encoding.UTF8.GetBytes(icon)));
+            byte[] container = Untitled720(index, icon);
+
+            (int offset, int found) = RcoSvg.FindUntitled(container, slot, alias);
+            Assert.Equal(length, found);
+            Assert.Equal(icon, Encoding.UTF8.GetString(container, offset, found));
+
+            // Another icon at that position (same length, other content), a shifted order, a titled icon and a short one: all refused.
+            string other = UntitledOfLength(length).Replace("1", "2");
+            Assert.Throws<ThemePackException>(() => RcoSvg.FindUntitled(Untitled720(index, other), slot, alias));
+            Assert.Throws<ThemePackException>(() => RcoSvg.FindUntitled(Untitled720(index + 1, icon), slot, alias));
+            Assert.Throws<ThemePackException>(() => RcoSvg.FindUntitled(Untitled720(index, icon.Replace("<svg>", "<svg><title>x</title>")), slot, alias));
+            var error = Assert.Throws<ThemePackException>(() => RcoSvg.FindUntitled(Untitled720(index, UntitledOfLength(length - 1)), slot, alias));
+            Assert.Contains($"not at #{index}", error.Message);
+        }
+    }
+
+    [Fact]
+    public void The_power_menus_icons_are_refused_in_a_container_that_is_not_the_13_00_one()
+    {
+        byte[] container = Untitled720(-1, null);
+        foreach (var (slot, index, _) in PowerMenu)
+        {
+            var error = Assert.Throws<ThemePackException>(() => RcoSvg.Find(container, slot));
+            Assert.Contains($"not at #{index}", error.Message);
+        }
+    }
+
     [Fact]
     public void A_second_icon_theme_starts_from_stock_and_restore_brings_stock_back()
     {

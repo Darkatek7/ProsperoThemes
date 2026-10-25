@@ -55,7 +55,7 @@ internal static class PreviewDemoPack
 
         // The control centre's icons: eight of twelve (Switcher, Game Base, Share Screen and Accessories stay stand-ins).
         var icons = new Dictionary<string, string>();
-        string[] slots = ["iconid_home", "iconid_notification", "iconid_music", "iconid_download", "iconid_sound", "iconid_mic", "iconid_ps_user", "iconid_power"];
+        string[] slots = ["iconid_home", "iconid_notification", "iconid_music", "iconid_download", "iconid_sound_speaking", "iconid_mic", "iconid_ps_user", "iconid_power"];
         for (int i = 0; i < slots.Length; i++)
         {
             string file = "previews/icons/" + slots[i] + ".png";
