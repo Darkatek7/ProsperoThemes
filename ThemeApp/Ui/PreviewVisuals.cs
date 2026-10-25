@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using ProsperoThemes.App.Library;
+using ProsperoThemes.Shared;
 using SharpProspero.Graphics;
 
 namespace ProsperoThemes.App.Ui;
@@ -184,6 +186,45 @@ public sealed class PreviewVisuals : IDisposable
 
     // Sizes a pack's picture may have before it is decoded: a tile icon is 512 px, a control icon 128, a picture 1280x720.
     private const int MaxTilePixels = 1024, MaxGlyphPixels = 256, MaxPicturePixels = 2560;
+
+    /// <summary>
+    /// The most pixels a home background may have (the console's are 3840x2160), and so the most bytes its DDS may inflate to
+    /// (BC7 is a byte a pixel, plus the header): a pack cannot make the worker allocate more than this.
+    /// </summary>
+    public const int MaxBackgroundPixels = 3840 * 2160, MaxBackgroundBytes = MaxBackgroundPixels + 4096;
+
+    /// <summary>
+    /// A theme's home background as the pack carries it (the payload of a <c>bg_*.dds.zst</c> target: a zstd'd BC7 DDS; a
+    /// plain DDS is taken as it is) decoded for the preview, opaque. A 3840x2160 texture is decoded straight to 1920x1080 (each
+    /// 4x4 block to 2x2 pixels, averaged: no 8K-pixel buffer, no scaling pass); any other size is decoded whole, at most
+    /// <see cref="MaxBackgroundPixels"/>, for <see cref="ThemeRenderer.BuildPreviewPicture"/> to scale. The inflated texture
+    /// (8 MB) is garbage as soon as this returns. Pure computation, for a worker.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The payload is not a zstd frame or DDS, the texture is not BC7, it is too big or cut short.</exception>
+    public static unsafe PixelBuffer DecodeBackground(byte[] payload)
+    {
+        byte[] dds = Dds.HasMagic(payload) ? payload : Zstd.Decompress(payload, MaxBackgroundBytes);
+        if (dds.Length > MaxBackgroundBytes) throw new InvalidDataException("the background is too big");
+        DdsInfo info = Dds.Parse(dds);
+        if (!info.IsBc7) throw new InvalidDataException("the background is not BC7 (" + (info.Format != 0 ? "DXGI " + info.Format : info.FourCc.Length > 0 ? info.FourCc : "no format") + ")");
+        if ((long)info.Width * info.Height > MaxBackgroundPixels) throw new InvalidDataException("the background is too big");
+        ReadOnlySpan<byte> blocks = dds.AsSpan(info.DataOffset);
+        bool half = info.Width == 2 * Theme.ScreenWidth && info.Height == 2 * Theme.ScreenHeight;
+        int width = half ? Theme.ScreenWidth : info.Width, height = half ? Theme.ScreenHeight : info.Height;
+        var picture = new PixelBuffer(width, height);
+        try
+        {
+            var pixels = new Span<uint>(picture.AsSurface().Pixels, width * height);
+            if (half) Bc7.DecodeHalf(blocks, info.Width, info.Height, pixels, width, opaque: true);
+            else Bc7.Decode(blocks, info.Width, info.Height, pixels, width, opaque: true);
+        }
+        catch
+        {
+            picture.Dispose();
+            throw;
+        }
+        return picture;
+    }
 
     /// <summary>
     /// Decodes and scales the icons of <paramref name="model"/> out of <paramref name="assets"/>: the tile icons (an app's

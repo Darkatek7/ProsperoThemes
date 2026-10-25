@@ -136,6 +136,99 @@ public class PreviewModelTests
         Assert.All(model.Games.Concat(model.Media), t => Assert.Equal(["cover"], model.PictureKeys(t).ToArray()));
     }
 
+    // ---- The home backgrounds ---------------------------------------------------------------------------------------
+
+    private static ThemePackTarget Bg(string path, string file) => Target(path, file, layer: "texture");
+    private static string TileBackground(string id) => $"vsh_asset/bg_{id}.dds.zst";
+
+    [Fact]
+    public void With_a_main_background_every_system_tile_and_every_app_without_its_own_picture_shows_it_before_the_cover()
+    {
+        PreviewModel model = PreviewModel.Of(Manifest([Bg(AssetRoots.HubBackground, "assets/hub.zst")],
+            Previews(apps: [("PPSA11111", "previews/a.jpg"), ("NPXS40071", "previews/lib.jpg")], allApps: "previews/all.jpg")));
+
+        Assert.Equal(["bg:hub", "cover"], model.PictureKeys(model.Games.Single(t => t.Id == "NPXS40047")).ToArray());
+        Assert.Equal(["app:NPXS40071", "bg:hub", "cover"], model.PictureKeys(model.Games.Single(t => t.Id == "NPXS40071")).ToArray());
+        // An app: its own picture, the all-apps one, then what the console shows a title without a pic0, the home background.
+        Assert.Equal(["app:PPSA11111", "allapps", "bg:hub", "cover"], model.PictureKeys(model.Games.Single(t => t.Id == "PPSA11111")).ToArray());
+        Assert.Equal(["allapps", "bg:hub", "cover"], model.PictureKeys(model.Games.First(t => t.Kind == PreviewTileKind.Demo)).ToArray());
+        Assert.Equal("assets/hub.zst", model.PictureFile("bg:hub"));
+        Assert.Equal(["assets/hub.zst"], model.BackgroundFiles);
+        Assert.Contains("assets/hub.zst", model.Files());
+    }
+
+    [Fact]
+    public void Without_all_apps_pictures_an_app_shows_the_main_background_and_a_pack_without_one_is_unchanged()
+    {
+        PreviewModel with = PreviewModel.Of(Manifest([Bg(AssetRoots.HubBackground, "assets/hub.zst")]));
+        Assert.All(with.Games.Concat(with.Media), t => Assert.Equal(["bg:hub", "cover"], with.PictureKeys(t).ToArray()));
+
+        // Targets that are not a home background change nothing: the keys, the files, the order.
+        PreviewModel without = PreviewModel.Of(Manifest([Target("rnps/NPXS40047/appdb/default/icon0.png", "assets/store.png"), Bg("vsh_asset/bg_image_load_error.dds.zst", "assets/error.zst")]));
+        Assert.All(without.Games.Concat(without.Media), t => Assert.Equal(["cover"], without.PictureKeys(t).ToArray()));
+        Assert.Empty(without.BackgroundFiles);
+        Assert.Equal(["assets/store.png"], without.Files());
+    }
+
+    [Fact]
+    public void A_system_tile_that_has_a_background_of_its_own_shows_it_first_then_the_main_one()
+    {
+        PreviewModel model = PreviewModel.Of(Manifest([
+            Bg(AssetRoots.HubBackground, "assets/hub.zst"),
+            Bg(TileBackground("NPXS40047"), "assets/store.zst"),
+            Bg(TileBackground("NPXS40071"), "assets/hub.zst"),       // the main background's file: the tile shows the hub key
+            Bg(TileBackground("NPXS40063"), "assets/store.zst"),     // the Store's file: one key for both
+            Bg(TileBackground("NPXS40075"), "assets/media.zst"),     // Media Gallery
+        ], Previews(apps: [("NPXS40037", "previews/plus.jpg")])));
+
+        Assert.Equal(["bg:NPXS40047", "bg:hub", "cover"], model.PictureKeys(model.Games.Single(t => t.Id == "NPXS40047")).ToArray());
+        Assert.Equal(["bg:hub", "cover"], model.PictureKeys(model.Games.Single(t => t.Id == "NPXS40071")).ToArray());
+        Assert.Equal(["bg:NPXS40047", "bg:hub", "cover"], model.PictureKeys(model.Games.Single(t => t.Id == "NPXS40063")).ToArray());
+        Assert.Equal(["bg:NPXS40075", "bg:hub", "cover"], model.PictureKeys(model.Media.Single(t => t.Id == "NPXS40075")).ToArray());
+        Assert.Equal(["app:NPXS40037", "bg:hub", "cover"], model.PictureKeys(model.Games.Single(t => t.Id == "NPXS40037")).ToArray());
+        // Live TV has no home background of its own on the console, so it shows the main one.
+        Assert.Equal(["bg:hub", "cover"], model.PictureKeys(model.Media.Single(t => t.Id == "NPXS40305")).ToArray());
+        Assert.Equal("assets/store.zst", model.PictureFile("bg:NPXS40047"));
+        Assert.Null(model.PictureFile("bg:NPXS40063"));
+        Assert.Equal(["assets/hub.zst", "assets/store.zst", "assets/media.zst"], model.BackgroundFiles);   // each file once, the main one first
+        Assert.Superset(new System.Collections.Generic.HashSet<string>(model.BackgroundFiles), model.Files());
+    }
+
+    [Fact]
+    public void Without_a_main_background_a_system_tile_with_its_own_shows_it_and_the_rest_the_cover()
+    {
+        PreviewModel model = PreviewModel.Of(Manifest([Bg(TileBackground("NPXS40047"), "assets/store.zst")]));
+
+        Assert.Equal(["bg:NPXS40047", "cover"], model.PictureKeys(model.Games.Single(t => t.Id == "NPXS40047")).ToArray());
+        Assert.Equal(["cover"], model.PictureKeys(model.Games.Single(t => t.Id == "NPXS40071")).ToArray());
+        Assert.Equal(["cover"], model.PictureKeys(model.Games.First(t => t.Kind == PreviewTileKind.Demo)).ToArray());
+        Assert.Equal(["assets/store.zst"], model.BackgroundFiles);
+    }
+
+    [Fact]
+    public void A_pack_with_many_different_backgrounds_keeps_the_first_few_and_the_rest_show_the_main_one()
+    {
+        string[] ids = ["NPXS40047", "NPXS40037", "NPXS40071", "NPXS40139", "NPXS40063", "NPXS40053", "NPXS40054"];
+        PreviewModel model = PreviewModel.Of(Manifest([Bg(AssetRoots.HubBackground, "assets/hub.zst"), .. ids.Select(id => Bg(TileBackground(id), $"assets/{id}.zst"))]));
+
+        Assert.Equal(PreviewModel.MaxBackgrounds, model.BackgroundFiles.Count);
+        Assert.Equal(["assets/hub.zst", "assets/NPXS40047.zst", "assets/NPXS40037.zst", "assets/NPXS40071.zst"], model.BackgroundFiles);
+        PreviewTile[] tiles = [.. model.Games, .. model.Media];
+        Assert.Equal(["bg:NPXS40071", "bg:hub", "cover"], model.PictureKeys(tiles.Single(t => t.Id == "NPXS40071")).ToArray());
+        Assert.Equal(["bg:hub", "cover"], model.PictureKeys(tiles.Single(t => t.Id == "NPXS40139")).ToArray());   // over the cap: the fallback
+        Assert.Equal(["bg:hub", "cover"], model.PictureKeys(tiles.Single(t => t.Id == "NPXS40054")).ToArray());
+        Assert.Null(model.PictureFile("bg:NPXS40139"));
+        Assert.Equal(PreviewModel.MaxBackgrounds, model.Files().Count(f => f.EndsWith(".zst", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void A_tile_the_list_does_not_know_shows_the_main_background_too()
+    {
+        PreviewModel model = PreviewModel.Of(Manifest([Bg(AssetRoots.HubBackground, "assets/hub.zst"), Target("rnps/NPXS49999/appdb/default/icon0.png", "assets/x.png")]));
+
+        Assert.Equal(["bg:hub", "cover"], model.PictureKeys(model.Games.Single(t => t.Id == "NPXS49999")).ToArray());
+    }
+
     // ---- The control centre, the sounds, the files ------------------------------------------------------------------
 
     [Fact]
@@ -375,7 +468,7 @@ public class PreviewModelTests
 
         Assert.Null(model.MusicAt9File);
         Assert.False(model.HasMusic);
-        Assert.Empty(model.Files());
+        Assert.Equal(["bg.zst"], model.Files());   // the home background is read now (the preview decodes it), the other music is not
     }
 
     [Fact]

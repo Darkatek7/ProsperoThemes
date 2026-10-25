@@ -215,7 +215,8 @@ public sealed class PreviewController : IDisposable
         _audio.Close();
     }
 
-    // The picture behind a tile, decoded and scaled to the screen on the worker.
+    // The picture behind a tile, decoded and scaled to the screen on the worker: a JPEG or PNG of the pack's previews, or one of its home
+    // backgrounds (a key from PreviewModel.IsBackgroundKey).
     private void LoadPicture(string key)
     {
         byte[]? bytes = _assets?.Get(_model?.PictureFile(key));
@@ -227,11 +228,19 @@ public sealed class PreviewController : IDisposable
         }
         _pictureJob = true;
         int generation = _generation;
+        bool background = PreviewModel.IsBackgroundKey(key);
         PreviewPicture? picture = null;
         _worker.Run(() =>
         {
             try
             {
+                if (background)
+                {
+                    // The pack's real home background (zstd'd BC7): the texture is decoded to screen size, then only the bands
+                    // are made; the 8 MB it inflated to is garbage before the picture exists.
+                    picture = ThemeRenderer.BuildPreviewPicture(PreviewVisuals.DecodeBackground(bytes), smooth: true, consume: true);
+                    return;
+                }
                 // A JPEG as the pack format says; a PNG is taken too. Measured before a decoder sees it.
                 (int Width, int Height)? size = ImageHeader.JpegSize(bytes) ?? ImageHeader.PngSize(bytes);
                 if (size is not { } measured || measured.Width > 2560 || measured.Height > 2560) return;

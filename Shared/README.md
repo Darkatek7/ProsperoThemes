@@ -28,6 +28,7 @@ happens on the PC. Anything the PC can produce, the format can already carry.
 | `ThemePackManifest.cs` | The `theme.json` model, parse and write. Uses the SDK's `JsonValue` rather than `System.Text.Json` so it stays ahead-of-time safe when compiled into the app. |
 | `ThemePack.cs` | Reads a zip or tar archive (sniffed by magic, not extension), exposes payloads, and validates a pack end to end. |
 | `PackReport.cs` | Issues and severities, so callers get a reason rather than a boolean. |
+| `Zstd.cs`, `Bc7.cs` | Decoders for the preview and for consoles before 13.00: zstd, and BC7 (all modes, also straight to half size) with the DDS header. Tested against the store's TypeScript decoder (`Shared.Tests/fixtures/bc7`). |
 
 ## Validation rules
 

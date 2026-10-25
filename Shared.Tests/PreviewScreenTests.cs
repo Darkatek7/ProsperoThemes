@@ -915,6 +915,191 @@ public class PreviewScreenTests
         Assert.Equal(model.Games.Count - 1, scene.Browser.PreviewFocus);
     }
 
+    // ---- The pack's real home background ----------------------------------------------------------------------------
+
+    private static readonly uint HubColour = Rgb(40, 120, 200), StoreColour = Rgb(200, 60, 100);
+
+    private static ThemePackTarget Background(string path, string file) => Target(path, file, layer: "texture");
+
+    /// <summary>A pack with the main home background (and a Store one, when given), their payloads made in code.</summary>
+    private static (ThemePackManifest Manifest, byte[] Archive) WithBackgrounds(byte[]? hub, byte[]? store = null, int size = 64)
+    {
+        var targets = new List<ThemePackTarget>();
+        var files = new List<(string, byte[])>();
+        if (hub is not null) { targets.Add(Background(AssetRoots.HubBackground, "assets/hub.zst")); files.Add(("assets/hub.zst", hub)); }
+        if (store is not null) { targets.Add(Background("vsh_asset/bg_NPXS40047.dds.zst", "assets/store.zst")); files.Add(("assets/store.zst", store)); }
+        ThemePackManifest manifest = Manifest(targets, Previews(apps: [("PPSA11111", "previews/a.jpg")]));
+        files.Add(("previews/a.jpg", FakeJpeg(64, 36, 0, 0, 200)));
+        return (manifest, Archive(manifest, [.. files]));
+    }
+
+    private static byte[] Hub(int width = 64, int height = 36) => BackgroundKit.Background(width, height, 40, 120, 200);
+
+    [Fact]
+    public void The_cover_is_behind_a_system_tile_until_the_worker_has_decoded_the_pack_background()
+    {
+        (ThemePackManifest manifest, byte[] archive) = WithBackgrounds(Hub());
+        var decoded = new List<byte[]>();
+        using var scene = new Scene(manifest, archive, bytes => { decoded.Add(bytes); return Decode(bytes); });
+        scene.Open();
+
+        scene.Renderer.Draw(scene.Canvas.AsSurface(), scene.Browser, scene.Entries, scene.Time, 1.0 / 60);
+        Assert.Equal("bg:hub", scene.Renderer.Preview.Wanted);
+        Assert.Equal(CoverColour, scene.Pixel(960, 500));          // the placeholder, at once
+        scene.Controller.Update(scene.Entries);
+        Assert.Equal(1, scene.Worker.Pending);                      // the decoding is queued, not done on the frame thread
+        scene.Renderer.Draw(scene.Canvas.AsSurface(), scene.Browser, scene.Entries, scene.Time + 0.1, 1.0 / 60);
+        Assert.Equal(CoverColour, scene.Pixel(960, 500));
+        Assert.False(scene.Renderer.Preview.HasPicture("bg:hub"));
+
+        scene.Worker.RunAll();
+        Assert.True(scene.Renderer.Preview.HasPicture("bg:hub"));
+        scene.Frames(30);                                           // the cross-fade ends on the real background
+
+        Assert.Equal(HubColour, scene.Pixel(960, 500));
+        Assert.Equal(HubColour, scene.Pixel(10, 540));
+        Assert.True(scene.Renderer.Preview.HasPicture(PreviewModel.CoverKey));   // the cover stays for the tiles without
+        Assert.DoesNotContain(decoded, b => b[0] == 0x28);          // the zstd payload never went to the image decoder
+    }
+
+    [Fact]
+    public void A_4K_background_shows_through_the_same_path()
+    {
+        (ThemePackManifest manifest, byte[] archive) = WithBackgrounds(Hub(3840, 2160));
+        using var scene = new Scene(manifest, archive);
+        scene.Open();
+
+        scene.Frames(40);
+
+        Assert.Equal(HubColour, scene.Pixel(960, 500));
+        PreviewPicture picture = scene.Renderer.Preview.Picture("bg:hub")!;
+        Assert.Equal(HubColour, PixelAt(picture.Full, 1919, 1079));
+    }
+
+    [Theory]
+    [InlineData("garbage")]
+    [InlineData("not bc7")]
+    [InlineData("cut short")]
+    [InlineData("missing")]
+    public void A_background_that_cannot_be_made_falls_back_to_the_cover_and_is_not_tried_again(string fault)
+    {
+        byte[] good = BackgroundKit.Dds(64, 36, 40, 120, 200);
+        byte[]? payload = fault switch
+        {
+            "garbage" => [9, 8, 7, 6, 5, 4, 3, 2],
+            "not bc7" => BackgroundKit.Zstd(Dds_Replace(good, "DXT5")),
+            "cut short" => BackgroundKit.Zstd(good.AsSpan(0, 148 + 32).ToArray()),
+            _ => null,
+        };
+        (ThemePackManifest manifest, byte[] archive) = WithBackgrounds(payload ?? [1]);
+        if (payload is null) archive = Archive(manifest, ("previews/a.jpg", FakeJpeg(64, 36, 0, 0, 200)));   // listed, not in the archive
+        using var scene = new Scene(manifest, archive);
+        scene.Open();
+
+        scene.Frames(60);
+
+        Assert.True(scene.Renderer.Preview.HasFailed("bg:hub"));
+        Assert.Equal(CoverColour, scene.Pixel(960, 500));
+        Assert.Null(scene.Renderer.Preview.Wanted);
+        Assert.Equal(0, scene.Worker.Pending);
+        scene.Press(Right);
+        scene.Frames(60);                                           // other system tiles use the same key: not asked for again
+        Assert.Equal(0, scene.Worker.Pending);
+        Assert.Equal(CoverColour, scene.Pixel(960, 500));
+    }
+
+    private static byte[] Dds_Replace(byte[] dds, string fourCc)
+    {
+        byte[] copy = (byte[])dds.Clone();
+        System.Text.Encoding.ASCII.GetBytes(fourCc).CopyTo(copy, 84);
+        return copy;
+    }
+
+    [Fact]
+    public void A_tile_with_a_background_of_its_own_shows_it_and_falls_back_to_the_main_one_when_it_cannot_be_made()
+    {
+        byte[] store = BackgroundKit.Background(64, 36, 200, 60, 100);
+        (ThemePackManifest manifest, byte[] archive) = WithBackgrounds(Hub(), store);
+        using (var scene = new Scene(manifest, archive))
+        {
+            scene.Open();
+            scene.Frames(40);
+            Assert.Equal(StoreColour, scene.Pixel(960, 500));        // the Store's own
+            scene.Press(Right);
+            scene.Frames(40);
+            Assert.Equal(HubColour, scene.Pixel(960, 500));          // PlayStation Plus has none: the main one
+            scene.Press(Left);
+            scene.Frames(40);
+            Assert.Equal(StoreColour, scene.Pixel(960, 500));
+        }
+
+        (manifest, archive) = WithBackgrounds(Hub(), [1, 2, 3]);      // the Store's file is not a texture
+        using var broken = new Scene(manifest, archive);
+        broken.Open();
+        broken.Frames(60);
+        Assert.True(broken.Renderer.Preview.HasFailed("bg:NPXS40047"));
+        Assert.Equal(HubColour, broken.Pixel(960, 500));
+    }
+
+    [Fact]
+    public void An_app_without_a_picture_of_its_own_shows_the_main_background_too()
+    {
+        (ThemePackManifest manifest, byte[] archive) = WithBackgrounds(Hub());
+        using var scene = new Scene(manifest, archive);
+        scene.Open();
+        for (int i = 0; i < 5; i++) scene.Press(Right);   // the app with its own picture (blue), a bit later a stand-in
+        scene.Frames(40);
+        Assert.Equal(Rgb(0, 0, 200), scene.Pixel(960, 500));
+
+        scene.Press(Right);
+        scene.Frames(40);
+
+        Assert.Equal(HubColour, scene.Pixel(960, 500));
+    }
+
+    [Fact]
+    public void However_many_backgrounds_are_visited_five_pictures_are_kept_and_the_cover_is_one_of_them()
+    {
+        // Four different files (the main one and three tiles'), visited tile by tile and back.
+        var targets = new List<ThemePackTarget> { Background(AssetRoots.HubBackground, "assets/hub.zst") };
+        var files = new List<(string, byte[])> { ("assets/hub.zst", Hub()) };
+        string[] ids = ["NPXS40047", "NPXS40037", "NPXS40071"];
+        for (int i = 0; i < ids.Length; i++)
+        {
+            targets.Add(Background($"vsh_asset/bg_{ids[i]}.dds.zst", $"assets/{ids[i]}.zst"));
+            files.Add(($"assets/{ids[i]}.zst", BackgroundKit.Background(64, 36, (byte)(10 * (i + 1)), 2, 2)));
+        }
+        ThemePackManifest manifest = Manifest(targets);
+        using var scene = new Scene(manifest, Archive(manifest, [.. files]));
+        scene.Open();
+
+        for (int round = 0; round < 3; round++)
+            for (int step = 0; step < 5; step++)   // Store, Plus, Game Library, App Library, Welcome
+            {
+                scene.Frames(30);
+                Assert.True(scene.Renderer.Preview.PictureCount <= PreviewVisuals.MaxPictures);
+                Assert.True(scene.Renderer.Preview.HasPicture(PreviewModel.CoverKey));
+                scene.Press(round % 2 == 0 ? Right : Left);
+            }
+    }
+
+    [Fact]
+    public void A_background_that_is_made_after_the_preview_was_left_is_dropped_and_freed()
+    {
+        (ThemePackManifest manifest, byte[] archive) = WithBackgrounds(Hub());
+        using var scene = new Scene(manifest, archive);
+        scene.Open();
+        scene.Renderer.Draw(scene.Canvas.AsSurface(), scene.Browser, scene.Entries, scene.Time, 1.0 / 60);
+        scene.Controller.Update(scene.Entries);
+        Action[] late = scene.Worker.WorkOnly();   // the picture is made, its answer has not arrived
+
+        scene.Press(O);
+        foreach (Action done in late) done();
+
+        Assert.False(scene.Controller.IsOpen);
+        Assert.True(scene.Renderer.Preview.IsEmpty);
+    }
+
     [Fact]
     public void The_model_of_a_pack_is_made_once_for_its_manifest()
     {

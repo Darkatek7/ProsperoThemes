@@ -239,20 +239,34 @@ public sealed partial class ThemeRenderer
     /// <paramref name="smooth"/>, which is slower but right for a photograph) and its two bands washed. The source is not
     /// kept or changed. Pure computation, so a worker thread may call it.
     /// </summary>
-    internal static PreviewPicture BuildPreviewPicture(PixelBuffer source, bool smooth)
+    /// <param name="consume">
+    /// The caller does not need <paramref name="source"/> any more: a source that already has the screen's size becomes the
+    /// picture's own pixels (no 8 MB copy), any other is disposed once it is scaled, and it is disposed if this throws.
+    /// </param>
+    internal static PreviewPicture BuildPreviewPicture(PixelBuffer source, bool smooth, bool consume = false)
     {
         PixelBuffer full;
-        if (source.Width == Theme.ScreenWidth && source.Height == Theme.ScreenHeight)
+        try
         {
-            full = new PixelBuffer(Theme.ScreenWidth, Theme.ScreenHeight);
-            full.AsSurface().Blit(source.AsSurface(), 0, 0);
+            if (source.Width == Theme.ScreenWidth && source.Height == Theme.ScreenHeight && consume) full = source;
+            else if (source.Width == Theme.ScreenWidth && source.Height == Theme.ScreenHeight)
+            {
+                full = new PixelBuffer(Theme.ScreenWidth, Theme.ScreenHeight);
+                full.AsSurface().Blit(source.AsSurface(), 0, 0);
+            }
+            else if (smooth) full = ImageCache.Scaled(source, Theme.ScreenWidth, Theme.ScreenHeight);
+            else
+            {
+                full = new PixelBuffer(Theme.ScreenWidth, Theme.ScreenHeight);
+                full.AsSurface().BlitScaled(source.AsSurface(), 0, 0, Theme.ScreenWidth, Theme.ScreenHeight);
+            }
         }
-        else if (smooth) full = ImageCache.Scaled(source, Theme.ScreenWidth, Theme.ScreenHeight);
-        else
+        catch
         {
-            full = new PixelBuffer(Theme.ScreenWidth, Theme.ScreenHeight);
-            full.AsSurface().BlitScaled(source.AsSurface(), 0, 0, Theme.ScreenWidth, Theme.ScreenHeight);
+            if (consume) source.Dispose();
+            throw;
         }
+        if (consume && !ReferenceEquals(full, source)) source.Dispose();
         int bottomOrigin = Theme.ScreenHeight - HomeBottomHeight;
         var top = new PixelBuffer(Theme.ScreenWidth, HomeTopHeight);
         var bottom = new PixelBuffer(Theme.ScreenWidth, HomeBottomHeight);

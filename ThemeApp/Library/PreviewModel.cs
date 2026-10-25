@@ -52,8 +52,16 @@ public sealed record PreviewControl(string Slot, string Name, string? IconFile);
 public sealed class PreviewModel
 {
     public const string CoverKey = "cover", AllAppsKey = "allapps";
+    /// <summary>The key of the theme's main home background (the payload of the <see cref="AssetRoots.HubBackground"/> target).</summary>
+    public const string HubKey = "bg:hub";
     /// <summary>Most tiles for apps with their own background; the rest are left out.</summary>
     public const int MaxAppTiles = 12;
+    /// <summary>
+    /// Most different home-background payloads the preview reads (the main one and those of tiles that name a file of their
+    /// own). Each is a few MB compressed and 14 MB once decoded, so a pack that gives every system tile another picture
+    /// shows the first tiles' own and the main background for the rest.
+    /// </summary>
+    public const int MaxBackgrounds = 4;
 
     /// <summary>The system tiles with an icon the theme engine can replace (<c>rnps</c> is <c>/mnt/rnps/apps</c>, or <c>/system_ex/rnps/apps</c> without the live copy).</summary>
     private static readonly (string Id, string Name, string Path, PreviewTab Tab, int Symbol)[] SystemTiles =
@@ -69,6 +77,9 @@ public sealed class PreviewModel
         ("NPXS40305", "Live TV on PS5", "rnps/NPXS40016/appdb/NPXS40305/icon0.png", PreviewTab.Media, 3),
         ("NPXS40075", "Media Gallery", "rnps/NPXS40075/appdb/default/icon0.png", PreviewTab.Media, 1),
     ];
+
+    // The target paths of the system tiles' own home backgrounds, as an array to search.
+    private static readonly string[] SystemTileBackgrounds = [.. AssetRoots.SystemTileBackgrounds];
 
     /// <summary>The logical path of the console's home music; a pack that changes it carries the whole ATRAC9 file.</summary>
     public const string HomeMusicPath = AssetRoots.VshAsset + "/bgm_home.at9";
@@ -121,7 +132,7 @@ public sealed class PreviewModel
     private readonly Dictionary<string, string> _pictureFiles = new(StringComparer.Ordinal);
 
     private PreviewModel(IReadOnlyList<PreviewTile> games, IReadOnlyList<PreviewTile> media, IReadOnlyList<PreviewControl> controls,
-        string? allApps, string? music, string? musicAt9, IReadOnlyDictionary<string, string> sounds)
+        string? allApps, string? music, string? musicAt9, IReadOnlyDictionary<string, string> sounds, IReadOnlyList<string> backgrounds)
     {
         Games = games;
         Media = media;
@@ -130,6 +141,7 @@ public sealed class PreviewModel
         MusicFile = music;
         MusicAt9File = musicAt9;
         SoundFiles = sounds;
+        BackgroundFiles = backgrounds;
     }
 
     public IReadOnlyList<PreviewTile> Games { get; }
@@ -148,25 +160,41 @@ public sealed class PreviewModel
     public bool HasMusic => MusicFile is not null || MusicAt9File is not null;
     /// <summary>Clip name (<c>psfx_focus_move</c>, ...) to the archive path of the pack's VAG for it.</summary>
     public IReadOnlyDictionary<string, string> SoundFiles { get; }
+    /// <summary>
+    /// The archive paths of the home backgrounds the preview decodes (zstd'd DDS payloads), the main one first, each file
+    /// once however many targets name it, at most <see cref="MaxBackgrounds"/>.
+    /// </summary>
+    public IReadOnlyList<string> BackgroundFiles { get; }
 
     public IReadOnlyList<PreviewTile> Tiles(PreviewTab tab) => tab == PreviewTab.Games ? Games : Media;
 
     /// <summary>The key of the picture of an app with its own background.</summary>
     public static string AppKey(string titleId) => "app:" + titleId;
 
+    /// <summary>Whether a picture key is one of the home backgrounds (<see cref="HubKey"/> or a tile's own): a zstd'd BC7 DDS, not a PNG or JPEG.</summary>
+    public static bool IsBackgroundKey(string key) => key.StartsWith("bg:", StringComparison.Ordinal);
+
+    /// <summary>The key of the home background a system tile's own <c>bg_&lt;TID&gt;</c> target names (when it is not the main one's file).</summary>
+    public static string BackgroundKey(string titleId) => "bg:" + titleId;
+
     /// <summary>
     /// The pictures that may go behind <paramref name="tile"/> when it has the focus, best first, ending with the cover:
-    /// its own background; then, for anything but a system tile, the all-apps background (the console gives an app
-    /// without one of its own that, and a system tile its home background, which is the cover).
+    /// its own background; then, for anything but a system tile, the all-apps background; then, as the console shows,
+    /// the home background: a system tile's own (<c>bg_&lt;TID&gt;</c>, when the pack names a file for it), else the
+    /// theme's main one (<see cref="HubKey"/>, which is also what an app without a picture of its own shows). The cover,
+    /// the pack's 640x360 render of the home background, comes last: it shows while the real background is decoded, and
+    /// stays when the pack carries none or the file cannot be decoded.
     /// </summary>
     public IReadOnlyList<string> PictureKeys(PreviewTile tile) => tile.PictureKeys;
 
     // Worked out once per tile, so a frame that asks for them allocates nothing.
-    private static string[] KeysFor(string id, PreviewTileKind kind, string? pictureFile, string? allApps)
+    private static string[] KeysFor(string id, PreviewTileKind kind, string? pictureFile, string? allApps, string? tileBackgroundKey, bool hub)
     {
-        var keys = new List<string>(3);
+        var keys = new List<string>(5);
         if (pictureFile is not null) keys.Add(AppKey(id));
         if (kind != PreviewTileKind.System && allApps is not null) keys.Add(AllAppsKey);
+        if (kind == PreviewTileKind.System && tileBackgroundKey is not null) keys.Add(tileBackgroundKey);
+        if (hub) keys.Add(HubKey);
         keys.Add(CoverKey);
         return [.. keys];
     }
@@ -182,6 +210,7 @@ public sealed class PreviewModel
         foreach (PreviewTile tile in Media) AddFiles(files, tile);
         foreach (PreviewControl control in Controls) if (control.IconFile is not null) files.Add(control.IconFile);
         foreach (string file in SoundFiles.Values) files.Add(file);
+        foreach (string file in BackgroundFiles) files.Add(file);
         if (AllAppsFile is not null) files.Add(AllAppsFile);
         if (MusicFile is not null) files.Add(MusicFile);
         if (MusicAt9File is not null) files.Add(MusicAt9File);
@@ -211,9 +240,41 @@ public sealed class PreviewModel
                 unknown.Add((id, target.Path.StartsWith(MediaRoot, StringComparison.Ordinal) ? PreviewTab.Media : PreviewTab.Games, target.Path));
         }
 
+        // The home backgrounds the pack replaces: the main one, and the system tiles' own (AssetRoots.SystemTileBackgrounds).
+        string? hubFile = null;
+        var tileBackgrounds = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (ThemePackTarget target in manifest.Targets)
+        {
+            if (target.File.Length == 0) continue;
+            if (target.Path == AssetRoots.HubBackground) hubFile ??= target.File;
+            else if (Array.IndexOf(SystemTileBackgrounds, target.Path) >= 0) tileBackgrounds.TryAdd(target.Path, target.File);
+        }
+        var backgrounds = new List<string>(MaxBackgrounds);
+        var pictures = new Dictionary<string, string>(StringComparer.Ordinal);
+        bool hub = hubFile is not null;
+        if (hub)
+        {
+            backgrounds.Add(hubFile!);
+            pictures[HubKey] = hubFile!;
+        }
+        // The key of a system tile's own background. None when its file is the main one's (the tile then shows the hub key,
+        // so one picture is decoded and kept however many tiles share it) or when MaxBackgrounds files are taken already;
+        // tiles that share a file share the key of the first.
+        var keyOfFile = new Dictionary<string, string>(StringComparer.Ordinal);
+        string? TileBackgroundKey(string id)
+        {
+            if (!tileBackgrounds.TryGetValue($"{AssetRoots.VshAsset}/bg_{id}.dds.zst", out string? file) || file == hubFile) return null;
+            if (keyOfFile.TryGetValue(file, out string? known)) return known;
+            if (backgrounds.Count >= MaxBackgrounds) return null;
+            backgrounds.Add(file);
+            string key = BackgroundKey(id);
+            keyOfFile[file] = key;
+            pictures[key] = file;
+            return key;
+        }
+
         var games = new List<PreviewTile>();
         var media = new List<PreviewTile>();
-        var pictures = new Dictionary<string, string>(StringComparer.Ordinal);
         var knownIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var system in SystemTiles)
         {
@@ -224,7 +285,7 @@ public sealed class PreviewModel
                 IconFile = icons.GetValueOrDefault(system.Path),
                 PictureFile = own,
                 Symbol = system.Symbol,
-                PictureKeys = KeysFor(system.Id, PreviewTileKind.System, own, previews.AllApps),
+                PictureKeys = KeysFor(system.Id, PreviewTileKind.System, own, previews.AllApps, TileBackgroundKey(system.Id), hub),
             };
             (system.Tab == PreviewTab.Games ? games : media).Add(tile);
             if (own is not null) pictures[AppKey(system.Id)] = own;
@@ -237,7 +298,7 @@ public sealed class PreviewModel
             {
                 IconFile = icons[path],
                 PictureFile = own,
-                PictureKeys = KeysFor(id, PreviewTileKind.System, own, previews.AllApps),
+                PictureKeys = KeysFor(id, PreviewTileKind.System, own, previews.AllApps, TileBackgroundKey(id), hub),
             });
             if (own is not null) pictures[AppKey(id)] = own;
         }
@@ -256,7 +317,7 @@ public sealed class PreviewModel
                 PictureFile = own,
                 Symbol = 1,
                 Hue = 215,
-                PictureKeys = KeysFor(tid, PreviewTileKind.App, own, previews.AllApps),
+                PictureKeys = KeysFor(tid, PreviewTileKind.App, own, previews.AllApps, null, hub),
             });
             if (own is not null) pictures[AppKey(tid)] = own;
         }
@@ -268,7 +329,7 @@ public sealed class PreviewModel
             {
                 Symbol = demo.Symbol,
                 Hue = demo.Hue,
-                PictureKeys = KeysFor("demo-" + i, PreviewTileKind.Demo, null, previews.AllApps),
+                PictureKeys = KeysFor("demo-" + i, PreviewTileKind.Demo, null, previews.AllApps, null, hub),
             });
         }
 
@@ -289,7 +350,7 @@ public sealed class PreviewModel
             foreach (ThemePackTarget target in manifest.Targets)
                 if (target.Path == HomeMusicPath && target.File.Length > 0) { musicAt9 = target.File; break; }
 
-        var model = new PreviewModel(games, media, controls, previews.AllApps, previews.Music, musicAt9, sounds);
+        var model = new PreviewModel(games, media, controls, previews.AllApps, previews.Music, musicAt9, sounds, backgrounds);
         foreach (var (key, file) in pictures) model._pictureFiles[key] = file;
         return model;
     }

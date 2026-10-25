@@ -224,10 +224,26 @@ The full-screen preview shows a theme the way the console would, using the piece
   own (`previews.apps`, and `apps/<TID>/pic0.dds` or `appmeta/<TID>/pic0.dds` targets; their tile shows the app's
   picture cropped square; at most 12) and a few neutral drawn demo apps. The focused tile's name is under it. The
   row slides (eased) when the focus moves and scrolls when it is longer than the screen.
-- **Background follows focus**, as on the console: a focused app with its own picture (`previews.apps[TID]`) shows
-  it, otherwise an app (not a system tile) shows the all-apps picture (`previews.allApps`), otherwise the theme's
-  cover (`preview`). A pack without previews shows its cover behind everything. A picture change cross-fades in six
-  steps over a quarter of a second (`FadeSteps` and `FadeSeconds` in `ThemeRenderer.Preview.cs`).
+- **Background follows focus**, as on the console. The keys of a tile, best first (`PreviewModel.PictureKeys`): its own
+  picture (`previews.apps[TID]`, `app:<TID>`); for an app that is not a system tile the all-apps picture
+  (`previews.allApps`, `allapps`); for a system tile the pack's own home background for it (`bg:<TID>`, the payload of
+  its `vsh_asset/bg_<TID>.dds.zst` target, when that file differs from the main one's); the pack's main home
+  background (`bg:hub`, the `bg_hub_default.dds.zst` payload; it is also what an app without a picture of its own
+  shows, and what a system tile without a `bg_<TID>` target gets, as the applier does); and last the theme's cover
+  (`preview`, a 640x360 render of the same picture). The cover is the placeholder: it is behind the tile at once, and
+  stays for a pack without home backgrounds or when a background cannot be decoded (a key that fails is skipped for
+  good). A pack without previews shows its cover behind everything. A picture change cross-fades in six steps over a
+  quarter of a second (`FadeSteps` and `FadeSeconds` in `ThemeRenderer.Preview.cs`).
+- **Home backgrounds are decoded for real**, on the worker (`PreviewVisuals.DecodeBackground`, called by
+  `PreviewController.LoadPicture`): `Zstd.Decompress` (at most `MaxBackgroundBytes`, a 3840x2160 BC7 DDS and a bit; a
+  payload that already is a DDS is taken as it is), then `Bc7.DecodeHalf` turns every 4x4 block into 2x2 pixels (the
+  average of each 2x2 group) so 3840x2160 becomes the 1920x1080 screen picture with no 8K buffer and no scaling pass; any
+  other size is decoded whole (at most 8.3 M pixels) and scaled like a cover. Only BC7 (DXGI 97 to 99) is read; anything
+  else fails the key. On a PC in Release a 3840x2160 texture costs about 45 ms (zstd of a worst-case 7 MB payload), 75 ms
+  (BC7) and 3 ms (the bands), so about 120 ms on a worker. The model caps what is read: each distinct payload file
+  once (many targets share the main one), the main one plus at most three more (`PreviewModel.MaxBackgrounds`), each
+  at most 16 MiB and 24 MiB together (`PreviewAssets.MaxBackground`, `MaxBackgroundTotal`); tiles whose file was left
+  out show `bg:hub`.
 - **Control centre** (Triangle): Home, Switcher, Notifications, Game Base, Music, Downloads, Share Screen, Sound,
   Mic, Accessories, Profile and Power, with the pack's 128x128 PNG renders (`previews.icons[slot]`, white on
   transparent; the app cannot draw SVG) or a neutral drawn stand-in where the pack has none.
@@ -238,9 +254,11 @@ The full-screen preview shows a theme the way the console would, using the piece
   The MP3 is preferred when a pack has both.
 
 How it is made cheap enough for the console: the pack is read on a worker when the preview opens (only the files
-`Library/PreviewModel.cs` names; a pack's big backgrounds are never inflated); tile art and icons are scaled once;
+`Library/PreviewModel.cs` names; a pack's home backgrounds are read still compressed, a few at most, and inflated one at
+a time on the worker); tile art and icons are scaled once;
 a picture is decoded and scaled to the screen once, on a worker, together with the two washed bands of the overlay
-(`PreviewPicture`); the cover and four more are kept (the least recently used of the four goes first). A frame at rest is three copies of those
+(`PreviewPicture`); the cover and four more are kept (the least recently used of the four goes first; each picture is
+about 14 MB, so the main background plus a tile's own and an app's picture are what fits besides the cover). A frame at rest is three copies of those
 plus the row's tiles and text; the cross-fade mixes the two pictures into one buffer per step and the frames
 between steps copy it. Everything is released when the preview closes. `ThemeApp.Preview --bench` prints the cost
 of each of these states.
@@ -535,6 +553,7 @@ Use PowerShell 7. The SDK's `build-app.ps1` merges native stderr into the pipeli
 |---|---|
 | `Program.cs` | The app: a `ProsperoApp` subclass, one screen. |
 | `Library/Preview*.cs`, `Ui/Preview*.cs`, `Library/Mp3Frames.cs`, `Library/ImageHeader.cs` | The preview: its model, the pack's files, the controller and its worker, the visuals. |
+| `../Shared/Bc7.cs` | The BC7 decoder (all eight modes, full and straight to half size) and the DDS header reader the preview decodes home backgrounds with. |
 | `Library/ConsolePreviewAudio.cs` | The preview's sound; the only file that links the audio libraries. |
 | `ThemeApp.csproj` | Application-module project; imports the SDK's `Prospero.App.props/targets`. |
 | `sce_sys/param.json` | Identity and the Game classification. |
