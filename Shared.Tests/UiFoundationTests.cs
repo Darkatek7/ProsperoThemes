@@ -854,9 +854,10 @@ public unsafe class UiFoundationTests
         browser.OpenStoreAddress("http://a");
         Assert.Equal(keyboard, Frame());
         browser.Update(UiInput.None with { Cancel = true });
-        browser.Update(UiInput.None with { PageUp = true });
-        browser.Update(UiInput.None with { PageUp = true });
-        browser.Update(UiInput.None with { PageUp = true });
+        browser.Update(UiInput.None with { PageUp = true });        // Import
+        browser.Update(UiInput.None with { PageUp = true });        // Avatars
+        browser.Update(UiInput.None with { PageUp = true });        // Community
+        browser.Update(UiInput.None with { PageUp = true });        // Library
         Assert.Equal(ThemeView.Library, browser.View);
         Assert.Equal(library, Frame());
     }

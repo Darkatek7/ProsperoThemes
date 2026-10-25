@@ -117,6 +117,9 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeView.Community, browser.View);
         Assert.Equal(ThemeAction.CommunityRefresh, browser.TakeAction());   // first visit loads the list
         browser.Update(UiInput.None with { PageDown = true });
+        Assert.Equal(ThemeView.Avatars, browser.View);
+        Assert.Equal(ThemeAction.AvatarStoreRefresh, browser.TakeAction());   // first visit loads the store's avatars
+        browser.Update(UiInput.None with { PageDown = true });
         Assert.Equal(ThemeView.Import, browser.View);
         browser.Update(X);
         Assert.Equal(ThemeAction.ImportUsb, browser.TakeAction());
@@ -439,8 +442,8 @@ public class ThemeBrowserTests
 
     private static void ToSystem(ThemeBrowser browser)
     {
-        for (int i = 0; i < 3; i++) browser.Update(UiInput.None with { PageDown = true });
-        browser.TakeAction();   // the Community tab asked for its list on the way
+        for (int i = 0; i < 4; i++) browser.Update(UiInput.None with { PageDown = true });   // Community, Avatars, Import, System
+        browser.TakeAction();   // the Community and Avatars tabs asked for their lists on the way
     }
 
     [Fact]
@@ -451,6 +454,10 @@ public class ThemeBrowserTests
         Assert.Equal(ThemeView.Community, browser.View);
         Assert.Equal(DialogKind.None, browser.Dialog);
         browser.Update(UiInput.None with { PageDown = true });
+        Assert.Equal(ThemeView.Avatars, browser.View);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        browser.Update(UiInput.None with { PageDown = true });
+        Assert.Equal(ThemeView.Import, browser.View);
         Assert.Equal(DialogKind.None, browser.Dialog);
         browser.Update(UiInput.None with { PageDown = true });
         Assert.Equal(ThemeView.System, browser.View);
@@ -1106,6 +1113,8 @@ public class ThemeBrowserTests
     {
         var browser = new ThemeBrowser();
         browser.Update(UiInput.None with { PageDown = true });   // Community
+        browser.TakeAction();
+        browser.Update(UiInput.None with { PageDown = true });   // Avatars
         browser.TakeAction();
         browser.Update(UiInput.None with { PageDown = true });   // Import
         browser.Update(UiInput.None, preview: true);

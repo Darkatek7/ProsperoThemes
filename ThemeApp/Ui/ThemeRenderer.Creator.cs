@@ -42,7 +42,7 @@ public sealed partial class ThemeRenderer
     internal const string CreatorHeading = "Make your own theme", CreatorScan = "SCAN WITH YOUR PHONE";
     internal const string CreatorIntro = "Create a theme in your browser with the web creator, download it, then import it here.";
     internal const string CreatorCaptionPrefix = "Make your own theme on the website  ·  ";
-    internal const string CreatorEmptyLibrary = "Copy theme packs from a USB drive on the USB Import tab, pick some on the Community tab, or make your own on the website.";
+    internal const string CreatorEmptyLibrary = "Copy theme packs from a USB drive on the USB Import tab, pick some on the Themes tab, or make your own on the website.";
     private static readonly Color CreatorModuleInk = Color.FromRgb(10, 14, 22);
 
     /// <summary>The web creator's card, right of <see cref="ImportCard"/> and as tall; as of the last <see cref="Draw"/>.</summary>
@@ -185,7 +185,7 @@ public sealed partial class ThemeRenderer
             _emptyForCreator = creator;
             _emptyText = creator
                 ? _body.Wrap(CreatorEmptyLibrary, 760, 3)
-                : _body.Wrap("Copy theme packs from a USB drive on the USB Import tab, or pick some on the Community tab.", 760, 2);
+                : _body.Wrap("Copy theme packs from a USB drive on the USB Import tab, or pick some on the Themes tab.", 760, 2);
         }
         return _emptyText;
     }

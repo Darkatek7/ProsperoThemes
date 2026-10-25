@@ -223,7 +223,8 @@ public sealed class ThemePack
         return true;
     }
 
-    private static Dictionary<string, byte[]> ReadFiles(ReadOnlySpan<byte> archive, Func<string, bool>? keep)
+    /// <summary>Every file of a zip or tar archive by normalised path (also used by <see cref="AvatarPack"/>).</summary>
+    internal static Dictionary<string, byte[]> ReadFiles(ReadOnlySpan<byte> archive, Func<string, bool>? keep)
     {
         // zip: "PK\x03\x04"
         if (archive.Length >= 4 && archive[0] == 0x50 && archive[1] == 0x4B && archive[2] == 0x03 && archive[3] == 0x04)

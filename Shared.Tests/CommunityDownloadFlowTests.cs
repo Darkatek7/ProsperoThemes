@@ -165,7 +165,8 @@ public class CommunityDownloadFlowTests
         Assert.Equal(ThemeView.Community, browser.View);
         browser.Update(O);
 
-        browser.Update(R1);                                         // left for USB Import while the pack was on its way
+        browser.Update(R1);                                         // left for USB Import while the pack was on its way (Avatars, then Import)
+        browser.Update(R1);
         Assert.False(browser.OpenCommunityPreview());
         Assert.Equal(ThemeView.Import, browser.View);
     }
@@ -295,6 +296,7 @@ public class CommunityDownloadFlowTests
     public void The_hand_over_needs_the_user_to_still_be_waiting_on_the_store()
     {
         ThemeBrowser away = AfterDownload();
+        away.Update(R1);                                            // Avatars
         away.Update(R1);                                            // Import
         Assert.False(away.ApplyAfterDownload());
         Assert.Equal(ThemeView.Import, away.View);
@@ -463,14 +465,16 @@ public class CommunityDownloadFlowTests
         (ThemePackManifest manifest, byte[] archive) = WithMusicAndSounds();
         using var scene = new StoreScene();
         scene.Press(UiInput.None, square: true);
-        scene.Press(R1);                                            // to USB Import while it loads
+        scene.Press(R1);                                            // to USB Import while it loads (Avatars, then Import)
+        scene.Press(R1);
         Assert.False(scene.Show(StoreEntry(manifest), archive));
         Assert.False(scene.Controller.IsOpen);
         Assert.Null(scene.Renderer.StorePreview);
         Assert.Equal(0, scene.Worker.Pending);
         Assert.Equal(ThemeView.Import, scene.Browser.View);
 
-        // Or while a question about another card is open.
+        // Or while a question about another card is open (back through Avatars to the store).
+        scene.Press(L1);
         scene.Press(L1);
         scene.Press(X);
         Assert.Equal(DialogKind.CommunityDownload, scene.Browser.Dialog);

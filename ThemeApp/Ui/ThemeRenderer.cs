@@ -321,6 +321,7 @@ public sealed partial class ThemeRenderer : IDisposable
             case ThemeView.Library: DrawLibrary(surface, browser, entries, selected, enter, seconds, delta); break;
             case ThemeView.Detail: if (selected is not null) DrawDetail(surface, browser, selected, enter); break;
             case ThemeView.Community: DrawCommunity(surface, browser, enter); break;
+            case ThemeView.Avatars: DrawAvatarStore(surface, browser, enter); break;
             case ThemeView.Import: DrawImport(surface, enter); break;
             case ThemeView.System: DrawSystem(surface, browser, entries.Count, enter); break;
             case ThemeView.StoreAddress: DrawStoreAddress(surface, browser.StoreEditor, enter, seconds); break;
@@ -414,6 +415,8 @@ public sealed partial class ThemeRenderer : IDisposable
     {
         ReleaseDialogBase();
         ReleaseCreator();
+        ReleaseAvatars();
+        ReleaseAvatarStore();
         ResetCovers();
         ResetCommunity();
         _fallback.Dispose();

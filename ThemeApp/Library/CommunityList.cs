@@ -250,7 +250,7 @@ public static class CommunityList
         return ids;
     }
 
-    private static bool IsDigest(string value)
+    internal static bool IsDigest(string value)
     {
         if (value.Length != 64) return false;
         foreach (char c in value)
@@ -300,7 +300,7 @@ public static class CommunityList
         return array.Write(indented: true) + "\n";
     }
 
-    private static string? Absolute(string baseUrl, string? url)
+    internal static string? Absolute(string baseUrl, string? url)
     {
         if (string.IsNullOrEmpty(url)) return null;
         if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))

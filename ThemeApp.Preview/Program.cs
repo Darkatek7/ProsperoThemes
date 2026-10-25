@@ -89,11 +89,61 @@ ThemeLibraryEntry? EntryOf(CommunityTheme? card) =>
     card is not null && card.Id.StartsWith("store-", StringComparison.Ordinal) && int.TryParse(card.Id["store-".Length..], out int i) && i < entries.Count ? entries[i] : null;
 void SyncCard() => renderer.SelectedCommunityId = CardUnderCursor()?.Id;
 
+// The Avatars tab: a store list of buildings, every avatar with the fixture's preview (one without a picture yet and one whose
+// picture does not decode, to show the letter disc), a couple liked and a couple already in the app's avatars.
+List<StoreAvatar> avatarStore = PreviewData.AvatarStore();
+byte[]? housePreview = null;
+if (File.Exists(Path.Combine(fixtures, "avatar-house.p5avatar")))
+    housePreview = AvatarPack.Open(File.ReadAllBytes(Path.Combine(fixtures, "avatar-house.p5avatar"))).Preview();
+IReadOnlySet<string> avatarLiked = new HashSet<string>(["house-1", "house-4"], StringComparer.Ordinal);
+IReadOnlySet<string> avatarInLibrary = new HashSet<string>(["house-2", "house-7"], StringComparer.Ordinal);
+
+// What the app does when the Avatars list arrives: the store's answer for the browser's sort replaces the list and its pictures.
+void ReloadAvatarStore()
+{
+    List<StoreAvatar> shown = PreviewData.AvatarListing(avatarStore, (CommunitySort)browser.AvatarStoreSort);
+    renderer.ResetAvatarStore();
+    renderer.AvatarStore = shown;
+    foreach (StoreAvatar a in shown)
+    {
+        if (a.Id == "house-10") continue;   // its picture has not arrived
+        if (a.Id == "house-11") renderer.AvatarStorePreviews[a.Id] = [1, 2, 3, 4];   // one that does not decode
+        else if (housePreview is not null) renderer.AvatarStorePreviews[a.Id] = housePreview;
+    }
+    renderer.AvatarStoreInLibrary = avatarInLibrary;
+    renderer.AvatarStoreLiked = avatarLiked;
+    renderer.AvatarStoreListSort = browser.AvatarStoreSort;
+    renderer.AvatarStoreStatus = "";
+    renderer.AvatarStoreError = false;
+    browser.SetAvatarStoreCount(shown.Count);
+}
+
 // What the app does for the browser's actions that the preview can show: the music, and the store card's preview and downloads. The
 // pack of a card is the library pack it was made from; nothing is fetched, written or applied here.
 void Dispatch(ThemeAction action)
 {
     if (action == ThemeAction.PreviewMusic) preview.ToggleMusic();
+    if (action == ThemeAction.AvatarStoreRefresh) ReloadAvatarStore();
+    if (action is ThemeAction.AvatarLike or ThemeAction.AvatarDownload or ThemeAction.AvatarDownloadSet
+        && browser.AvatarStoreSelected >= 0 && browser.AvatarStoreSelected < renderer.AvatarStore.Count)
+    {
+        StoreAvatar a = renderer.AvatarStore[browser.AvatarStoreSelected];
+        if (action == ThemeAction.AvatarLike)
+        {
+            avatarLiked = avatarLiked.Contains(a.Id)
+                ? new HashSet<string>(avatarLiked.Where(id => id != a.Id), StringComparer.Ordinal)
+                : new HashSet<string>(avatarLiked, StringComparer.Ordinal) { a.Id };
+            renderer.AvatarStoreLiked = avatarLiked;
+        }
+        else
+        {
+            avatarInLibrary = new HashSet<string>(avatarInLibrary, StringComparer.Ordinal) { a.Id };
+            renderer.AvatarStoreInLibrary = avatarInLibrary;
+            renderer.Notify(action == ThemeAction.AvatarDownloadSet
+                ? $"\u201c{a.Name}\u201d is now your profile picture (PC preview only)."
+                : $"\u201c{a.Name}\u201d is now in your avatars (PC preview only).", NoticeLevel.Success);
+        }
+    }
     if (action is not (ThemeAction.CommunityPreview or ThemeAction.CommunityDownload or ThemeAction.CommunityDownloadApply)) return;
     if (CardUnderCursor() is not { } card || EntryOf(card) is not { } entry) return;
     if (action == ThemeAction.CommunityPreview)
@@ -133,7 +183,7 @@ if (args.Contains("--bench"))
         ("system-restore", () => { for (int i = 0; i < ThemeBrowser.SystemRowCount - 1; i++) browser.Update(down); }),
         ("dialog-restore", () => browser.Update(press)),
         ("toast", () => { browser.Update(cancel); renderer.Notify("Applied and verified 27 target(s).", NoticeLevel.Success); }),
-        ("community", () => { browser.Update(UiInput.None with { PageUp = true }); browser.Update(UiInput.None with { PageUp = true }); renderer.ClearNotice(); }),
+        ("community", () => { for (int i = 0; i < 3; i++) browser.Update(UiInput.None with { PageUp = true }); renderer.ClearNotice(); }),
         ("community-chips", () => browser.Update(UiInput.None with { Up = true })),   // the first chip focused: its ring instead of the card's
         ("community-chips-end", () => { for (int i = 0; i < ThemeBrowser.CommunityChipCount; i++) browser.Update(UiInput.None with { Right = true }); }),   // the row scrolled to its last chip
     };
@@ -448,10 +498,35 @@ if (args.Contains("--screenshots"))
     renderer.CommunityStatus = "No store set. On the System tab, choose Store address and enter the address.";
     browser.SetCommunityCount(0);
     Save("community-empty", ThemeView.Community);
+    // The Avatars tab (after Themes): the store's avatars as round faces, six to a row.
+    browser.StoreUrl = AppSettings.DefaultStoreUrl;
+    browser.Update(UiInput.None with { PageDown = true });
+    if (browser.TakeAction() != ThemeAction.AvatarStoreRefresh) throw new InvalidOperationException("The Avatars tab did not ask for its list");
+    renderer.AvatarStoreStatus = "";
+    renderer.Busy = true; Save("avatars-tab-loading", ThemeView.Avatars); renderer.Busy = false;   // nothing yet: the app is fetching
+    renderer.AvatarStoreListSort = (int)CommunitySort.Top; Save("avatars-tab-empty", ThemeView.Avatars);   // a list that came back empty
+    renderer.AvatarStoreListSort = -1; Save("avatars-tab-not-loaded", ThemeView.Avatars);
+    renderer.AvatarStoreError = true; renderer.AvatarStoreStatus = "Can\u2019t reach the store: the connection timed out.";
+    Save("avatars-tab-error", ThemeView.Avatars);
+    renderer.AvatarStoreError = false; renderer.AvatarStoreStatus = "";
+    browser.StoreUrl = ""; Save("avatars-tab-no-store", ThemeView.Avatars);
+    browser.StoreUrl = AppSettings.DefaultStoreUrl;
+    ReloadAvatarStore();
+    Save("avatars-tab", ThemeView.Avatars);
+    browser.Update(press); Save("dialog-avatar-download", ThemeView.Avatars, DialogKind.AvatarDownload);
+    browser.Update(down); Save("dialog-avatar-download-set", ThemeView.Avatars, DialogKind.AvatarDownload);
+    browser.Update(back);
+    browser.Update(UiInput.None with { End = true });   // the last card, in the third row: the grid has scrolled
+    Save("avatars-tab-scrolled", ThemeView.Avatars);
+    browser.Update(UiInput.None, preview: true);   // Square: the next sort (Most downloaded), the list is loaded for it
+    if (browser.TakeAction() != ThemeAction.AvatarStoreRefresh) throw new InvalidOperationException("Square on the Avatars tab did not ask for the list");
+    ReloadAvatarStore();
+    Save("avatars-tab-sort-downloads", ThemeView.Avatars);
+    browser.Update(UiInput.None with { PageDown = true });
+    browser.StoreUrl = AppSettings.DefaultStoreUrl;
     // USB Import: the card for the web creator (QR code) beside it; with no store set, the card alone; with a long address of
     // a store of one's own, the code is bigger and its modules smaller.
-    browser.StoreUrl = AppSettings.DefaultStoreUrl;
-    browser.Update(UiInput.None with { PageDown = true }); Save("import", ThemeView.Import);
+    Save("import", ThemeView.Import);
     browser.StoreUrl = "";
     Save("import-nostore", ThemeView.Import);
     browser.StoreUrl = "https://my-own-theme-store.example.org:8443/prospero/themes/community/store";
@@ -460,7 +535,7 @@ if (args.Contains("--screenshots"))
     browser.Update(UiInput.None with { PageDown = true });
     browser.StoreUrl = "http://192.168.0.5:8080"; Save("system", ThemeView.System);
     // The store knows of a later release (AppUpdate): the version row says so.
-    renderer.AppVersion = "01.000.027";
+    renderer.AppVersion = "01.000.028";
     renderer.NewerVersion = "01.000.022"; Save("system-update", ThemeView.System);
     renderer.NewerVersion = "";
     renderer.UpdateState = AppUpdate.State.None;
@@ -483,7 +558,7 @@ if (args.Contains("--screenshots"))
     browser.Update(up);
     renderer.NewerVersion = "01.000.027";
     renderer.UpdateState = AppUpdate.State.Ready;
-    renderer.AppUpdateText = AppUpdate.DialogText("01.000.028", "01.000.027", 8_576_241);
+    renderer.AppUpdateText = AppUpdate.DialogText("01.000.029", "01.000.028", 8_576_241);
     Save("system-app-update", ThemeView.System);
     browser.Update(press, appUpdate: AppUpdate.State.Ready); Save("dialog-app-update", ThemeView.System, DialogKind.AppUpdate);
     browser.Update(down, appUpdate: AppUpdate.State.Ready); Save("dialog-app-update-cancel", ThemeView.System, DialogKind.AppUpdate);
@@ -502,13 +577,63 @@ if (args.Contains("--screenshots"))
     // A firmware without a catalog: the first visit to System asks once for a report (the loop leaves and re-enters the tab).
     renderer.ReportFirmware = "12.40";
     browser.OfferReport();
-    for (int i = 0; i < 4; i++) browser.Update(UiInput.None with { PageDown = true });
-    browser.TakeAction();   // the Community tab asked for its list on the way
+    for (int i = 0; i < 5; i++) browser.Update(UiInput.None with { PageDown = true });
+    browser.TakeAction();   // the Community and Avatars tabs asked for their lists on the way
     Save("dialog-report-ask", ThemeView.System, DialogKind.ReportAsk);
     browser.Update(back); browser.TakeAction();
     renderer.ReportCode = "K7Q2MX"; Save("system-report-code", ThemeView.System);
     renderer.ReportCode = "";
-    browser.Update(up);   // Store address: X opens the keyboard
+    // The home screen restart after a new profile picture says so (the avatar shots below leave the System tab for the Library).
+    renderer.ShellRestartForAvatar = true;
+    browser.AskRestartShell(); Save("dialog-restart-shell-avatar", ThemeView.System, DialogKind.RestartShell);
+    browser.Update(back); browser.TakeAction();
+    renderer.ShellRestartForAvatar = false;
+    // The Library's avatar row: first only its heading peeks in below the themes, then Down slides it up under them. The console's
+    // own picture is in use, then an avatar; the three questions; a long list scrolled to its end; an empty one; one still loading.
+    // Every card shows the fixture's preview under another name.
+    browser.Update(UiInput.None with { PageDown = true });   // System -> Library
+    List<AvatarTile> tiles;
+    {
+        AvatarPack house = AvatarPack.Open(File.ReadAllBytes(Path.Combine(fixtures, "avatar-house.p5avatar")));
+        string[] names = ["House", "Lighthouse", "Old Mill", "Tower Block", "Barn", "Pagoda", "Castle Keep With A Very Long Name"];
+        tiles = names.Select((n, i) => new AvatarTile("house-" + i, n, i % 2 == 0 ? house.Author : "Builder", house.Preview())).ToList();
+        renderer.Avatars = tiles.Take(5).ToList();
+        renderer.AvatarsLoaded = true;
+        browser.SetAvatarCount(5);
+        Save("library-avatars-peek", ThemeView.Library);
+        // Part-way through the slide (the shot's frames are timed after the view started, so the slide is not snapped).
+        browser.Update(down);
+        if (!browser.AvatarRowFocused) throw new InvalidOperationException("Down from the themes did not focus the avatar row");
+        for (int i = 0; i < 3; i++) renderer.Draw(canvas.AsSurface(), browser, entries, 10 + i / 60.0, 1 / 60.0);
+        File.WriteAllBytes(Path.Combine(output, "library-avatars-sliding.png"), PngWriter.Encode(canvas.AsSurface()));
+        Console.WriteLine("saved library-avatars-sliding.png");
+        browser.Update(right);
+        Save("library-avatars", ThemeView.Library);
+        renderer.AppliedAvatarId = "house-0";
+        browser.Update(right);
+        Save("library-avatars-in-use", ThemeView.Library);
+        browser.Update(press); Save("dialog-avatar-apply", ThemeView.Library, DialogKind.AvatarApply);
+        browser.Update(back);
+        browser.Update(UiInput.None, triangle: true); Save("dialog-avatar-remove", ThemeView.Library, DialogKind.AvatarRemove);
+        browser.Update(back);
+        browser.Update(left); browser.Update(left);
+        browser.Update(press); Save("dialog-avatar-reset", ThemeView.Library, DialogKind.AvatarReset);
+        browser.Update(back);
+        renderer.Avatars = Enumerable.Range(0, 14).Select(i => tiles[i % tiles.Count] with { Id = "house-" + i }).ToList();
+        browser.SetAvatarCount(14);
+        browser.Update(UiInput.None with { End = true });
+        Save("library-avatars-scrolled", ThemeView.Library);
+        browser.Update(UiInput.None with { Home = true });
+        renderer.Avatars = Array.Empty<AvatarTile>();
+        browser.SetAvatarCount(0);
+        Save("library-avatars-empty", ThemeView.Library);
+        renderer.AvatarsLoaded = false; Save("library-avatars-loading", ThemeView.Library);
+        renderer.AvatarsLoaded = true;
+        renderer.AppliedAvatarId = null;
+        browser.Update(back);   // the themes again, then on to the next tab
+        browser.Update(UiInput.None with { PageUp = true });   // Library -> System
+    }
+    browser.Update(up);   // Firmware report -> Store address
     browser.Update(press); Save("store-address", ThemeView.StoreAddress);
     // The toast, on the library: progress while busy, then a success and a failure that needs two lines.
     browser.Update(back); browser.Update(back);   // keyboard -> system -> library
@@ -538,6 +663,12 @@ if (args.Contains("--screenshots"))
         for (int i = 0; i <= 60; i++) renderer.Draw(canvas.AsSurface(), browser, none, 3 + i / 60.0, 1 / 60.0);
         File.WriteAllBytes(Path.Combine(output, address.Length > 0 ? "library-empty.png" : "library-empty-nostore.png"), PngWriter.Encode(canvas.AsSurface()));
     }
+    // The avatars are reachable without a theme: the row slides up to where the themes' row would be.
+    renderer.Avatars = tiles.Take(5).ToList();
+    browser.SetAvatarCount(5);
+    browser.Update(down);
+    for (int i = 0; i <= 60; i++) renderer.Draw(canvas.AsSurface(), browser, Array.Empty<ThemeLibraryEntry>(), 3 + i / 60.0, 1 / 60.0);
+    File.WriteAllBytes(Path.Combine(output, "library-empty-avatars.png"), PngWriter.Encode(canvas.AsSurface()));
     Console.WriteLine("Native-renderer screenshots saved to " + output);
     return;
 }

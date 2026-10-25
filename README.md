@@ -7,21 +7,23 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
   preview, apply one and restore the original look at any time. The theme the console shows now is marked "Applied"
   and leads the row; Triangle sorts the rest by name or by newest. When you combine parts of several themes, the
   row ends with "Save current look", which keeps that mix as a theme of its own in your library.
-- **Community:** download themes other people published at [themes.darkatek7.com](https://themes.darkatek7.com),
+- **Themes:** download themes other people published at [themes.darkatek7.com](https://themes.darkatek7.com),
   sort them by top rated, most downloaded or new, and like the ones you enjoy. Themes already in your library carry
   an "In library" badge; when a creator publishes a new version, the card says "Update". A theme you liked shows a
   heart, and Triangle on it removes the like. The Search chip finds themes by name, author or description.
   Themes with AI-generated pictures carry an "AI" badge; the No AI chip hides them, and the System tab's "AI themes"
   row keeps them hidden for good.
+- **Avatars:** profile pictures for the account that starts the app, made in the Avatar Creator on the store website or
+  downloaded on the Avatars tab. They sit in the Library under your themes; see [Avatars](#avatars).
 - **USB import:** packs on a USB drive (its root or a `prospero-themes` folder) are checked and copied into the
-  library.
+  library. Avatar files (`.p5avatar`) go to your avatars.
 - **What a theme can change:** the home-screen background, including behind the system tiles (Game Library,
   Media Gallery, All Apps and the rest), the backgrounds behind app tiles (only apps without their own image, or
   all apps), system icons (top bar and control center), the system tile icons, the UI sounds and the home music.
 - **Volume:** the System tab sets how loud a theme's UI sounds (25 % to start) and its home music (10 % to start)
   play. The app writes them again at that volume, from 10 % to 100 %.
 - **No console restart:** new icons and sounds show once the home screen restarts. After an apply or restore the
-  app offers that; it takes a few seconds and the app stays open. If the home screen does not come back steadily,
+  app offers that (a changed profile picture too); it takes a few seconds and the app stays open. If the home screen does not come back steadily,
   the helper puts the previous files back. Under OnionHEN the app does not restart the home screen; the changes show after
   the next console restart.
 
@@ -31,7 +33,7 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
 - [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus), which registers apps from `/data/homebrew/`.
 - An ELF loader on port **9021** (elfldr). The app hands it **ThemeHelper**, a small payload of its own that
   writes the theme files. It listens only on `127.0.0.1` and only writes inside the theme asset folders.
-- A network connection for the Community tab.
+- A network connection for the Themes and Avatars tabs.
 
 ## Install
 
@@ -69,13 +71,15 @@ open the app: close it and start it again.
 
 | Screen | Buttons |
 |---|---|
-| Every screen | L1 / R1 switch tab (Library, Community, USB Import, System). D-pad or left stick moves. Circle goes back to the Library. |
+| Every screen | L1 / R1 switch tab (Library, Themes, Avatars, USB Import, System). D-pad or left stick moves. Circle goes back to the Library. |
 | Library | X opens the details. Square opens the fullscreen preview. Triangle changes the order. Options reloads the library. On the "Save current look" card at the end, X saves the mix. |
+| Library, "Your avatars" row | Down from the themes reaches the row (the screen slides up); Left and Right move along it, Up or Circle goes back to the themes. X on an avatar asks "Set as profile picture"; X on Console picture asks to put back the picture the console had before. Triangle removes an avatar (it goes to the attic folder, not deleted). Options reloads the library. The avatar in use is marked "In use". |
 | Details | X applies the theme (it asks first). Square opens the preview. Circle goes back. |
 | Apply dialog | D-pad chooses, X confirms, Circle cancels. |
 | Preview | X shows or hides the home overlay. Square plays the theme's music. Circle goes back. |
-| Community | X on a theme asks "Download", "Download and apply" or "Cancel" (an update says "Update"); the second goes on to the same apply questions as the Details screen, and nothing is applied before you confirm there. Square previews the theme without adding it to your library (picture, home row, sounds; Square again plays its music, Circle comes back). Triangle likes, or removes your like. Options refreshes the list. D-pad up from the first row reaches the chips: Left and Right move, X filters, Square changes the sort, Down goes back to the themes. X on Search opens a keyboard; Options searches, and X on the chip with a term shows every theme again. X on No AI hides or shows themes with AI pictures. |
-| USB Import | X imports from USB. |
+| Themes | X on a theme asks "Download", "Download and apply" or "Cancel" (an update says "Update"); the second goes on to the same apply questions as the Details screen, and nothing is applied before you confirm there. Square previews the theme without adding it to your library (picture, home row, sounds; Square again plays its music, Circle comes back). Triangle likes, or removes your like. Options refreshes the list. D-pad up from the first row reaches the chips: Left and Right move, X filters, Square changes the sort, Down goes back to the themes. X on Search opens a keyboard; Options searches, and X on the chip with a term shows every theme again. X on No AI hides or shows themes with AI pictures. |
+| Avatars | Square changes the sort (Top rated, Most downloaded or New). X on an avatar asks "Download", "Download and set" or "Cancel"; avatars already in your library say "In library". Triangle likes, or removes your like. Options refreshes the list. Circle goes back to the Library. |
+| USB Import | X imports themes and avatars from USB. |
 | System | D-pad picks a row, X acts on it. On Sound volume and Music volume, Left and Right change the volume. On AI themes, X switches between Show and Hide. On App update, X asks to install a newer release (see "Update in the app"), or asks the store when none is known. |
 
 Results and progress ("Applying theme…", "Download failed (404).") appear as a short message at the bottom of the
@@ -106,6 +110,24 @@ send one yourself: on the System tab, X on the Firmware report row offers "Save"
 drive); "Save and send" also sends it to the store and shows a short code. It only reads, and describes the files
 a theme can change (sizes, hashes, formats, the icon list). Open an issue on this repository with the code, or
 attach the file; `ThemePackCreator/theme_pack.py catalog-from-report` turns it into a catalog for that firmware.
+
+## Avatars
+
+An avatar is a profile picture for the account that starts the app. Avatars are kept apart from themes: a theme never
+brings one, and setting a picture leaves the home screen's look alone.
+
+- **Making one:** the Avatar Creator on the store website ([themes.darkatek7.com](https://themes.darkatek7.com)) crops a
+  picture to a square, shows it round the way the console shows it, and gives you a `.p5avatar` file or publishes it to
+  the store.
+- **Getting one:** the Avatars tab lists the avatars people published, as a grid sorted by top rated, most downloaded or
+  new. X asks "Download" or "Download and set". You can also copy a `.p5avatar` file to a USB drive; USB import takes it
+  like a theme.
+- **Your avatars:** the Library's second row, "Your avatars", holds the avatars in your library, with the console's own
+  picture first. The first time you set one, the app keeps the console's picture, so "Console picture" can put it back.
+  The picture in use is marked "In use".
+- **Restart:** the home screen shows a new picture after it restarts. The app offers that restart; under OnionHEN it
+  offers only "Later", and the picture shows after the next console restart.
+- **Likes:** on the Avatars tab, Triangle likes an avatar the same way as a theme, and a second press takes the like back.
 
 ## Making themes
 
@@ -152,11 +174,12 @@ ShadowMountPlus to register it.
 
 ## Privacy
 
-The Community tab talks only to the store address set on the System tab (default
-`https://themes.darkatek7.com`). Likes are counted once per console through a random ID that the app creates on
-first start (`/data/prospero-themes/settings.json`); each like sends that ID to the store. The ID is anonymous and
-not linked to your account. The console also keeps its own list of the themes it liked, in
-`/data/prospero-themes/likes.json`, so the hearts show again after a restart. That list stays on the console.
+The Themes and Avatars tabs talk only to the store address set on the System tab (default
+`https://themes.darkatek7.com`). Likes of themes and of avatars are counted once per console through a random ID that
+the app creates on first start (`/data/prospero-themes/settings.json`); each like sends that ID to the store. The ID is
+anonymous and not linked to your account. The console also keeps its own lists of what it liked, in
+`/data/prospero-themes/likes.json` (themes) and `/data/prospero-themes/avatar-likes.json` (avatars), so the hearts show
+again after a restart. Those lists stay on the console.
 
 On start the app asks the store for the number of the newest release, to say when an update is out; nothing is
 sent with that question. A firmware report goes to the store only when you choose "Save and send".

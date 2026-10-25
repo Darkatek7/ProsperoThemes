@@ -14,9 +14,13 @@ public sealed partial class ThemeRenderer
     private static readonly HintItem[] LookCardHintItems =
         [new(PadButton.Cross, "Save as theme"), new(PadButton.Triangle, "Sort"), new(PadButton.Options, "Reload")];
 
-    /// <summary>The footer hints of the library: with no theme there is nothing to open or preview, only to look for packs again.</summary>
+    /// <summary>
+    /// The footer hints of the library: those of the avatar row while it has the focus; with no theme there is nothing to open or
+    /// preview, only to look for packs again.
+    /// </summary>
     private HintItem[] LibraryHints(ThemeBrowser browser) =>
-        browser.LookCardFocused ? LookCardHintItems : browser.Selected >= 0 ? LibraryHintItems : LibraryEmptyHintItems;
+        browser.AvatarRowFocused ? AvatarHints(browser)
+        : browser.LookCardFocused ? LookCardHintItems : browser.Selected >= 0 ? LibraryHintItems : LibraryEmptyHintItems;
 
     // ---- Layout -----------------------------------------------------------------------------------------------------
 
@@ -31,17 +35,30 @@ public sealed partial class ThemeRenderer
     // little bigger, centred on its slot.
     private const int CardW = 320, CardH = 180, CardGap = 32, CardStride = CardW + CardGap;
     private const int FocusW = 344, FocusH = 194;
-    private const int CollectionTop = 632, CardY = 696, CardTitleY = CardY + CardH + 24;
+    private const int CollectionTop = 632, CardY = 696, CardTitleY = CardY + CardH + 16;
     private const byte CardDim = 80;
     // Cards are clipped to the safe margins plus the room the focus ring needs outside the first and last slot, so
     // a card sliding past the edge is cut there and no sliver of the next one shows in the margin.
     private const int RowClipLeft = Theme.SafeX - 24, RowClipRight = Theme.ContentRight + 24, RowClipTop = 640, RowClipBottom = 1000;
+
+    // The avatar row is the second row. While the themes have the focus only its heading peeks in above the footer (its cards
+    // are below the screen); with the focus on it, everything below the header slides up by AvatarLift, so its heading takes
+    // the place of "Your collection" and its cards the place of the theme cards, and the theme row ends up above them.
+    private const int AvatarHeadingTop = 944, AvatarCardsTop = AvatarHeadingTop + (CardY - CollectionTop), AvatarRingRoom = 24, AvatarWashPeak = 170;
+    private const int AvatarLift = AvatarHeadingTop - CollectionTop;
 
     // ---- State ------------------------------------------------------------------------------------------------------
 
     // Horizontal scroll of the collection row, in pixels: eased toward the offset that keeps the focused card in view.
     private float _scroll;
     private bool _scrollReady;
+    // How far the lower content has slid up for the avatar row, in pixels (0 to the lift), eased like the scrolls. It snaps
+    // when the Library is entered or its state was reset.
+    private float _lift;
+    private bool _liftReady;
+    // Whether anything of the Library is still moving or waiting for a picture in this frame: a dialog does not keep this
+    // picture as its backdrop while it is true.
+    private bool _libraryMoving;
     // The selection the card pictures were last prepared for (see PrepareCards).
     private int _cardsPreparedFor = int.MinValue;
     // The blurred backdrop is built in the background of a quiet moment, so the next tab does not stall for it.
@@ -87,6 +104,7 @@ public sealed partial class ThemeRenderer
     private void ResetLibraryState()
     {
         _scrollReady = false;
+        _liftReady = false;
         _cardsPreparedFor = int.MinValue;
         _selectedKey = _warmedFor = null;
         _hero = null;
@@ -110,11 +128,52 @@ public sealed partial class ThemeRenderer
     private void DrawLibrary(Surface s, ThemeBrowser browser, IReadOnlyList<ThemeLibraryEntry> entries, ThemeLibraryEntry? selected,
         int enter, double seconds, double delta)
     {
-        if (selected is null) DrawEmptyHero(s, enter);
-        else if (browser.LookCardFocused) DrawLookHero(s, enter);
-        else DrawHero(s, selected, enter);
-        DrawCollection(s, browser.Selected, entries, delta, browser.LookSavable, browser.LookCardFocused);
+        _libraryMoving = false;
+        // The slide to the avatar row: one eased offset moves everything below the header, the hero twice as fast (it is
+        // gone before the rows have arrived).
+        bool avatars = browser.AvatarRowFocused;
+        float target = avatars ? AvatarLift : 0;
+        bool snap = !_liftReady || seconds <= _viewStart;
+        if (snap) _lift = target;
+        else
+        {
+            _lift += (target - _lift) * (float)(1 - Math.Exp(-Math.Clamp(delta, 0, .1) * 16));
+            if (MathF.Abs(target - _lift) < 0.5f) _lift = target;
+        }
+        _liftReady = true;
+        if (_lift != target) _libraryMoving = true;
+        int slide = (int)MathF.Round(_lift), heroShift = 2 * slide;
+
+        // The hero, clipped below the header rule while it slides away. It is drawn in a region that starts there, so its
+        // y is shifted by the region's top as well.
+        if (heroShift < HeroButtonsY + 64 - Theme.HeaderRuleY)
+        {
+            const int top = Theme.HeaderRuleY + 1;
+            Surface above = s.Region(0, top, Theme.ScreenWidth, Theme.ScreenHeight - top);
+            int shifted = enter - heroShift - top;
+            if (selected is null) DrawEmptyHero(above, shifted);
+            else if (browser.LookCardFocused) DrawLookHero(above, shifted);
+            else DrawHero(above, selected, shifted);
+        }
+        if (slide > 0) DrawLiftWash(s, slide);
+        DrawCollection(s, browser.Selected, entries, delta, browser.LookSavable, browser.LookCardFocused, slide, avatars);
+        DrawAvatarRow(s, browser, slide, delta, snap);
         WarmBackdrop(selected, seconds);
+    }
+
+    // The backdrop's scrim is tuned for text at the hero and the cards' usual place; once the rows have slid up their titles stand
+    // on the open part of a bright cover. A band of ink behind them (soft at both edges, stronger the further the slide) keeps them readable.
+    private static void DrawLiftWash(Surface s, int lift)
+    {
+        const int step = 4, soft = 64;
+        byte peak = (byte)(AvatarWashPeak * lift / AvatarLift);
+        int top = CollectionTop - lift - 40, bottom = CardTitleY - lift + 84;
+        for (int y = top; y < bottom; y += step)
+        {
+            float edge = Smooth(Math.Min(y + step / 2 - top, bottom - y - step / 2) / (float)soft);
+            byte alpha = (byte)(peak * edge);
+            if (alpha > 0) Paint.FillRect(s, 0, y, Theme.ScreenWidth, Math.Min(step, bottom - y), Ink.WithAlpha(alpha));
+        }
     }
 
     private void DrawHero(Surface s, ThemeLibraryEntry entry, int enter)
@@ -184,11 +243,15 @@ public sealed partial class ThemeRenderer
         }
     }
 
-    private void DrawCollection(Surface s, int selected, IReadOnlyList<ThemeLibraryEntry> entries, double delta, bool lookCard, bool lookFocused)
+    // lift is how far the row has slid up for the avatar row; with the focus there (avatarRow) the selected pack keeps its place
+    // in the row but is drawn like the others, without a ring.
+    private void DrawCollection(Surface s, int selected, IReadOnlyList<ThemeLibraryEntry> entries, double delta, bool lookCard, bool lookFocused,
+        int lift, bool avatarRow)
     {
+        int collectionTop = CollectionTop - lift, cardY = CardY - lift, cardTitleY = CardTitleY - lift, clipTop = RowClipTop - lift;
         // "Your collection" and its count share one baseline.
-        int baseline = CollectionTop + Ascent(_heading);
-        DrawLeft(_heading, s, "Your collection", Theme.SafeX, CollectionTop, White);
+        int baseline = collectionTop + Ascent(_heading);
+        DrawLeft(_heading, s, "Your collection", Theme.SafeX, collectionTop, White);
         if (_countFor != entries.Count || _countSort != LibrarySort)
         {
             _countFor = entries.Count;
@@ -216,18 +279,19 @@ public sealed partial class ThemeRenderer
             PrepareCards(entries, selected, Math.Min(_scroll, target), Math.Max(_scroll, target));
             _cardsPreparedFor = selected;
         }
+        if (_scroll != target) _libraryMoving = true;
         int offset = (int)MathF.Round(_scroll);
 
-        Surface row = s.Region(RowClipLeft, RowClipTop, RowClipRight - RowClipLeft, RowClipBottom - RowClipTop);
+        Surface row = s.Region(RowClipLeft, clipTop, RowClipRight - RowClipLeft, RowClipBottom - RowClipTop);
         for (int i = 0; i < items; i++)
         {
             int x = Theme.SafeX + i * CardStride - offset;
             if (x + CardW <= RowClipLeft || x >= RowClipRight) continue;
-            int lx = x - RowClipLeft, ly = CardY - RowClipTop;
-            if (i == entries.Count && lookCard) { DrawLookCard(row, lx, ly, lookFocused); continue; }
-            if (i >= entries.Count) { DrawAddCard(row, lx, ly); continue; }
+            int lx = x - RowClipLeft, ly = cardY - clipTop, titleY = cardTitleY - clipTop;
+            if (i == entries.Count && lookCard) { DrawLookCard(row, lx, ly, titleY, lookFocused && !avatarRow); continue; }
+            if (i >= entries.Count) { DrawAddCard(row, lx, ly, titleY); continue; }
             ThemeLibraryEntry entry = entries[i];
-            bool focused = i == selected && !lookFocused;
+            bool focused = i == selected && !lookFocused && !avatarRow;
             if (focused)
             {
                 int fx = lx - (FocusW - CardW) / 2, fy = ly - (FocusH - CardH) / 2;
@@ -237,17 +301,20 @@ public sealed partial class ThemeRenderer
             }
             else
             {
-                CardPicture(entry, false).Draw(row, lx, ly);
+                // The selected pack stays bright while the avatars have the focus, so the row still says where it will come back to.
+                bool current = i == selected && !lookFocused;
+                CardPicture(entry, false, dimmed: !current).Draw(row, lx, ly);
                 if (IsApplied(entry)) Badge(row, "Applied", lx + 12, ly + 12, Theme.Success);
+                focused = current;
             }
-            ClipLeft(_body, row, entry.Manifest.Name, lx, CardTitleY - RowClipTop, focused ? White : Muted, CardW);
+            ClipLeft(_body, row, entry.Manifest.Name, lx, titleY, focused ? White : Muted, CardW);
         }
     }
 
     // The last card of the row: a quiet card that says where more themes come from. Opaque, so the theme's art behind
     // the row does not show through it.
     private static readonly Color AddCardInk = Color.FromRgb(15, 23, 36);
-    private void DrawAddCard(Surface row, int x, int y)
+    private void DrawAddCard(Surface row, int x, int y, int titleY)
     {
         Paint.FillRoundedRect(row, x, y, CardW, CardH, Theme.RadiusCard, AddCardInk);
         Paint.StrokeRoundedRect(row, x, y, CardW, CardH, Theme.RadiusCard, 1, Theme.PanelStroke);
@@ -255,11 +322,11 @@ public sealed partial class ThemeRenderer
         Paint.Line(row, cx - 14f, cy, cx + 14f, cy, 3f, Muted);
         Paint.Line(row, cx, cy - 14f, cx, cy + 14f, 3f, Muted);
         DrawMid(_small, row, "Import from USB", x + CardW / 2, y + 112, Muted);
-        ClipLeft(_body, row, "Add themes", x, CardTitleY - RowClipTop, Muted, CardW);
+        ClipLeft(_body, row, "Add themes", x, titleY, Muted, CardW);
     }
 
     // The card that saves the look: two stacked frames for the themes it combines. Focused, it grows like a pack's card.
-    private void DrawLookCard(Surface row, int x, int y, bool focused)
+    private void DrawLookCard(Surface row, int x, int y, int titleY, bool focused)
     {
         int w = focused ? FocusW : CardW, h = focused ? FocusH : CardH;
         int fx = focused ? x - (FocusW - CardW) / 2 : x, fy = focused ? y - (FocusH - CardH) / 2 : y;
@@ -272,13 +339,13 @@ public sealed partial class ThemeRenderer
         Paint.StrokeRoundedRect(row, (int)cx - 18, (int)cy - 14, 48, 36, 6, 2, ink);
         DrawMid(_small, row, "Save current look", fx + w / 2, fy + h * 112 / CardH, ink);
         if (focused) Paint.FocusRing(row, fx, fy, w, h, Theme.RadiusCard);
-        ClipLeft(_body, row, "Your look", x, CardTitleY - RowClipTop, focused ? White : Muted, CardW);
+        ClipLeft(_body, row, "Your look", x, titleY, focused ? White : Muted, CardW);
     }
 
-    private CachedImage CardPicture(ThemeLibraryEntry entry, bool focused)
+    private CachedImage CardPicture(ThemeLibraryEntry entry, bool focused, bool dimmed = true)
     {
         int w = focused ? FocusW : CardW, h = focused ? FocusH : CardH;
-        byte dim = focused ? (byte)0 : CardDim;
+        byte dim = focused || !dimmed ? (byte)0 : CardDim;
         // The cover is scaled once and cached; the wash that dims the other cards is baked in (their own cache entry),
         // so it stays inside the rounded corners.
         return _libraryImages.TryGet(entry.Path, w, h, Theme.RadiusCard, dim)
@@ -298,6 +365,7 @@ public sealed partial class ThemeRenderer
             // Visible at some offset in [from, to] when it is inside the clip at either end of the glide or between.
             if (left - to >= RowClipRight || left + CardW - from <= RowClipLeft) continue;
             CardPicture(entries[i], i == selected);
+            if (i == selected) CardPicture(entries[i], false, dimmed: false);   // the same pack with the focus on the avatars
         }
     }
 

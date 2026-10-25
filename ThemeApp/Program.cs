@@ -94,6 +94,31 @@ internal sealed class ThemeApp : ProsperoApp
     private bool _listLoading, _reloadList, _previewsMissing;
     private volatile bool _stopList, _listStopped, _listPosted;
     private Action? _queuedJob;
+    // The app's avatars (AvatarLibrary) and the user whose picture they set: the one who started the app (null when its id could
+    // not be read). The Library's avatar row shows the list, so it is read after every library scan (_avatarScanAfterWork runs it
+    // once the scan's job is done).
+    private List<AvatarEntry> _avatars = new();
+    private int? _userId;
+    private bool _avatarScanAfterWork;
+    // The offer to restart the home screen is about a profile picture, not a theme's icons and sounds.
+    private bool _avatarRestart;
+    // The Avatars tab: the store's avatar list on screen, and the store ids this console liked (AvatarStore.LikesPath). Changed on
+    // the frame thread only; the renderer reads the same objects.
+    private IReadOnlyList<StoreAvatar> _avatarStore = Array.Empty<StoreAvatar>();
+    private readonly HashSet<string> _avatarLiked = new(StringComparer.Ordinal);
+    // The sort the avatar list load that runs (or ran last) was started with: a Square press that moves the pills while it
+    // runs is noticed against it. -1 before any load.
+    private int _avatarJobSort = -1;
+    // An avatar list load (or the load of the pictures it still lacks) runs. A new sort, a download or a like asks it to stop
+    // (_stopAvatarList, read by the worker between pictures); the worker sets _avatarListStopped when it did, and
+    // _avatarListPosted once the list it loads is on screen. OnFrame then loads the list again (_avatarListWanted: a sort pressed
+    // during a job, a list stopped before it arrived) or the missing pictures (_avatarPreviewsMissing) once the app is idle.
+    private bool _avatarListLoading, _avatarListWanted, _avatarPreviewsMissing;
+    private volatile bool _stopAvatarList, _avatarListStopped, _avatarListPosted;
+    // A download or like pressed while the list's pictures loaded: it runs when the list has stopped.
+    private Action? _avatarQueued;
+    // "Download and set": the pack just downloaded. The avatar scan that follows sets it as the profile picture; null otherwise.
+    private byte[]? _avatarSetAfterScan;
 
     protected override void OnLoad()
     {
@@ -143,6 +168,8 @@ internal sealed class ThemeApp : ProsperoApp
         try { _renderer.AppVersion = JsonValue.Parse(FileSystem.ReadAllText("/app0/sce_sys/param.json")).GetString("contentVersion", ""); }
         catch { /* the System screen then shows no app version */ }
         _browser.StoreUrl = _settings.StoreUrl;
+        try { _userId = SharpProspero.Platform.Users.InitialUserId; }
+        catch { _userId = null; /* the avatar grid then says the picture can't be changed */ }
         try
         {
             if (AppData.Files.Exists(CommunityList.DownloadsPath))
@@ -156,6 +183,14 @@ internal sealed class ThemeApp : ProsperoApp
         }
         catch { /* no hearts for earlier likes until they are pressed again (the store keeps one like per console) */ }
         _renderer.CommunityLiked = _liked;
+        try
+        {
+            if (AppData.Files.Exists(AvatarStore.LikesPath))
+                foreach (string id in CommunityList.ParseLikedIds(AppData.Files.ReadAllText(AvatarStore.LikesPath))) _avatarLiked.Add(id);
+        }
+        catch { /* no hearts for earlier avatar likes until they are pressed again */ }
+        _renderer.AvatarStoreLiked = _avatarLiked;
+        _avatarScanAfterWork = true;
         StartWork(DeviceThemeLibrary.Scan);
         if (dataProblem is not null) _renderer.Notify("Can’t use " + AppData.Root + ": " + dataProblem, NoticeLevel.Error);
     }
@@ -193,6 +228,7 @@ internal sealed class ThemeApp : ProsperoApp
         _updateChecked = true;
         string? firmware = _firmware, skipped = _settings.ReapplySkipped;
         bool sounds = _settings.Sounds;
+        int? user = _userId;
         _worker = new Thread(() =>
         {
             try
@@ -201,10 +237,12 @@ internal sealed class ThemeApp : ProsperoApp
                 string? applied = ReadApplied();
                 ThemePart restorable = ReadRestorable();
                 List<LookLayer>? look = ReadLook();
+                AvatarApplier.State? avatar = user is { } id ? AvatarApplier.Current(id, AppData.Files) : null;
                 SystemUpdate.Plan? update = checkUpdate ? ReadUpdatePlan(snapshot.Entries, firmware, skipped, sounds) : null;
                 _results.Post(() =>
                 {
                     _restorable = restorable;
+                    ShowAppliedAvatar(avatar);
                     _renderer.ResetCovers();
                     _added = snapshot.Added ?? _added;
                     OrderLibrary(snapshot.Entries, applied, scanned: true);
@@ -533,6 +571,7 @@ internal sealed class ThemeApp : ProsperoApp
                 {
                     // No backups are kept under OnionHEN, so nothing can start the restart there.
                     _shellBackups = RunningHen.AllowsShellRestart(hen) ? shellBackups : null;
+                    _avatarRestart = _renderer.ShellRestartForAvatar = false;
                     _browser.AskRestartShell(hen);
                 }
             });
@@ -548,6 +587,14 @@ internal sealed class ThemeApp : ProsperoApp
             _rescanAfterWork = false;
             StartWork(DeviceThemeLibrary.Scan);
         }
+        if (_avatarScanAfterWork && !_busy)
+        {
+            _avatarScanAfterWork = false;
+            StartAvatarScan();
+        }
+        // The Avatars tab's list or pictures, asked for while a job ran or stopped for one.
+        if (!_busy && _avatarListWanted) StartAvatarStoreList();
+        else if (!_busy && _avatarPreviewsMissing) StartAvatarPreviews();
         // A job's notice keeps the toast; the update notice waits until the app is idle.
         if (_updateNotice is not null && !_busy)
         {
@@ -582,8 +629,14 @@ internal sealed class ThemeApp : ProsperoApp
                 break;
             case ThemeAction.ToggleLibrarySort: ToggleLibrarySort(); break;
             case ThemeAction.PreviewMusic: _preview.ToggleMusic(); break;
-            case ThemeAction.ImportUsb: StartWork(DeviceThemeLibrary.ImportUsb, announce: true); break;
-            case ThemeAction.Reload: StartWork(DeviceThemeLibrary.Scan); break;
+            case ThemeAction.ImportUsb:
+                _avatarScanAfterWork = true;   // the import also takes avatars
+                StartWork(DeviceThemeLibrary.ImportUsb, announce: true);
+                break;
+            case ThemeAction.Reload:
+                _avatarScanAfterWork = true;
+                StartWork(DeviceThemeLibrary.Scan);
+                break;
             case ThemeAction.Apply when _browser.Selected >= 0:
                 // The answer to "apps without their own image or all apps" is also the saved setting. The apply
                 // uses it even when settings.json cannot be written; only the next start would not know it.
@@ -598,8 +651,24 @@ internal sealed class ThemeApp : ProsperoApp
             case ThemeAction.ReapplyLater: SkipReapply(); break;
             case ThemeAction.RestartShell when _shellBackups is { } backups:
                 _shellBackups = null;
+                bool avatarRestart = _avatarRestart;
                 // The home screen is in front meanwhile, so the result waits for the user to come back and press a button.
-                StartHelperWork("Restarting the home screen…", needsHelper: true, _ => RestartShell(backups), offerRestart: false, holdResult: true);
+                StartHelperWork("Restarting the home screen…", needsHelper: true, _ => RestartShell(backups, avatarRestart), offerRestart: false, holdResult: true);
+                break;
+            case ThemeAction.AvatarApply when SelectedAvatar() is { } avatar:
+                string avatarPath = avatar.Path;
+                StartAvatarJob("Setting your profile picture…",
+                    user => AvatarApplier.Apply(AvatarPack.Open(AppData.Files.ReadAllBytes(avatarPath)), user, new HelperAvatarFiles(), AppData.Files));
+                break;
+            case ThemeAction.AvatarReset:
+                StartAvatarJob("Putting back the console picture…", user => AvatarApplier.Reset(user, new HelperAvatarFiles(), AppData.Files));
+                break;
+            case ThemeAction.AvatarRemove when SelectedAvatar() is { } removedAvatar:
+                StartAvatarScan(() =>
+                {
+                    AvatarLibrary.Remove(AppData.Files, removedAvatar.Path);
+                    return "Removed “" + removedAvatar.Tile.Name + "” from your avatars.";
+                });
                 break;
             case ThemeAction.SaveLook when _look is { Count: > 1 } look: SaveLook(look); break;
             case ThemeAction.RestoreOriginals:
@@ -627,6 +696,10 @@ internal sealed class ThemeApp : ProsperoApp
             case ThemeAction.CommunityDownloadApply when SelectedCommunity() is { } theme: StartCommunityDownload(theme, thenApply: true); break;
             case ThemeAction.CommunityPreview when SelectedCommunity() is { } theme: StartCommunityPreview(theme); break;
             case ThemeAction.CommunityLike when SelectedCommunity() is { } theme: StartCommunityLike(theme); break;
+            case ThemeAction.AvatarStoreRefresh: StartAvatarStoreList(); break;
+            case ThemeAction.AvatarDownload when SelectedStoreAvatar() is { } storeAvatar: StartAvatarDownload(storeAvatar); break;
+            case ThemeAction.AvatarDownloadSet when SelectedStoreAvatar() is { } storeAvatar: StartAvatarDownload(storeAvatar, thenSet: true); break;
+            case ThemeAction.AvatarLike when SelectedStoreAvatar() is { } storeAvatar: StartAvatarLike(storeAvatar); break;
         }
         _preview.Update(_entries);
         _renderer.SelectedCommunityId = SelectedCommunity()?.Id;
@@ -641,9 +714,14 @@ internal sealed class ThemeApp : ProsperoApp
     /// crashing, the helper has put the backups back; the restore then runs as usual for those parts, so state.json and
     /// look.json say what the console shows.
     /// </summary>
-    private ApplyResult RestartShell(IReadOnlyList<(string Backup, string Device)> backups)
+    private ApplyResult RestartShell(IReadOnlyList<(string Backup, string Device)> backups, bool avatar = false)
     {
         var (restarts, restored) = ThemeHelperClient.RestartShell(backups);
+        // A profile picture has no backups for the helper to put back (avatar), so only the restart itself can go wrong.
+        if (avatar && restarts is > 0 and < ThemeHelperClient.ShellLoopRestarts)
+            return new ApplyResult(true, "The home screen restarted with the profile picture.", []);
+        if (avatar && restarts == 0)
+            return new ApplyResult(false, "The home screen did not restart. The profile picture changes after the next restart of the console.", []);
         if (restored > 0)
         {
             ApplyResult back = new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds) { Firmware = _firmware, Stock = _stock }
@@ -792,7 +870,7 @@ internal sealed class ThemeApp : ProsperoApp
             _renderer.Notify("Setting not saved: " + ex.Message, NoticeLevel.Error);
             return;
         }
-        _renderer.Notify(hide ? "The Community tab leaves out themes with AI pictures." : "The Community tab lists themes with AI pictures too.",
+        _renderer.Notify(hide ? "The Themes tab leaves out themes with AI pictures." : "The Themes tab lists themes with AI pictures too.",
             NoticeLevel.Info);
         if (!_busy && _community.Count > 0) StartCommunityList();
     }
@@ -896,6 +974,16 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.CommunityError = false;
         _renderer.CommunityListSort = -1;
         _renderer.CommunityListCategory = -1;
+        // The Avatars tab lists the same store.
+        _avatarStore = Array.Empty<StoreAvatar>();
+        _renderer.AvatarStore = _avatarStore;
+        _renderer.ResetAvatarStore();
+        _browser.SetAvatarStoreCount(0);
+        _renderer.AvatarStoreStatus = "";
+        _renderer.AvatarStoreError = false;
+        _renderer.AvatarStoreListSort = -1;
+        _avatarListWanted = _avatarPreviewsMissing = false;
+        RefreshAvatarStoreBadges();
         try
         {
             WriteSettings();
@@ -922,6 +1010,100 @@ internal sealed class ThemeApp : ProsperoApp
     {
         string seed = DateTime.UtcNow.Ticks + "-" + Environment.TickCount64 + "-" + Environment.ProcessId + "-" + GC.GetTotalAllocatedBytes();
         return SharpProspero.Security.Sha256.HashHex(System.Text.Encoding.UTF8.GetBytes(seed))[..32];
+    }
+
+    // ---- Avatars ------------------------------------------------------------------------------------
+
+    private AvatarEntry? SelectedAvatar() =>
+        _browser.AvatarIndex >= 0 && _browser.AvatarIndex < _avatars.Count ? _avatars[_browser.AvatarIndex] : null;
+
+    /// <summary>
+    /// Reads the app's avatars and which one is set for this user, on the worker. <paramref name="change"/> runs first (a removal);
+    /// its text, or its failure, is the notice. A plain read asked for while a job runs waits for the job.
+    /// </summary>
+    private void StartAvatarScan(Func<string>? change = null)
+    {
+        if (_fitChecking) { _afterFit = () => StartAvatarScan(change); return; }
+        if (_busy)
+        {
+            if (change is null) _avatarScanAfterWork = true;
+            else Wait();
+            return;
+        }
+        _busy = true;
+        _renderer.Busy = true;
+        int? user = _userId;
+        _worker = new Thread(() =>
+        {
+            string? message = null;
+            bool failed = false;
+            if (change is not null)
+            {
+                try { message = change(); }
+                catch (Exception ex) { (message, failed) = (ex.Message, true); }
+            }
+            List<AvatarEntry> entries = new();
+            string? problem = null;
+            try { (entries, problem) = AvatarLibrary.Read(AppData.Files, AppData.Files.ListFiles(AvatarLibrary.Root)); }
+            catch (Exception ex) { problem = "Can’t read your avatars: " + ex.Message; }
+            AvatarApplier.State? state = user is { } id ? AvatarApplier.Current(id, AppData.Files) : null;
+            _results.Post(() =>
+            {
+                _avatars = entries;
+                _renderer.Avatars = entries.ConvertAll(e => e.Tile);
+                _renderer.AvatarsLoaded = true;
+                _browser.SetAvatarCount(entries.Count);
+                ShowAppliedAvatar(state);
+                RefreshAvatarStoreBadges();
+                if (message is not null) _renderer.Notify(message, failed ? NoticeLevel.Error : NoticeLevel.Success);
+                else if (problem is not null) _renderer.Notify(problem, NoticeLevel.Error);
+                _renderer.Busy = false;
+                _busy = false;
+                // "Download and set": the pack is in the avatars now, so the picture is set from the bytes that were downloaded.
+                if (_avatarSetAfterScan is { } pack)
+                {
+                    _avatarSetAfterScan = null;
+                    StartAvatarJob("Setting your profile picture…",
+                        target => AvatarApplier.Apply(AvatarPack.Open(pack), target, new HelperAvatarFiles(), AppData.Files));
+                }
+            });
+        }) { IsBackground = true, Name = "Avatars" };
+        _worker.Start();
+    }
+
+    /// <summary>The avatar set for this user, marked on the Library's avatar row; a backup whose apply did not finish counts as none.</summary>
+    private void ShowAppliedAvatar(AvatarApplier.State? state)
+    {
+        bool set = state is { AvatarId.Length: > 0 };
+        _renderer.AppliedAvatarId = set ? state!.AvatarId : null;
+    }
+
+    /// <summary>
+    /// Sets or resets this user's picture through the helper (<see cref="AvatarApplier"/>). The home screen shows the change once it
+    /// restarts, so a success offers that, as after a theme's icons (under OnionHEN only "Later").
+    /// </summary>
+    private void StartAvatarJob(string busyText, Func<int, AvatarResult> work)
+    {
+        if (_userId is not { } user)
+        {
+            _renderer.Notify("Can’t tell which user started the app, so the picture can’t be changed.", NoticeLevel.Error);
+            return;
+        }
+        StartHelperWork(busyText, needsHelper: true, _ =>
+        {
+            AvatarResult result = work(user);
+            AvatarApplier.State? state = AvatarApplier.Current(user, AppData.Files);
+            HenKind hen = result.Success ? ThemeHelperClient.QueryHen() : HenKind.Unknown;
+            _results.Post(() =>
+            {
+                ShowAppliedAvatar(state);
+                if (!result.Success) return;
+                _shellBackups = RunningHen.AllowsShellRestart(hen) ? [] : null;
+                _avatarRestart = _renderer.ShellRestartForAvatar = true;
+                _browser.AskRestartShell(hen);
+            });
+            return new ApplyResult(result.Success, result.Message, []);
+        }, offerRestart: false);
     }
 
     // ---- Community store ----------------------------------------------------------------------------
@@ -1381,6 +1563,288 @@ internal sealed class ThemeApp : ProsperoApp
                 catch { /* the heart lasts until the app quits */ }
             });
             return new StoreResult(liked ? "Liked “" + theme.Name + "”." : "Like removed from “" + theme.Name + "”.", NoticeLevel.Success);
+        });
+    }
+
+    // ---- Avatar store (the Avatars tab) -------------------------------------------------------------
+
+    private StoreAvatar? SelectedStoreAvatar() =>
+        _browser.AvatarStoreSelected >= 0 && _browser.AvatarStoreSelected < _avatarStore.Count ? _avatarStore[_browser.AvatarStoreSelected] : null;
+
+    /// <summary>
+    /// Runs a store job for the Avatars tab on the worker, like <see cref="StartCommunityWork"/> but with the tab's own state: the
+    /// theme list's reload and queue logic never runs for it. A job that loads the list (<paramref name="loadsList"/>) also keeps
+    /// its text as the tab's empty or error state. While the avatar pictures (or the Themes tab's) load, the job is queued and the
+    /// pictures stop after the one on its way. Without a store address nothing is sent. Returns whether the job started now.
+    /// </summary>
+    private bool StartAvatarStoreWork(string busyText, Func<StoreHttpClient, StoreResult> work, bool loadsList = false)
+    {
+        if (_busy)
+        {
+            if (_avatarListLoading && _avatarQueued is null)
+            {
+                _avatarQueued = () => StartAvatarStoreWork(busyText, work, loadsList);
+                _stopAvatarList = true;
+                if (busyText.Length > 0) _renderer.Notify(busyText, NoticeLevel.Info);
+            }
+            else if (_listLoading && _queuedJob is null)
+            {
+                // The Themes tab's pictures hold the worker: they stop and run this job from their own end.
+                _queuedJob = () => StartAvatarStoreWork(busyText, work, loadsList);
+                _stopList = true;
+                if (busyText.Length > 0) _renderer.Notify(busyText, NoticeLevel.Info);
+            }
+            else Wait();
+            return false;
+        }
+        if (_settings.StoreUrl.Length == 0)
+        {
+            _renderer.AvatarStoreStatus = "No store set. On the System tab, choose Store address and enter the address.";
+            _renderer.AvatarStoreError = false;
+            return false;
+        }
+        _busy = true;
+        _renderer.Busy = true;
+        _stopAvatarList = false;
+        if (loadsList) _renderer.AvatarStoreStatus = busyText;
+        if (loadsList) _renderer.AvatarStoreError = false;
+        if (busyText.Length > 0) _renderer.Notify(busyText, NoticeLevel.Info);
+        _worker = new Thread(() =>
+        {
+            StoreResult result;
+            try
+            {
+                result = work(Http());
+            }
+            catch (Exception ex) { result = new StoreResult("Can’t reach the store: " + ex.Message, NoticeLevel.Error); }
+            _results.Post(() =>
+            {
+                // The state text is only drawn while the list is empty; a list that is on screen never carries it.
+                if (loadsList)
+                {
+                    _renderer.AvatarStoreStatus = result.Level == NoticeLevel.Error || _avatarStore.Count == 0 ? result.Message : "";
+                    _renderer.AvatarStoreError = result.Level == NoticeLevel.Error;
+                }
+                if (result.Message.Length > 0) _renderer.Notify(result.Message, result.Level);
+                else if (busyText.Length > 0) _renderer.ClearNotice();
+                _renderer.Busy = false;
+                _busy = false;
+                _avatarListLoading = false;
+                _renderer.AvatarStorePicturesLoading = false;
+                if (_avatarListStopped)
+                {
+                    // Stopped after the list arrived: only pictures are missing. Before: the list is loaded again (OnFrame).
+                    if (_avatarListPosted) _avatarPreviewsMissing = true;
+                    else _avatarListWanted = true;
+                    _avatarListStopped = false;
+                }
+                // A download or like pressed while the pictures loaded goes first.
+                if (_avatarQueued is { } next)
+                {
+                    _avatarQueued = null;
+                    next();
+                    return;
+                }
+                // The Themes tab's list may have been stopped for this job; it goes on now.
+                if (_reloadList) StartCommunityList();
+                else if (_previewsMissing) StartCommunityPreviews();
+            });
+        }) { IsBackground = true, Name = "AvatarStore" };
+        _worker.Start();
+        return true;
+    }
+
+    /// <summary>
+    /// Loads the store's avatars in the sort the Avatars tab shows: the list, then each card's preview one by one (a card shows its
+    /// picture as soon as it is here). A sort pressed while a load runs stops it after the picture on its way and loads again; one
+    /// pressed during another job loads when the app is idle again (OnFrame).
+    /// </summary>
+    private void StartAvatarStoreList()
+    {
+        string baseUrl = _settings.StoreUrl;
+        var sort = (CommunitySort)_browser.AvatarStoreSort;
+        string busyText = $"Loading avatars · {CommunityList.Label(sort)}…";
+        if (_busy)
+        {
+            if (_avatarListLoading)
+            {
+                // Back on the sort that loads: it simply goes on (unless a queued download or like waits for it to stop).
+                bool moved = (int)sort != _avatarJobSort;
+                _stopAvatarList = moved || _avatarQueued is not null;
+                _avatarListWanted = moved;
+                if (moved)
+                {
+                    _renderer.Notify(busyText, NoticeLevel.Info);
+                    if (_avatarStore.Count == 0) _renderer.AvatarStoreStatus = busyText;
+                }
+            }
+            else
+            {
+                _avatarListWanted = true;
+                if (_avatarStore.Count == 0) _renderer.AvatarStoreStatus = busyText;
+            }
+            return;
+        }
+        _avatarListWanted = false;
+        _avatarPreviewsMissing = false;
+        _avatarListStopped = false;
+        _avatarListPosted = false;
+        bool started = StartAvatarStoreWork(busyText, http =>
+        {
+            HttpResponse answer = http.GetWithRetry(AvatarStore.ListUrl(baseUrl, sort, pageSize: 36));
+            if (!answer.IsSuccess) return new StoreResult("Store responded with status " + answer.StatusCode + ".", NoticeLevel.Error);
+            List<StoreAvatar> list = AvatarStore.Parse(System.Text.Encoding.UTF8.GetString(answer.Body), baseUrl);
+            // Asked to stop while the list was on its way: the old list stays on screen until the new one is here.
+            if (_stopAvatarList)
+            {
+                _avatarListStopped = true;
+                return new StoreResult("", NoticeLevel.Success);
+            }
+            _avatarListPosted = true;
+            _results.Post(() =>
+            {
+                _renderer.ResetAvatarStore();
+                _avatarStore = list;
+                _renderer.AvatarStore = list;
+                // The header names the sort this list came with, not the one the pill shows now.
+                _renderer.AvatarStoreListSort = (int)sort;
+                // The cards that wait for their picture show a placeholder until the pictures are in (StartAvatarStoreWork ends it).
+                _renderer.AvatarStorePicturesLoading = true;
+                _browser.SetAvatarStoreCount(list.Count);
+                RefreshAvatarStoreBadges();
+            });
+            if (!LoadAvatarPreviews(http, list)) return new StoreResult("", NoticeLevel.Success);
+            // A loaded list needs no toast: the screen shows the cards.
+            return list.Count == 0 ? new StoreResult("No avatars in the store yet.", NoticeLevel.Info) : new StoreResult("", NoticeLevel.Success);
+        }, loadsList: true);
+        if (started)
+        {
+            _avatarJobSort = (int)sort;
+            _avatarListLoading = true;
+        }
+    }
+
+    /// <summary>
+    /// Fetches the preview pictures of <paramref name="avatars"/> one by one on the worker. Returns false when it was asked to stop
+    /// (and stopped) before the last one.
+    /// </summary>
+    private bool LoadAvatarPreviews(StoreHttpClient http, List<StoreAvatar> avatars)
+    {
+        foreach (StoreAvatar avatar in avatars)
+        {
+            if (_stopAvatarList)
+            {
+                _avatarListStopped = true;
+                return false;
+            }
+            if (avatar.PreviewUrl is null) continue;
+            try
+            {
+                HttpResponse picture = http.Get(avatar.PreviewUrl);
+                if (!picture.IsSuccess || picture.Body.Length == 0) continue;
+                string id = avatar.Id;
+                byte[] body = picture.Body;
+                _results.Post(() => _renderer.AvatarStorePreviews[id] = body);
+            }
+            catch { /* a missing preview leaves the placeholder */ }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Fetches the previews the cards on screen still lack, after a download or a like stopped the list's pictures. It shows no
+    /// notice and stops for the next sort, download or like just like a list load.
+    /// </summary>
+    private void StartAvatarPreviews()
+    {
+        _avatarPreviewsMissing = false;
+        var missing = new List<StoreAvatar>();
+        foreach (StoreAvatar avatar in _avatarStore)
+            if (avatar.PreviewUrl is not null && !_renderer.AvatarStorePreviews.ContainsKey(avatar.Id)) missing.Add(avatar);
+        if (missing.Count == 0) return;
+        _avatarListStopped = false;
+        _avatarListPosted = true;
+        bool started = StartAvatarStoreWork("", http =>
+        {
+            LoadAvatarPreviews(http, missing);
+            return new StoreResult("", NoticeLevel.Success);
+        });
+        if (started) _avatarListLoading = _renderer.AvatarStorePicturesLoading = true;
+    }
+
+    /// <summary>Marks the store avatars whose pack is among the app's avatars (after a scan, a list load or a download).</summary>
+    private void RefreshAvatarStoreBadges() =>
+        _renderer.AvatarStoreInLibrary = AvatarStore.InLibrary(_avatarStore, _avatars.Select(a => a.Path));
+
+    /// <summary>Replaces one avatar of the list on screen (the records are immutable); the renderer gets the new list.</summary>
+    private void ChangeStoreAvatar(string id, Func<StoreAvatar, StoreAvatar> change)
+    {
+        var updated = new List<StoreAvatar>(_avatarStore);
+        int i = updated.FindIndex(a => a.Id == id);
+        if (i < 0) return;
+        updated[i] = change(updated[i]);
+        _avatarStore = updated;
+        _renderer.AvatarStore = updated;
+    }
+
+    /// <summary>
+    /// Downloads a store avatar into the app's avatars (<see cref="AvatarLibrary.Add"/> checks it as an import does). The avatar scan
+    /// that follows updates the Library's row and the badges. With <paramref name="thenSet"/> that scan goes on to set it as the
+    /// profile picture (the user answered "Download and set"); a download that fails never sets anything.
+    /// </summary>
+    private void StartAvatarDownload(StoreAvatar avatar, bool thenSet = false)
+    {
+        StartAvatarStoreWork("Downloading “" + avatar.Name + "”…", http =>
+        {
+            HttpResponse answer = http.GetWithRetry(avatar.DownloadUrl);
+            if (!answer.IsSuccess) return new StoreResult("Download failed (" + answer.StatusCode + ").", NoticeLevel.Error);
+            byte[] pack = answer.Body;
+            if (pack.Length == 0 || pack.Length > AvatarPack.ArchiveCap)
+                return new StoreResult("Download failed: the avatar is empty or too large (1 MiB at most).", NoticeLevel.Error);
+            bool added;
+            try { added = AvatarLibrary.Add(AppData.Files, pack); }
+            catch (Exception ex) { return new StoreResult("Download failed: " + ex.Message, NoticeLevel.Error); }
+            _results.Post(() =>
+            {
+                // The store counted this download; show it without reloading the list.
+                ChangeStoreAvatar(avatar.Id, a => a with { Downloads = a.Downloads + 1 });
+                if (thenSet) _avatarSetAfterScan = pack;
+                _avatarScanAfterWork = true;
+            });
+            return added
+                ? new StoreResult("“" + avatar.Name + "” is now in Your avatars.", NoticeLevel.Success)
+                : new StoreResult("“" + avatar.Name + "” is already in Your avatars.", NoticeLevel.Info);
+        });
+    }
+
+    /// <summary>
+    /// Triangle on a store avatar: likes it, or takes the like back when this console already liked it. The answer carries the new
+    /// count and whether it is liked now; the ids this console liked are kept in avatar-likes.json so the hearts survive a restart.
+    /// </summary>
+    private void StartAvatarLike(StoreAvatar avatar)
+    {
+        string url = AvatarStore.LikeUrl(_settings.StoreUrl, avatar.Id), device = _settings.DeviceId;
+        bool unlike = _avatarLiked.Contains(avatar.Id);
+        StartAvatarStoreWork(unlike ? "Removing like…" : "Sending like…", http =>
+        {
+            HttpResponse answer = http.Send(CommunityList.LikeMethod(unlike), url, default, ["X-Device-Id: " + device]);
+            string body = answer.IsSuccess ? System.Text.Encoding.UTF8.GetString(answer.Body) : "";
+            int likes = answer.IsSuccess ? CommunityList.ParseLikes(body) : -1;
+            if (likes < 0) return new StoreResult((unlike ? "Like not removed (" : "Like not saved (") + answer.StatusCode + ").", NoticeLevel.Error);
+            // The store says what it did; without an answer for it, the request decides.
+            bool liked = CommunityList.ParseLiked(body) ?? !unlike;
+            _results.Post(() =>
+            {
+                ChangeStoreAvatar(avatar.Id, a => a with { Likes = likes });
+                if (liked) _avatarLiked.Add(avatar.Id); else _avatarLiked.Remove(avatar.Id);
+                try
+                {
+                    AppData.Files.CreateDirectoryRecursive(AppData.Root);
+                    AppData.Files.WriteAllText(AvatarStore.LikesPath, CommunityList.FormatLikedIds(_avatarLiked));
+                }
+                catch { /* the heart lasts until the app quits */ }
+            });
+            return new StoreResult(liked ? "Liked “" + avatar.Name + "”." : "Like removed from “" + avatar.Name + "”.", NoticeLevel.Success);
         });
     }
 

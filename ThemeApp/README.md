@@ -11,17 +11,17 @@ launch evidence are recorded separately below.
 ## Library, details and preview
 
 - Library navigation uses the d-pad or left stick. X opens details; Square opens fullscreen preview; Options
-  reloads the library.
+  reloads the library. Left and Right move along the theme row; Down from it reaches the avatar row (see "Avatars").
 - **Preview** is an interactive stand-in for the console's home screen, made of what the pack brings (see
   "The preview" below). D-pad Left/Right moves the focus along the row of tiles (or along the control centre's
   buttons), L1/R1 switch Games and Media, Triangle goes between the home screen and the control centre, X hides the
   overlay (and brings it back), Square plays or stops the theme's music excerpt, Circle goes back (out of the
   control centre first, then out of the preview, to the screen that opened it). The footer lists at most four of
   these; the d-pad needs no hint.
-- L1/R1 switch between the Library, Community, USB Import and System tabs. Circle goes back to the Library from
+- L1/R1 switch between the Library, Themes, Avatars, USB Import and System tabs. Circle goes back to the Library from
   any tab.
 - **Questions first:** X on a theme's detail opens an Apply dialog; X on System's "Restore defaults" row opens a
-  Restore dialog (focus starts on Cancel); X on a Community card opens the Download dialog (focus on Download, see "Download
+  Restore dialog (focus starts on Cancel); X on a Themes card opens the Download dialog (focus on Download, see "Download
   question" below). In a dialog the d-pad moves the focus, X takes the focused option, Circle
   closes it; every other button is ignored. While the app is busy neither of these two opens ("Please wait…"); the Download question can (a download is not a console change).
 - **Notices:** results and progress ("Applying theme…", "Download failed (404).") appear as one toast at the bottom
@@ -53,11 +53,11 @@ launch evidence are recorded separately below.
   defaults never writes an old firmware's file back.
   A file whose backup is gone (deleted from `/data`) is never taken for an original when it is a theme's:
   `backup/originals.txt` keeps the hash of every original the app saved or put back, and the bundled
-  `catalog/<firmware>.json` (StockCatalog: 9.60, 10.01, 11.20, 11.60, 13.00, 13.60) has the stock hash of each asset
+  `catalog/<firmware>.json` (StockCatalog: 9.60, 10.01, 10.60, 11.20, 11.60, 12.40, 12.70, 13.00, 13.20, 13.40, 13.42, 13.60) has the stock hash of each asset
   and of the icon container. A tile icon then comes back from the firmware's own copy in
   `/system_ex/rnps/apps` (on 13.00, 8 of the 9 icons are identical to it; Sony's servers updated NPXS40305).
   Any other such file has no original left on the console: Restore defaults leaves it and names it. A backup that
-  does not match the catalog is never written back. On firmware without a catalog (12.40, for example) the look
+  does not match the catalog is never written back. On firmware without a catalog (one no report came from yet) the look
   decides (`Shared/StockLook.cs`): a stock icon container titles every theme icon (home, settings, power, ps_store and
   the rest), and the system tiles' backgrounds all differ; reports from 9.60 to 13.60 agree. A backup that fails this
   (made from another tool's theme, as on a 12.40 console whose 13 tile backgrounds were one picture) is never written
@@ -88,7 +88,7 @@ launch evidence are recorded separately below.
   and Circle discards. L1/R1 do nothing while typing. The address must start with `http://` or `https://`,
   contain a host, no spaces and at most 200 characters; trailing slashes are dropped. An unusable address
   keeps the keyboard open with the reason. Saving writes `store_url` in
-  `/data/prospero-themes/settings.json` and clears the Community list, which loads from the new store on the
+  `/data/prospero-themes/settings.json` and clears the Themes and Avatars lists, which load from the new store on the
   next visit. An empty address removes the store. Editing `store_url` in the file still works.
   Without a `store_url` in the file (a first start writes it), the app uses the public store
   `https://themes.darkatek7.com`.
@@ -103,16 +103,16 @@ launch evidence are recorded separately below.
   (2026-10-15). `build.ps1` checks the need entries of `eboot.bin` with `tools/check-needed-modules.ps1`: it stops
   for a carried module that is not in the PS5 container and reports every need entry that no hardware-tested build
   has had yet.
-- **"In library" badge** (Community tab): a store theme whose pack is in the library carries a badge on its
+- **"In library" badge** (Themes tab; the Avatars tab has the same badge, see "Avatars"): a store theme whose pack is in the library carries a badge on its
   card. The library names packs `<sha256>.p5theme`; the app records the hash of every download in
   `/data/prospero-themes/community.json` (store id → hash), and uses the store's `sha256` per item instead
   when the list carries one. A pack removed from the library loses its badge. The ids of the themes this console
   liked are kept next to `community.json`, in `/data/prospero-themes/likes.json` (see Likes below).
-- **Theme updates** (Community tab): cards show the store's version. When the store lists a hash that is not in
+- **Theme updates** (Themes tab): cards show the store's version. When the store lists a hash that is not in
   the library while the pack recorded in `community.json` is, the card carries an orange "Update" badge and the footer and
   the question (X) say Update. The download moves the old pack to `/data/prospero-themes/attic/` (kept, not deleted); an
   applied theme changes on the console only after it is applied again.
-- **Community controls** (Community tab): the d-pad moves between the cards, X asks what to do with the theme (see below),
+- **Themes controls** (Themes tab): the d-pad moves between the cards, X asks what to do with the theme (see below),
   Square previews it, Triangle likes, Options refreshes the list, Circle goes back to the Library. The footer lists
   Download (Update), Preview, Like (Unlike) and Refresh. The sort (Top rated, Most downloaded, New) is Square on the chips
   (and with no cards, when there is nothing to preview); its hint sits beside the pills only while the chips have the focus.
@@ -125,7 +125,7 @@ launch evidence are recorded separately below.
   Apply question opens on the next frame exactly as X on the Detail opens it (`ThemeBrowser.ApplyAfterDownload` and the
   shared `AskApply`): the parts to tick, the app background scope question, or the plain question. Nothing is applied before
   that question is confirmed, and none opens while the app is busy. A failed download never goes on; if the user has left the
-  Community tab (or another question is open) when the scan ends, the download notice is all there is.
+  Themes tab (or another question is open) when the scan ends, the download notice is all there is.
 - **Preview before download** (Square on a card): fetches the pack without keeping it and opens the same fullscreen preview the
   library has (home row with the pack's tile icons, background following the focus, control centre, UI sounds, Square for the
   music, Circle back to the card). The pack is downloaded with `GetWithRetry` on the store queue (so card pictures stop for it
@@ -135,7 +135,7 @@ launch evidence are recorded separately below.
   failure is a notice ("Preview failed (404)."), and a pack that arrives after the user left the tab is dropped. The request
   carries `?preview=1`, which the store does not count as a download (`web/server`; an older store ignores the flag).
   While a store preview is open the library's size does not matter (`ThemeBrowser.PreviewOfStore`).
-- **Category filter** (Community tab): a row of chips to the right of the sort pills, "All" and the store's twelve
+- **Category filter** (Themes tab): a row of chips to the right of the sort pills, "All" and the store's twelve
   categories (Anime, Games, Movies & TV, Cartoon, Nature, Space, Fantasy, Sci-Fi, Pixel art, Minimal, Abstract,
   Seasonal). D-pad up from the cards' top row focuses the row (with no cards, Up and Down toggle between it and the
   cards, so another category can always be picked); Left and Right move between the chips, X chooses the focused chip
@@ -147,12 +147,12 @@ launch evidence are recorded separately below.
   its picture. A press while the app is busy moves the chip but starts no load; the list is loaded as soon as the job
   ends (the same rule as the sort). The category ids and labels in `CommunityCategories` (`Library/CommunityList.cs`)
   must match `web/shared/src/categories.ts`.
-- **AI filter** (Community tab and System tab): the chip row starts with Search, No AI and All. X on No AI turns the
+- **AI filter** (Themes tab and System tab): the chip row starts with Search, No AI and All. X on No AI turns the
   filter on or off; while it is on, the list loads with `&ai=hide`, so the store leaves out every theme it counts as
   AI-generated (the author said so, the automatic check found it, or a moderator decided). The System tab's "AI
   themes" row (Show / Hide) is the same switch; both write `hide_ai` (`on` / `off`, off at first) in
   `/data/prospero-themes/settings.json`. A card of an AI theme carries an "AI" badge (next to the heart when liked).
-- **Likes** (Community tab): Triangle likes the selected theme. On a theme this console already liked, Triangle removes
+- **Likes** (Themes tab): Triangle likes the selected theme. On a theme this console already liked, Triangle removes
   the like (the footer says "Unlike" there). A liked theme shows a heart on its card. The request is a POST to
   the store's `/api/themes/<id>/like` (a DELETE for an unlike), with the console's device ID in an `X-Device-Id`
   header, so the store counts one like per console. The heart and the footer follow the store's answer; a refused
@@ -161,7 +161,8 @@ launch evidence are recorded separately below.
   file cannot be written, the hearts last until the app quits.
 - The bundled **Blue Hour** theme is a real format-2 pack carrying a ready-to-write BC7/zstd background
   for `bg_hub_default`, plus its PNG cover. It is not marked active merely because it is bundled.
-- USB import checks mounted `/mnt/usb0` through `/mnt/usb7`, each root and its `prospero-themes` folder.
+- USB import checks mounted `/mnt/usb0` through `/mnt/usb7`, each root and its `prospero-themes` folder. `.p5avatar` files
+  go the same way into the avatars (see "Avatars").
   It validates before copying, uses the archive's SHA-256 as its filename, verifies the copied temporary
   file, then renames it. Manifest IDs cannot cause an existing theme to be overwritten.
 - Imported archives live under `/data/prospero-themes/library`. Invalid files are skipped with a readable
@@ -215,6 +216,35 @@ resolved at run time: `sceKernelDlsym` finds no export in an app). They are not 
 If the app stops starting, create `NullPreviewAudio` instead of `ConsolePreviewAudio` in `Program.cs`: the class is
 then never used, and the trimmed build has no audio need entries.
 
+## Avatars
+
+Avatars are profile pictures for the account that starts the app. They are kept apart from themes: a `.p5avatar` never
+carries a theme file, and a theme never carries an avatar.
+
+- **Pack** (`Shared/AvatarPack.cs`): a ZIP with `avatar.json` (format, id, name, author, version, and the size and SHA-256
+  of each file), the four DXT5 pictures `avatar440.dds`, `avatar260.dds`, `avatar128.dds`, `avatar64.dds` and `preview.jpg`
+  for the tiles. The reader checks the DDS headers, the sizes and the hashes, and nothing else in the pack is used.
+- **Library** (`Library/AvatarLibrary.cs`): packs live in `/data/prospero-themes/avatars/`. The Library's second row,
+  "Your avatars", is read with every library scan, with "Console picture" first. Down from the themes reaches the row;
+  Left and Right move along it; Up or Circle goes back. X on an avatar asks "Set as profile picture"; X on Console picture
+  asks "Use console picture" (focus on Cancel); Triangle asks "Remove avatar" (focus on Cancel) and moves the pack to
+  `/data/prospero-themes/attic/`. Options reloads the library. The avatar in use is marked "In use".
+- **Avatars tab** (`Library/AvatarStore.cs`, `ThemeRenderer.AvatarStore.cs`): the store's list, `GET /api/avatars` with the
+  sort, page and page size, in six columns. The list and its pictures load in a job of their own, so the Themes tab's list
+  is not touched. Square cycles the sort (Top rated, Most downloaded, New); Options loads the list again. X asks "Download" (focus),
+  "Download and set" or "Cancel"; a download goes through `AvatarLibrary.Add`, which checks it like an import, and
+  "Download and set" sets the picture once the pack is in the library. Triangle likes or unlikes: POST or DELETE on
+  `/api/avatars/<id>/like` with the console's `X-Device-Id`, and the liked ids are kept in
+  `/data/prospero-themes/avatar-likes.json`. Cards of packs already in the library carry "In library".
+- **Setting a picture** (`Library/AvatarApplier.cs`): the user's profile folder is found through ThemeHelper (`LIST`, the
+  `0x<ID>` folder under `/system_data/priv/cache/profile/`), and the user is the one who started the app. The first apply
+  copies the files it will replace to `/data/prospero-themes/avatar-backup/0x<ID>/` with a `state.json`; the four
+  `avatar*.dds` are then written through ThemeHelper (`.tmp`, then renamed), and `online.json` (`{}`) is created only when
+  it is missing, so a PSN user's name stays. Measured on 13.00: the home screen shows the four pictures once `online.json`
+  is there, after a restart of the home screen (the app offers it; under OnionHEN only "Later"). Reset works per file:
+  a file the backup holds goes back, a file that was not there before is deleted, and an `online.json` the app created
+  is removed; an `online.json` the app did not create is left alone.
+
 ## PC preview
 
 ```powershell
@@ -227,11 +257,12 @@ L1/R1, T is Triangle (like; the control centre in the preview) and O is Options.
 decoder of its own, since the SDK's PC texture library reads PNG only), the sound (none) and input transport differ.
 The last pack in its library is made in code (`PreviewDemoPack.cs`): tile icons, pictures, music and sounds for the
 preview to show; it is reached with End in the Library. `--screenshots` renders every screen (Library, Detail, Preview, Artwork, the demo pack's preview in each of its
-scenes, Community, Import, System and the store-address keyboard) and the new states (the Apply, scope and Restore dialogs, each System row focused, the
-three kinds of toast, the Applied badge) to `ThemeApp.Preview/out/`. The Community shots include the preview of a store card
+scenes, Themes, Avatars, Import, System and the store-address keyboard) and the new states (the Apply, scope and Restore dialogs, each System row focused, the
+three kinds of toast, the Applied badge) to `ThemeApp.Preview/out/`. The Themes shots (`community-*` file names) include the preview of a store card
 (`community-preview*`), the Download and Update questions (`dialog-community-download`, `dialog-community-update`) and the apply
 question that "Download and apply" leads to (`dialog-community-download-apply`); the PC preview treats a card's pack as the library
-pack it was made from, so nothing is fetched or written there.
+pack it was made from, so nothing is fetched or written there. The avatar shots (`library-avatars-*`, `avatars-tab*`,
+`dialog-avatar-*`) cover the Library's avatar row and the Avatars tab with its questions.
 
 ## Home screen restart
 

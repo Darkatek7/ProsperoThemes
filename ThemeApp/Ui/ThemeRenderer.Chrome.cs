@@ -122,11 +122,14 @@ public sealed partial class ThemeRenderer
     // ---- Dialogs ----------------------------------------------------------------------------------------------------
 
     // The wrapped body text of each dialog; it does not depend on the pack, so it is wrapped once.
-    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[(int)DialogKind.RestartShellBlocked];
+    private readonly IReadOnlyList<string>?[] _dialogBody = new IReadOnlyList<string>?[Enum.GetValues<DialogKind>().Length - 1];
     private string _reapplyText = "";
     // The line under the name in the download question, for the card it was made for.
     private CommunityTheme? _dialogCard;
     private string _dialogCardLine = "";
+    // The same for the avatar questions.
+    private AvatarTile? _dialogAvatar;
+    private string _dialogAvatarLine = "";
 
     /// <summary>The text of the Reapply question (it names the system software and the themes; see SystemUpdate.Text).</summary>
     public string ReapplyText
@@ -152,12 +155,16 @@ public sealed partial class ThemeRenderer
         DialogKind.Reapply => "Apply your theme again?",
         DialogKind.FirmwareReport => "Firmware report",
         DialogKind.ReportAsk => "Help support " + _reportFirmware,
-        DialogKind.RestartShell => "Show the new look now?",
-        DialogKind.RestartShellBlocked => "The new look shows later",
+        DialogKind.RestartShell => _shellRestartForAvatar ? "Show the new picture now?" : "Show the new look now?",
+        DialogKind.RestartShellBlocked => _shellRestartForAvatar ? "The new picture shows later" : "The new look shows later",
         DialogKind.SoundVolume => "Apply your look again?",
         DialogKind.Remove => "Remove this theme?",
         DialogKind.CommunityDownload => "Download this theme?",
         DialogKind.AppUpdate => "Update Prospero Themes?",
+        DialogKind.AvatarApply => "Set as profile picture?",
+        DialogKind.AvatarReset => "Use the console picture?",
+        DialogKind.AvatarRemove => "Remove this avatar?",
+        DialogKind.AvatarDownload => "Get this avatar?",
         _ => "Apply this theme?",
     };
 
@@ -167,8 +174,14 @@ public sealed partial class ThemeRenderer
         DialogKind.AppUpdate => _appUpdateText,
         DialogKind.ReportAsk => $"This app has no measurements for firmware {_reportFirmware} yet. Send a firmware report? It only reads files and lists their names, sizes and checksums; nothing personal.",
         DialogKind.SoundVolume => "Your theme’s music and sounds are written again at the new volume, with the rest of your look. That takes a minute or two.",
+        DialogKind.RestartShell when _shellRestartForAvatar => "The profile picture changes once the home screen restarts. That takes a few seconds; this app stays open. Later, it changes after the next restart of the console.",
+        DialogKind.RestartShellBlocked when _shellRestartForAvatar => "OnionHEN is running, and restarting the home screen can make it crash. The profile picture changes after the next restart of the console.",
         DialogKind.RestartShell => "New icons and sounds show once the home screen restarts. That takes a few seconds; this app stays open. Later, they show after the next restart of the console.",
         DialogKind.RestartShellBlocked => "OnionHEN is running, and restarting the home screen can make it crash. The new icons and sounds show after the next restart of the console.",
+        DialogKind.AvatarApply => "Writes this picture for the user who started the app. The picture it replaces is kept: Console picture puts it back.",
+        DialogKind.AvatarReset => "Puts back the picture this user had before an avatar was set here.",
+        DialogKind.AvatarRemove => "Takes it out of your avatars; the file is kept in /data/prospero-themes/attic. If it is your profile picture, it stays until you choose another one.",
+        DialogKind.AvatarDownload => "Saves it to Your avatars in the Library. Download and set also makes it your profile picture; it shows after the home screen restarts.",
         DialogKind.FirmwareReport => "Lists the console’s theme files (names, sizes, checksums), the system software and the app version; nothing personal. Save and send also gives it to the store, which answers with a code to post in your GitHub issue.",
         DialogKind.Restore => "Puts the original backgrounds, icons and sounds back on this console. Your theme library stays as it is.",
         DialogKind.ApplyScope => "This theme has a background for apps. Choose where it goes: only apps without their own image, or all apps.",
@@ -182,13 +195,16 @@ public sealed partial class ThemeRenderer
     // What is on screen under a dialog, as it looks once dimmed. The screen behind a dialog is still, so it is dimmed
     // once (a full-screen pass is several milliseconds) and copied on every later frame, until something it shows changes.
     private readonly record struct DialogBase(ThemeView View, string? Path, bool Applied, bool Busy, bool AllApps, bool Replace, bool Sounds,
-        int Row, string StoreUrl, string Firmware, int Count, string NewerVersion, string ReportCode, string? Card, AppUpdate.State UpdateState);
+        int Row, string StoreUrl, string Firmware, int Count, string NewerVersion, string ReportCode, string? Card, AppUpdate.State UpdateState,
+        bool AvatarRow, int AvatarCard, int AvatarCount, bool AvatarsLoaded, string? AvatarApplied, int StoreAvatar, int StoreAvatarCount, int StorePreviews);
     private PixelBuffer? _dialogBase;
     private DialogBase _dialogKey;
 
     private DialogBase DialogBaseKey(ThemeBrowser browser, ThemeLibraryEntry? selected, int count) =>
         new(browser.View, selected?.Path, selected is not null && IsApplied(selected), Busy, AllAppsBackgrounds, ReplaceEarlierThemes,
-            Sounds, browser.SystemSelected, browser.StoreUrl, Firmware, count, NewerVersion, ReportCode, SelectedCommunityId, UpdateState);
+            Sounds, browser.SystemSelected, browser.StoreUrl, Firmware, count, NewerVersion, ReportCode, SelectedCommunityId, UpdateState,
+            browser.AvatarRowFocused, browser.AvatarSelected, _avatars.Count, AvatarsLoaded, AppliedAvatarId,
+            browser.AvatarStoreSelected, AvatarStore.Count, AvatarStorePreviews.Count);
 
     private void ReleaseDialogBase()
     {
@@ -200,8 +216,9 @@ public sealed partial class ThemeRenderer
     private void DrawDialogScrim(Surface s, ThemeBrowser browser, ThemeLibraryEntry? selected, int count, double seconds)
     {
         Paint.Veil(s, 0, 0, Theme.ScreenWidth, Theme.ScreenHeight, Ink);
-        // A view still sliding in would freeze mid-slide, so it is only kept once it has come to rest.
-        if (seconds - _viewStart < 0.6) { ReleaseDialogBase(); return; }
+        // A view still sliding in would freeze mid-slide, so it is only kept once it has come to rest. The same goes for the
+        // Library's rows (the slide to the avatars, the scrolls, a card still waiting for its picture).
+        if (seconds - _viewStart < 0.6 || browser.View == ThemeView.Library && _libraryMoving || browser.View == ThemeView.Avatars && _avatarStoreMoving) { ReleaseDialogBase(); return; }
         _dialogBase ??= new PixelBuffer(Theme.ScreenWidth, Theme.ScreenHeight);
         _dialogBase.AsSurface().Blit(s, 0, 0);
         _dialogKey = DialogBaseKey(browser, selected, count);
@@ -232,7 +249,26 @@ public sealed partial class ThemeRenderer
                 (name, summary) = (card.Name, _dialogCardLine);
             }
         }
-        else if (kind is not (DialogKind.Restore or DialogKind.RestoreParts or DialogKind.Reapply or DialogKind.FirmwareReport or DialogKind.RestartShell or DialogKind.RestartShellBlocked or DialogKind.SoundVolume or DialogKind.ReportAsk or DialogKind.AppUpdate) && entry is not null)
+        else if (kind is DialogKind.AvatarApply or DialogKind.AvatarRemove)
+        {
+            // The avatar of the focused tile (the cursor cannot move while the question is open).
+            if (browser.AvatarIndex >= 0 && browser.AvatarIndex < _avatars.Count)
+            {
+                AvatarTile avatar = _avatars[browser.AvatarIndex];
+                if (!ReferenceEquals(_dialogAvatar, avatar)) { _dialogAvatar = avatar; _dialogAvatarLine = "by " + avatar.Author; }
+                (name, summary) = (avatar.Name, _dialogAvatarLine);
+            }
+        }
+        else if (kind == DialogKind.AvatarDownload)
+        {
+            // The store avatar the question was opened on (the cursor cannot move while it is open).
+            if (FocusedStoreAvatar(browser) is { } storeAvatar)
+            {
+                if (!ReferenceEquals(_dialogStoreAvatar, storeAvatar)) { _dialogStoreAvatar = storeAvatar; _dialogStoreAvatarLine = "by " + (storeAvatar.Author.Length > 0 ? storeAvatar.Author : "unknown author"); }
+                (name, summary) = (storeAvatar.Name, _dialogStoreAvatarLine);
+            }
+        }
+        else if (kind is not (DialogKind.Restore or DialogKind.RestoreParts or DialogKind.Reapply or DialogKind.FirmwareReport or DialogKind.RestartShell or DialogKind.RestartShellBlocked or DialogKind.SoundVolume or DialogKind.ReportAsk or DialogKind.AppUpdate or DialogKind.AvatarReset) && entry is not null)
             (name, summary) = (entry.Manifest.Name, SummaryOf(entry).Text);
         bool named = name is not null;
 
@@ -284,7 +320,7 @@ public sealed partial class ThemeRenderer
         {
             bool focus = i == browser.DialogFocus;
             bool cancel = i == options.Count - 1;
-            bool destructive = kind is DialogKind.Restore or DialogKind.Remove or DialogKind.RestoreParts && i == parts.Count;
+            bool destructive = kind is DialogKind.Restore or DialogKind.Remove or DialogKind.RestoreParts or DialogKind.AvatarRemove && i == parts.Count;
             // Apply theme or Restore defaults with nothing ticked does nothing, so it looks switched off.
             bool off = kind is DialogKind.ApplyParts or DialogKind.RestoreParts && !cancel && browser.DialogTicked == ThemePart.None;
             Paint.FillRoundedRect(s, tx, ty, bodyWidth, DialogRow, Theme.RadiusKey, focus && !off ? White : KeyFill);
@@ -315,7 +351,7 @@ public sealed partial class ThemeRenderer
     /// <summary>Vertical centre of the header row: halfway between the top safe line and the rule.</summary>
     private const int HeaderCenterY = (Theme.SafeTop + Theme.HeaderRuleY) / 2;
     private const int TabHeight = 56, TabPadX = 20, TabGap = 8, TabGlyphGap = 16;
-    private static readonly string[] TabNames = ["Library", "Community", "USB Import", "System"];
+    private static readonly string[] TabNames = ["Library", "Themes", "Avatars", "USB Import", "System"];
     // Where the tabs sit: even gaps, the group centred on the screen. Measured once, with the font that is wider (the
     // active tab's), so the tabs do not shift when the active one changes.
     private int[]? _tabX, _tabWidth;
@@ -344,7 +380,7 @@ public sealed partial class ThemeRenderer
         DrawLeft(_small, s, "T H E M E S", wordX + _heading.MeasureText("prospero") + 12, baseline - Ascent(_small), Muted);
 
         if (_tabX is null || _tabWidth is null) LayoutTabs();
-        int active = view switch { ThemeView.Community or ThemeView.Search => 1, ThemeView.Import => 2, ThemeView.System or ThemeView.StoreAddress => 3, _ => 0 };
+        int active = view switch { ThemeView.Community or ThemeView.Search => 1, ThemeView.Avatars => 2, ThemeView.Import => 3, ThemeView.System or ThemeView.StoreAddress => 4, _ => 0 };
         for (int i = 0; i < TabNames.Length; i++)
         {
             bool on = i == active;
@@ -415,6 +451,7 @@ public sealed partial class ThemeRenderer
             ThemeView.Library => LibraryHints(browser),
             ThemeView.Detail => DetailHints(browser),
             ThemeView.Community => CommunityHints(browser),
+            ThemeView.Avatars => AvatarStoreHints(browser),
             ThemeView.Import => ImportHints(browser),
             ThemeView.StoreAddress or ThemeView.Search => StoreAddressHints(browser),
             _ => SystemHints(browser),

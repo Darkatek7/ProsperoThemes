@@ -54,9 +54,13 @@ public static class DeviceThemeLibrary
         return new LibrarySnapshot(entries, message, RecordAdded(entries));
     }
 
+    /// <summary>
+    /// Copies the theme packs on a connected USB drive into the library, and its avatar packs (<c>.p5avatar</c>) into the app's
+    /// avatars (<see cref="AvatarLibrary"/>).
+    /// </summary>
     public static LibrarySnapshot ImportUsb()
     {
-        int imported = 0, existing = 0, rejected = 0, found = 0;
+        int imported = 0, existing = 0, rejected = 0, found = 0, avatars = 0;
         string? lastError = null;
         Files.CreateDirectoryRecursive(Root);
         for (int usb = 0; usb < 8; usb++)
@@ -66,12 +70,20 @@ public static class DeviceThemeLibrary
                 if (!FileSystem.TryEnumerateDirectory(directory, out var files, out _)) continue;
                 foreach (var file in files)
                 {
-                    if (!file.IsFile || !IsPack(file.Name)) continue;
+                    bool avatar = AvatarLibrary.IsPack(file.Name);
+                    if (!file.IsFile || !avatar && !IsPack(file.Name)) continue;
                     if (++found > MaxPacks) { lastError = "Maximum of 128 packs per import."; break; }
                     try
                     {
                         string path = directory.TrimEnd('/') + "/" + file.Name;
                         long size = FileSystem.GetFileSize(path);
+                        if (avatar)
+                        {
+                            if (size <= 0 || size > AvatarPack.ArchiveCap) throw new ThemePackException("Avatar too large (1 MiB at most).");
+                            if (AvatarLibrary.Add(Files, FileSystem.ReadAllBytes(path))) avatars++;
+                            else existing++;
+                            continue;
+                        }
                         if (size <= 0 || size > ThemeArchive.MaxArchiveBytes)
                             throw new ThemePackException("Pack too large (48 MiB at most).");
                         if (AddToLibrary(FileSystem.ReadAllBytes(path), path)) imported++;
@@ -84,8 +96,9 @@ public static class DeviceThemeLibrary
             if (found > MaxPacks) break;
         }
         var snapshot = Scan();
-        string result = found == 0 ? "No theme packs found on a connected USB drive." :
+        string result = found == 0 ? "No theme packs or avatars found on a connected USB drive." :
             $"{imported} imported · {existing} already in library · {rejected} skipped";
+        if (avatars > 0) result += avatars == 1 ? " · 1 avatar imported" : $" · {avatars} avatars imported";
         if (lastError is not null) result += " · " + lastError;
         return snapshot with { Message = result };
     }

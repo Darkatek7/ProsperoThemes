@@ -128,7 +128,7 @@ public sealed partial class ThemeRenderer
     private const int ImportBadge = 40, ImportStepGap = 24, ImportStatusLines = 2;
     private static readonly string[] ImportSteps =
     [
-        "Put .p5theme, .zip or .tar files on your USB drive.",
+        "Put .p5theme, .zip, .tar or .p5avatar files on your USB drive.",
         "Use the main folder or a folder named prospero-themes.",
         "Plug in the drive and start the import.",
     ];
@@ -162,7 +162,7 @@ public sealed partial class ThemeRenderer
         int top = y + 48;
         ClipLeft(_screenHeading, s, "Import from USB", left - SysHeadingOptical, top, White, inner);
         top += _screenHeading.LineHeight + 8;
-        ClipLeft(_body, s, "Copy theme packs from a USB drive into your library.", left, top, Muted, inner);
+        ClipLeft(_body, s, "Copy theme packs and avatars from a USB drive into the app.", left, top, Muted, inner);
         top += _body.LineHeight + 32;
 
         // The digit and the step text share a baseline that runs through the middle of the badge.
@@ -202,8 +202,8 @@ public sealed partial class ThemeRenderer
         "Whether themes may change the music and sounds",
         "How loud a theme’s system sounds play",
         "How loud a theme’s home music plays",
-        "Whether the Community tab lists themes with AI pictures",
-        "Where the Community tab loads themes from",
+        "Whether the Themes tab lists themes with AI pictures",
+        "Where the Themes and Avatars tabs load from",
         "Save or send a list of the console’s theme files",
         "",   // App update: _updateRowText, which follows what the store announced
         "Put every background, icon and sound back to the original",

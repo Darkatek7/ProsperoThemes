@@ -513,3 +513,25 @@ public sealed class ReportDeviceFiles : IDeviceFiles
     public void RemountSystemExRw() => throw new InvalidOperationException("the report only reads");
     public IReadOnlyList<string> ListDirectories(string path) => Array.Empty<string>();
 }
+
+/// <summary>
+/// <see cref="IAvatarFiles"/> for the device: the profile folders through ThemeHelper (v9), which allows only the avatar file
+/// names there (<see cref="HelperPaths.IsAvatarPath"/>).
+/// </summary>
+public sealed class HelperAvatarFiles : IAvatarFiles
+{
+    public IReadOnlyList<string> ProfileFolders()
+    {
+        // The helper answers a refused or unreadable folder with an empty list; no folder at all is never a real answer.
+        IReadOnlyList<string> folders = ThemeHelperClient.List(AvatarApplier.ProfileRoot);
+        if (folders.Count == 0) throw new InvalidOperationException("the theme helper lists no folders in " + AvatarApplier.ProfileRoot);
+        return folders;
+    }
+
+    public IReadOnlyList<string> FilesIn(string folder) => ThemeHelperClient.ListEntries(folder).Files;
+    public byte[] Read(string path) => ThemeHelperClient.Read(path);
+    public string Hash(string path) => ThemeHelperClient.Hash(path);
+    public void Write(string path, byte[] data) => ThemeHelperClient.Write(path, data);
+    public void Rename(string from, string to) => ThemeHelperClient.Rename(from, to);
+    public void Delete(string path) => ThemeHelperClient.Delete(path);
+}

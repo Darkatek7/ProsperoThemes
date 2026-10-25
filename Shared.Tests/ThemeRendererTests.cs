@@ -406,15 +406,15 @@ public class ThemeRendererTests
         using var canvas = new PixelBuffer(1920, 1080);
         var browser = new ThemeBrowser();
         var none = Array.Empty<ThemeLibraryEntry>();
-        // L1 sits left of the centred tab group and R1 right of it; their pills are solid Muted.
+        // L1 sits left of the centred tab group and R1 right of it (the five tabs put them near x 500 and 1380); their pills are solid Muted.
         int Glyphs()
         {
             Settled(renderer, canvas, browser, none, 5);
-            return CountPixels(canvas, 540, 70, 70, 60, Theme.Muted) + CountPixels(canvas, 1316, 70, 60, 60, Theme.Muted);
+            return CountPixels(canvas, 480, 70, 80, 60, Theme.Muted) + CountPixels(canvas, 1360, 70, 80, 60, Theme.Muted);
         }
         int library = Glyphs();
         Assert.True(library > 800);
-        for (int tab = 0; tab < 3; tab++)                  // Community, USB Import, System: the active tab moves, the glyphs do not
+        for (int tab = 0; tab < 4; tab++)                  // Themes, Avatars, USB Import, System: the active tab moves, the glyphs do not
         {
             browser.Update(UiInput.None with { PageDown = true });
             Assert.Equal(library, Glyphs());

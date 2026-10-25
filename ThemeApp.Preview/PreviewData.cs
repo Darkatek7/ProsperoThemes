@@ -107,6 +107,34 @@ internal static class PreviewData
         }).ToList();
     }
 
+    /// <summary>
+    /// A store list for the Avatars tab: buildings only, oldest first (like <see cref="Store"/>). The pictures are not part of the
+    /// list (the preview gives every avatar the fixture's preview); the counts are invented.
+    /// </summary>
+    public static List<StoreAvatar> AvatarStore()
+    {
+        string[] names = ["House", "Lighthouse", "Old Mill", "Tower Block", "Barn", "Pagoda", "Castle Keep With A Very Long Name", "Windmill",
+            "Cabin", "Greenhouse", "Observatory", "Chapel", "Skyscraper", "Boathouse"];
+        string[] authors = ["Builder", "Mason", "Architect", "Builder", "Carpenter", "Mason", "A Rather Long Author Name", "Builder",
+            "Carpenter", "Gardener", "Architect", "Mason", "", "Builder"];
+        int[] likes = [412, 96, 1260, 38, 205, 74, 12, 530, 0, 148, 61, 9, 2310, 27];
+        int[] downloads = [3100, 640, 12400, 215, 1480, 390, 41, 5200, 3, 880, 402, 58, 24000, 130];
+        var list = new List<StoreAvatar>();
+        for (int i = 0; i < names.Length; i++)
+            list.Add(new StoreAvatar($"house-{i}", names[i], authors[i], "1.0.0", "", 120_000, likes[i], downloads[i],
+                $"/api/avatars/house-{i}/preview.jpg", $"/api/avatars/house-{i}/download", null));
+        return list;
+    }
+
+    /// <summary>What the store answers for an avatar list request in the order of <paramref name="sort"/>.</summary>
+    public static List<StoreAvatar> AvatarListing(IReadOnlyList<StoreAvatar> store, CommunitySort sort) =>
+        (sort switch
+        {
+            CommunitySort.Downloads => store.OrderByDescending(a => a.Downloads),
+            CommunitySort.New => store.Reverse(),
+            _ => store.OrderByDescending(a => a.Likes),
+        }).ToList();
+
     /// <summary>The id of the card at <paramref name="index"/> as a set, or an empty set when the store has no such card.</summary>
     public static HashSet<string> Card(IReadOnlyList<CommunityTheme> store, int index)
     {

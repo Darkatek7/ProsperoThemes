@@ -8,9 +8,11 @@ namespace ProsperoThemes.App.Ui;
 
 /// <summary>
 /// StoreAddress is the keyboard screen: opened from System, not a header tab, and it returns there. Search is the same
-/// keyboard for the Community search: opened from the search chip, and it returns to Community.
+/// keyboard for the Community search: opened from the search chip, and it returns to Community. Community is the Themes tab;
+/// Avatars is the store's avatars (the tab after it). The app's own avatars are the Library's second row
+/// (<see cref="ThemeBrowser.AvatarRowFocused"/>), not a view of their own.
 /// </summary>
-public enum ThemeView { Library, Detail, Preview, Community, Import, System, StoreAddress, Search }
+public enum ThemeView { Library, Detail, Preview, Community, Import, System, StoreAddress, Search, Avatars }
 /// <summary>
 /// SaveStoreUrl: Options in the store-address editor; the app reads <see cref="ThemeBrowser.StoreEditor"/>'s text.
 /// PreviewMusic: Square in the preview, which starts or stops the theme's music excerpt (the app owns the sound).
@@ -25,8 +27,13 @@ public enum ThemeView { Library, Detail, Preview, Community, Import, System, Sto
 /// what it knows).
 /// ToggleBackgroundScope: the System row for app backgrounds. ToggleSounds: the System row for music and sounds. ToggleAiThemes: the System row (or the Community chip's setting) for AI themes. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
 /// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
+/// AvatarStoreRefresh: the Avatars tab asks for the store's list (entered with none, a new sort, or Options). AvatarDownload and
+/// AvatarDownloadSet: the answers of the download question over a store avatar (the second also sets it as the profile picture once
+/// it is in the app). AvatarLike: Triangle on a store avatar, which likes it or takes the like back.
+/// AvatarApply, AvatarReset and AvatarRemove: the answers of the avatar questions, for the card at <see cref="ThemeBrowser.AvatarIndex"/>
+/// of the Library's avatar row (AvatarReset is the Console picture card).
 /// </summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityDownloadApply, CommunityPreview, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, RestartShell, ChangeSoundVolume, ChangeMusicVolume, AskSoundVolume, ApplySoundVolume, ToggleAiThemes, ReportLater, UpdateApp, CheckAppUpdate, Busy }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityDownloadApply, CommunityPreview, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, RestartShell, ChangeSoundVolume, ChangeMusicVolume, AskSoundVolume, ApplySoundVolume, ToggleAiThemes, ReportLater, UpdateApp, CheckAppUpdate, AvatarApply, AvatarReset, AvatarRemove, AvatarStoreRefresh, AvatarDownload, AvatarDownloadSet, AvatarLike, Busy }
 
 /// <summary>The two scenes of the preview: the home screen with its row of tiles, and the control centre's row of buttons.</summary>
 public enum PreviewScene { Home, ControlCentre }
@@ -45,9 +52,12 @@ public enum PreviewScene { Home, ControlCentre }
 /// CommunityDownload is the question over a store card: download it, download it and go on to apply it, or cancel (an
 /// update says Update); AppUpdate is the question behind the System tab's App update row: install the release the store
 /// announced over the app's own files, or cancel; RestartShellBlocked is RestartShell under OnionHEN, which can crash a home screen
-/// that restarts, so it has the option Later only and never emits <see cref="ThemeAction.RestartShell"/>.
+/// that restarts, so it has the option Later only and never emits <see cref="ThemeAction.RestartShell"/>. AvatarApply, AvatarReset and
+/// AvatarRemove are the questions of the Library's avatar row: set the focused avatar as the profile picture, put the console's own picture
+/// back, or take the focused avatar out of the app's avatars. AvatarDownload is the question over a store avatar on the Avatars tab:
+/// download it, download it and set it as the profile picture, or cancel.
 /// </summary>
-public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts, RestoreParts, Reapply, FirmwareReport, RestartShell, SoundVolume, ReportAsk, CommunityDownload, AppUpdate, RestartShellBlocked }
+public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts, RestoreParts, Reapply, FirmwareReport, RestartShell, SoundVolume, ReportAsk, CommunityDownload, AppUpdate, RestartShellBlocked, AvatarApply, AvatarReset, AvatarRemove, AvatarDownload }
 
 /// <summary>The focusable rows of the System screen, top to bottom.</summary>
 public enum SystemRow { Backgrounds, EarlierThemes, Sounds, SoundVolume, MusicVolume, AiThemes, StoreAddress, FirmwareReport, AppUpdate, Restore }
@@ -67,6 +77,10 @@ public sealed class ThemeBrowser
     private static readonly string[] DownloadOptions = ["Download", "Download and apply", "Cancel"];
     private static readonly string[] UpdateOptions = ["Update", "Update and apply", "Cancel"];
     private static readonly string[] AppUpdateOptions = ["Update now", "Cancel"];
+    private static readonly string[] AvatarApplyOptions = ["Set as profile picture", "Cancel"];
+    private static readonly string[] AvatarResetOptions = ["Use console picture", "Cancel"];
+    private static readonly string[] AvatarRemoveOptions = ["Remove avatar", "Cancel"];
+    private static readonly string[] AvatarDownloadOptions = ["Download", "Download and set", "Cancel"];
 
     /// <summary>Number of focusable rows on the System screen.</summary>
     public const int SystemRowCount = 10;
@@ -117,6 +131,10 @@ public sealed class ThemeBrowser
         DialogKind.ReportAsk => ReportAskOptions,
         DialogKind.CommunityDownload => CommunityDialogUpdate ? UpdateOptions : DownloadOptions,
         DialogKind.AppUpdate => AppUpdateOptions,
+        DialogKind.AvatarApply => AvatarApplyOptions,
+        DialogKind.AvatarReset => AvatarResetOptions,
+        DialogKind.AvatarRemove => AvatarRemoveOptions,
+        DialogKind.AvatarDownload => AvatarDownloadOptions,
         DialogKind.ApplyParts or DialogKind.RestoreParts => _partsOptions,
         _ => Array.Empty<string>(),
     };
@@ -188,6 +206,25 @@ public sealed class ThemeBrowser
     public string StoreUrl { get; set; } = "";
     /// <summary>The keyboard behind <see cref="ThemeView.StoreAddress"/>; keeps its text after the screen is left.</summary>
     public StoreAddressEditor StoreEditor { get; private set; } = new();
+    /// <summary>
+    /// Whether the Library's focus is on its second row, "Your avatars", instead of the themes. Down from the themes (or the look
+    /// card) goes there, Up or Circle comes back; the tabs still switch with L1 and R1.
+    /// </summary>
+    public bool AvatarRowFocused { get; private set; }
+    /// <summary>
+    /// The focused card of the avatar row: 0 is the Console picture card (the console's own picture), then the avatars in order.
+    /// </summary>
+    public int AvatarSelected { get; private set; }
+    /// <summary>The avatar of the focused card (an index into the app's avatar list), or -1 on the Console picture card.</summary>
+    public int AvatarIndex => AvatarSelected - 1;
+    private int _avatarCount;
+    /// <summary>The focused card of the Avatars tab's grid, or -1 when the store list is empty.</summary>
+    public int AvatarStoreSelected { get; private set; } = -1;
+    /// <summary>The store's sort order on the Avatars tab (a <see cref="CommunitySort"/> value: Top, Downloads, New).</summary>
+    public int AvatarStoreSort { get; private set; }
+    /// <summary>Cards in one row of the Avatars tab's grid.</summary>
+    public const int AvatarStoreColumns = 6;
+    private int _avatarStoreCount;
     private int _communityCount;
     private int _count;
     private ThemeView _previewOrigin = ThemeView.Library;
@@ -207,7 +244,26 @@ public sealed class ThemeBrowser
         // The library changed under the question, so it may no longer be about the pack that is selected. The question
         // after a system update and the offer to restart the home screen are about the look, not the selection, and the
         // download question is about a store card, so they stay.
-        if (Dialog is not (DialogKind.Reapply or DialogKind.RestartShell or DialogKind.RestartShellBlocked or DialogKind.CommunityDownload or DialogKind.AppUpdate)) Dialog = DialogKind.None;
+        if (Dialog is not (DialogKind.Reapply or DialogKind.RestartShell or DialogKind.RestartShellBlocked or DialogKind.CommunityDownload or DialogKind.AppUpdate
+            or DialogKind.AvatarApply or DialogKind.AvatarReset or DialogKind.AvatarRemove or DialogKind.AvatarDownload)) Dialog = DialogKind.None;
+    }
+
+    /// <summary>The number of avatars in the Library's avatar row (after the Console picture card); the focus is kept inside it.</summary>
+    public void SetAvatarCount(int count)
+    {
+        _avatarCount = Math.Max(0, count);
+        AvatarSelected = Math.Clamp(AvatarSelected, 0, _avatarCount);
+        // Another list under the question may put another avatar on the focused tile.
+        if (Dialog is DialogKind.AvatarApply or DialogKind.AvatarRemove) Dialog = DialogKind.None;
+    }
+
+    /// <summary>The number of avatars in the store list on the Avatars tab; the focus is kept inside it.</summary>
+    public void SetAvatarStoreCount(int count)
+    {
+        _avatarStoreCount = Math.Max(0, count);
+        // Another list under the question may put another avatar on the focused card.
+        if (Dialog == DialogKind.AvatarDownload) Dialog = DialogKind.None;
+        AvatarStoreSelected = _avatarStoreCount == 0 ? -1 : Math.Clamp(AvatarStoreSelected < 0 ? 0 : AvatarStoreSelected, 0, _avatarStoreCount - 1);
     }
 
     /// <summary>Puts the focus on the pack at <paramref name="index"/> (after the library was put in another order).</summary>
@@ -260,7 +316,7 @@ public sealed class ThemeBrowser
     }
 
     // The tabs in header order; Detail and Preview belong to the library.
-    private static readonly ThemeView[] Tabs = [ThemeView.Library, ThemeView.Community, ThemeView.Import, ThemeView.System];
+    private static readonly ThemeView[] Tabs = [ThemeView.Library, ThemeView.Community, ThemeView.Avatars, ThemeView.Import, ThemeView.System];
 
     /// <summary>
     /// One frame of buttons. <paramref name="preview"/> is Square, <paramref name="options"/> Options and
@@ -341,6 +397,11 @@ public sealed class ThemeBrowser
             }
             return;
         }
+        if (View == ThemeView.Library && AvatarRowFocused && !(input.PageDown || input.PageUp))
+        {
+            UpdateAvatarRow(input, options, triangle, busy);
+            return;
+        }
         if (input.Cancel || options && View == ThemeView.Detail)
         {
             View = ThemeView.Library;
@@ -355,6 +416,7 @@ public sealed class ThemeBrowser
             tab = (tab + (input.PageDown ? 1 : Tabs.Length - 1)) % Tabs.Length;
             View = Tabs[tab];
             if (View == ThemeView.Community && _communityCount == 0) _action = ThemeAction.CommunityRefresh;
+            if (View == ThemeView.Avatars && _avatarStoreCount == 0) _action = ThemeAction.AvatarStoreRefresh;
             if (View == ThemeView.System && _reportOffer)
             {
                 _reportOffer = false;   // once per start; the app remembers the answer
@@ -372,7 +434,18 @@ public sealed class ThemeBrowser
             UpdateSystem(input, busy, appUpdate);
             return;
         }
+        if (View == ThemeView.Avatars)
+        {
+            UpdateAvatarStore(input, preview, options, triangle);
+            return;
+        }
         if (!LookSavable) LookCardFocused = false;
+        // Down from the themes (or from the empty library) goes to the avatar row below them.
+        if (View == ThemeView.Library && input.Down)
+        {
+            AvatarRowFocused = true;
+            return;
+        }
         if (preview && Selected >= 0 && (View == ThemeView.Detail || View == ThemeView.Library && !LookCardFocused))
         {
             StartPreview(View);
@@ -381,16 +454,16 @@ public sealed class ThemeBrowser
         if (View == ThemeView.Library && _count > 0 && LookCardFocused)
         {
             // The card after the last pack: back onto the packs, or save the look.
-            if (input.Left || input.Up) LookCardFocused = false;
+            if (input.Left) LookCardFocused = false;
             if (input.Home) Select(0);
             if (input.Confirm) _action = busy ? ThemeAction.Busy : ThemeAction.SaveLook;
             else if (triangle) _action = ThemeAction.ToggleLibrarySort;
         }
         else if (View == ThemeView.Library && _count > 0)
         {
-            if ((input.Right || input.Down) && Selected == _count - 1 && LookSavable) LookCardFocused = true;
-            else if (input.Right || input.Down) Selected = Math.Min(_count - 1, Selected + 1);
-            if (input.Left || input.Up) Selected = Math.Max(0, Selected - 1);
+            if (input.Right && Selected == _count - 1 && LookSavable) LookCardFocused = true;
+            else if (input.Right) Selected = Math.Min(_count - 1, Selected + 1);
+            if (input.Left) Selected = Math.Max(0, Selected - 1);
             if (input.Home) Selected = 0;
             if (input.End)
             {
@@ -616,6 +689,66 @@ public sealed class ThemeBrowser
         if (options) _action = ThemeAction.CommunityRefresh;
     }
 
+    // The Avatars tab: the d-pad moves over the grid of store avatars, X asks to download the focused one (or to download and set
+    // it), Triangle likes it or takes the like back, Square goes to the next sort, Options loads the list again. Circle goes back to
+    // the Library like on every tab (handled before this).
+    private void UpdateAvatarStore(UiInput input, bool sort, bool options, bool triangle)
+    {
+        if (_avatarStoreCount > 0)
+        {
+            const int columns = AvatarStoreColumns;
+            if (input.Right) AvatarStoreSelected = Math.Min(_avatarStoreCount - 1, AvatarStoreSelected + 1);
+            if (input.Left) AvatarStoreSelected = Math.Max(0, AvatarStoreSelected - 1);
+            if (input.Down && AvatarStoreSelected / columns < (_avatarStoreCount - 1) / columns)
+                AvatarStoreSelected = Math.Min(_avatarStoreCount - 1, AvatarStoreSelected + columns);
+            if (input.Up) AvatarStoreSelected = Math.Max(0, AvatarStoreSelected - columns);
+            if (input.Home) AvatarStoreSelected = 0;
+            if (input.End) AvatarStoreSelected = _avatarStoreCount - 1;
+            // X asks first; the same X cannot also answer.
+            if (input.Confirm)
+            {
+                OpenDialog(DialogKind.AvatarDownload, 0);
+                return;
+            }
+            if (triangle) _action = ThemeAction.AvatarLike;
+        }
+        if (sort)
+        {
+            AvatarStoreSort = (AvatarStoreSort + 1) % 3;
+            AvatarStoreSelected = _avatarStoreCount == 0 ? -1 : 0;
+            _action = ThemeAction.AvatarStoreRefresh;
+        }
+        else if (options) _action = ThemeAction.AvatarStoreRefresh;
+    }
+
+    // The Library's avatar row: Left and Right move over the cards (Console picture first), X asks to set the focused avatar or to
+    // put the console's picture back, Triangle asks to remove the focused avatar, Up or Circle goes back to the themes, Options reads
+    // the library again. Every question waits for an idle app; the questions about the console's picture and removing start on Cancel.
+    private void UpdateAvatarRow(UiInput input, bool options, bool triangle, bool busy)
+    {
+        if (input.Up || input.Cancel)
+        {
+            AvatarRowFocused = false;
+            return;
+        }
+        if (input.Right) AvatarSelected = Math.Min(_avatarCount, AvatarSelected + 1);
+        if (input.Left) AvatarSelected = Math.Max(0, AvatarSelected - 1);
+        if (input.Home) AvatarSelected = 0;
+        if (input.End) AvatarSelected = _avatarCount;
+        if (input.Confirm)
+        {
+            if (busy) _action = ThemeAction.Busy;
+            else if (AvatarSelected == 0) OpenDialog(DialogKind.AvatarReset, AvatarResetOptions.Length - 1);
+            else OpenDialog(DialogKind.AvatarApply, 0);
+        }
+        else if (triangle && AvatarSelected > 0)
+        {
+            if (busy) _action = ThemeAction.Busy;
+            else OpenDialog(DialogKind.AvatarRemove, AvatarRemoveOptions.Length - 1);
+        }
+        else if (options) _action = ThemeAction.Reload;
+    }
+
     private void UpdateSystem(UiInput input, bool busy, AppUpdate.State appUpdate)
     {
         if (input.Up) SystemSelected = Math.Max(0, SystemSelected - 1);
@@ -790,6 +923,12 @@ public sealed class ThemeBrowser
                 _action = chosen == 1 ? ThemeAction.CommunityDownloadApply : ThemeAction.CommunityDownload;
                 return;
             }
+            // A plain avatar download only adds a file to the app's avatars; "Download and set" also changes the profile picture.
+            if (kind == DialogKind.AvatarDownload && chosen == 0)
+            {
+                _action = ThemeAction.AvatarDownload;
+                return;
+            }
             if (busy) { _action = ThemeAction.Busy; return; }
             switch (kind)
             {
@@ -798,6 +937,18 @@ public sealed class ThemeBrowser
                     break;
                 case DialogKind.AppUpdate:
                     _action = ThemeAction.UpdateApp;
+                    break;
+                case DialogKind.AvatarApply:
+                    _action = ThemeAction.AvatarApply;
+                    break;
+                case DialogKind.AvatarReset:
+                    _action = ThemeAction.AvatarReset;
+                    break;
+                case DialogKind.AvatarRemove:
+                    _action = ThemeAction.AvatarRemove;
+                    break;
+                case DialogKind.AvatarDownload:
+                    _action = ThemeAction.AvatarDownloadSet;
                     break;
                 case DialogKind.RestartShell:
                     _action = ThemeAction.RestartShell;

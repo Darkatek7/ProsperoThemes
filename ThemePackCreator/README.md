@@ -141,7 +141,7 @@ preview never makes a pack invalid.
 Copy the `.p5theme` to a USB drive (its root or a `prospero-themes` folder), import it in Prospero Themes on
 the USB Import tab and apply it from the Library. The app validates the pack, backs up the originals on the
 console and can restore them at any time (System → Restore defaults). Packs can also be published to the
-community store and downloaded on the Community tab.
+community store and downloaded on the Themes tab.
 
 ## Notes
 
