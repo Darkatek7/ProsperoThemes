@@ -32,9 +32,11 @@ if (-not $SdkRoot -or -not (Test-Path (Join-Path $SdkRoot "build/build-app.ps1")
 
 if (-not $Modules) { $Modules = $env:PROSPERO_MODULES }
 if (-not $Modules) {
-    # This project sits inside the work collection, where the modules live at the repository root.
+    # In the public repository the modules sit at its root (../); in the work collection, ProsperoThemes is a
+    # subfolder and they sit at the collection's root (../../).
     foreach ($candidate in @((Join-Path $here "third_party/modules"),
-                             (Join-Path $here "../third_party/modules"))) {
+                             (Join-Path $here "../third_party/modules"),
+                             (Join-Path $here "../../third_party/modules"))) {
         if (Test-Path $candidate) { $Modules = $candidate; break }
     }
 }

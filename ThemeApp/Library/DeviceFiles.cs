@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using SharpProspero.Interop;
+using SharpProspero.Memory;
 using SharpProspero.Security;
 using SharpProspero.Storage;
 
@@ -24,6 +25,9 @@ public sealed class DeviceFiles : IDeviceFiles
     public byte[] ReadAllBytes(string path) => AppData.Route(path,
         () => Folders.Named(path, () => FileSystem.ReadAllBytes(path)), () => ThemeHelperClient.Read(path));
 
+    public FileBytes ReadFile(string path) => AppData.Route(path,
+        () => Folders.Named(path, () => LargeFile.Read(path)), () => ThemeHelperClient.ReadFile(path));
+
     public string ReadAllText(string path) => System.Text.Encoding.UTF8.GetString(ReadAllBytes(path));
 
     public string Hash(string path) => AppData.Route(path,
@@ -31,6 +35,19 @@ public sealed class DeviceFiles : IDeviceFiles
 
     public void WriteAllBytes(string path, byte[] data) => AppData.Route(path,
         () => Folders.Named(path, () => FileSystem.WriteAllBytes(path, data)), () => ThemeHelperClient.Write(path, data));
+
+    public unsafe void WriteFile(string path, ReadOnlySpan<byte> data)
+    {
+        // A lambda cannot hold a span, so the routes get its address: pinned here, or memory outside the heap anyway.
+        fixed (byte* start = data)
+        {
+            nint address = (nint)start;
+            int length = data.Length;
+            AppData.Route(path,
+                () => Folders.Named(path, () => FileSystem.WriteAllBytes(path, new ReadOnlySpan<byte>((void*)address, length))),
+                () => ThemeHelperClient.Write(path, new ReadOnlySpan<byte>((void*)address, length)));
+        }
+    }
 
     public void WriteAllText(string path, string text) => WriteAllBytes(path, System.Text.Encoding.UTF8.GetBytes(text));
 
@@ -157,6 +174,49 @@ public static class AppData
             _viaHelper = true;
             return true;
         }
+    }
+}
+
+/// <summary>
+/// <see cref="FileBytes"/> on the console: a file of <see cref="Threshold"/> or more is held in flexible memory, outside
+/// the managed heap. Measured on 13.00 (2026-10-25): the app has about 1.6 GiB of flexible memory free and a 256 MiB heap,
+/// of which two ~100 MB arrays and an apply left 233 MiB committed; the icon container of firmware before 13.00 (about
+/// 100 MB) did not fit in the heap twice in a row, and with other memory in use not even once (issue #13).
+/// </summary>
+public static class LargeFile
+{
+    public const int Threshold = 16 * 1024 * 1024;
+
+    /// <summary>Memory for <paramref name="length"/> bytes: a managed array below <see cref="Threshold"/>.</summary>
+    public static FileBytes Allocate(int length) => length < Threshold ? FileBytes.Of(new byte[length]) : new Region(length);
+
+    /// <summary>A whole file the app reaches itself.</summary>
+    public static FileBytes Read(string path)
+    {
+        long size = FileSystem.GetFileSize(path);
+        if (size < Threshold) return FileBytes.Of(FileSystem.ReadAllBytes(path));
+        if (size > int.MaxValue) throw new IOException($"{path} is too large to read whole ({size} bytes)");
+        using DeviceFileStream stream = FileSystem.OpenRead(path);
+        FileBytes data = Allocate((int)size);
+        try
+        {
+            stream.ReadExactlyAt(0, data.Span);
+            return data;
+        }
+        catch
+        {
+            data.Dispose();
+            throw;
+        }
+    }
+
+    private sealed unsafe class Region(int length) : FileBytes
+    {
+        private readonly FlexibleMemoryRegion _region = FlexibleMemoryRegion.Allocate((nuint)length);
+
+        public override Span<byte> Span => new(_region.Pointer, length);
+
+        public override void Dispose() => _region.Dispose();
     }
 }
 

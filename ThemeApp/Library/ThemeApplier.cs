@@ -37,6 +37,38 @@ public interface IDeviceFiles
 
     /// <summary>Names of the sub-folders of <paramref name="path"/> (only /user/app/ and /user/appmeta/ are asked).</summary>
     IReadOnlyList<string> ListDirectories(string path);
+
+    /// <summary>
+    /// The whole file, which the caller disposes. For files that may be large: the console keeps a large one outside the
+    /// managed heap (<see cref="FileBytes"/>). By default a managed copy from <see cref="ReadAllBytes"/>.
+    /// </summary>
+    FileBytes ReadFile(string path) => FileBytes.Of(ReadAllBytes(path));
+
+    /// <summary><see cref="WriteAllBytes"/> from any memory, such as a <see cref="FileBytes"/>. By default through a managed copy.</summary>
+    void WriteFile(string path, ReadOnlySpan<byte> data) => WriteAllBytes(path, data.ToArray());
+}
+
+/// <summary>
+/// A whole file's bytes from <see cref="IDeviceFiles.ReadFile"/>; the reader disposes them. On the console a large file
+/// sits outside the managed heap: the icon container is about 100 MB before firmware 13.00, and inside the 256 MiB heap
+/// one such array could fail and a second one in a row did (issue #13, "Arg_OutOfMemoryException" on 12.40).
+/// </summary>
+public abstract class FileBytes : IDisposable
+{
+    public abstract Span<byte> Span { get; }
+
+    public int Length => Span.Length;
+
+    public abstract void Dispose();
+
+    /// <summary>Bytes in a managed array; disposing them does nothing.</summary>
+    public static FileBytes Of(byte[] data) => new Managed(data);
+
+    private sealed class Managed(byte[] data) : FileBytes
+    {
+        public override Span<byte> Span => data;
+        public override void Dispose() { }
+    }
 }
 
 /// <summary>Outcome of an apply or restore.</summary>
@@ -134,9 +166,9 @@ public sealed class ThemeApplier
     /// <summary>
     /// Largest console file the applier reads or writes as a whole: ThemeHelper's write limit (MaxWrite, the same
     /// number). A larger file is left alone without being read; the app cannot have written it, so it still holds
-    /// its original. The icon container is about 100 MB on firmware before 13.00: the applier holds one whole copy
-    /// of a file at a time and compares and verifies by streamed hashes (<see cref="IDeviceFiles.Hash"/>), because
-    /// holding several copies ran the app out of memory.
+    /// its original. The icon container is about 100 MB on firmware before 13.00: the applier reads whole files as
+    /// <see cref="FileBytes"/> (outside the managed heap on the console), holds one copy of a file at a time and
+    /// compares and verifies by streamed hashes (<see cref="IDeviceFiles.Hash"/>), because the heap could not hold it.
     /// </summary>
     public long MaxFileBytes { get; init; } = 160L * 1024 * 1024;
 
@@ -208,6 +240,8 @@ public sealed class ThemeApplier
     /// <summary>Replaces every target of <paramref name="pack"/> with its payload.</summary>
     public ApplyResult Apply(ThemePack pack)
     {
+        // The stock copies of the containers with named icons or sounds, until each is written.
+        Dictionary<string, FileBytes>? containers = null;
         try
         {
             PackReport report = pack.Validate();
@@ -222,7 +256,6 @@ public sealed class ThemeApplier
 
             // Before anything on the system side is written: every target is backed up and its payload is checked
             // against the console's own file, so a target that does not fit is skipped instead of failing halfway.
-            Dictionary<string, byte[]> containers;
             try
             {
                 containers = Prepare(pack, plans);
@@ -265,10 +298,11 @@ public sealed class ThemeApplier
                         continue;
                     if (IsReplaced(device, liveHash))
                     {
-                        Refresh(logical, backup, _files.ReadAllBytes(device));
+                        RefreshFromLive(logical, backup, device);
                         continue;
                     }
-                    WriteVerified(device, _files.ReadAllBytes(backup), originalHash);
+                    using (FileBytes original = _files.ReadFile(backup))
+                        WriteVerified(device, original.Span, originalHash);
                     reset.Add(device);
                 }
                 catch (Exception ex)
@@ -305,26 +339,25 @@ public sealed class ThemeApplier
                     // second theme replaces the first one's, or with KeepEarlierThemes onto the copy the app last
                     // wrote, so they combine. Icons and sounds of one container go in one write, so neither undoes
                     // the other. The slots were found in the stock copy; a patch keeps every slot where it is. Taken
-                    // out of the dictionary, so no copy of it outlives this write.
+                    // out of the dictionary and let go after this write, so no copy of it outlives it.
                     current = patches[0];
-                    byte[]? container = containers[patches[0].Device];
+                    using FileBytes container = containers[patches[0].Device];
                     containers.Remove(patches[0].Device);
                     foreach (Plan patch in patches)
                     {
                         (int offset, int length, int rate) = _slots[(patch.Device, patch.Target.Layer, patch.Target.Resource!)];
                         byte[] fitted = patch.Target.Layer == ThemePack.VagLayer
-                            ? RcoVag.Fit(SoundAtVolume(pack.Payload(patch.Target)), container.AsSpan(offset, length), rate)
+                            ? RcoVag.Fit(SoundAtVolume(pack.Payload(patch.Target)), container.Span.Slice(offset, length), rate)
                             : RcoSvg.Fit(pack.Payload(patch.Target), length);
-                        fitted.CopyTo(container!, offset);
+                        fitted.CopyTo(container.Span[offset..]);
                     }
-                    WriteVerified(patches[0].Device, container!, ThemePack.Hash(container!), () => touched.Add(patches[0]));
-                    container = null;
+                    WriteVerified(patches[0].Device, container.Span, ThemePack.Hash(container.Span), () => touched.Add(patches[0]));
                 }
             }
             catch (Exception ex)
             {
                 // The rollback reads each original whole: no stock container may still be held next to it.
-                containers.Clear();
+                Release(containers);
                 return RollBack(current?.Target.Path ?? "(unknown target)", ex.Message, touched);
             }
 
@@ -354,7 +387,14 @@ public sealed class ThemeApplier
         finally
         {
             _unpacked = null;
+            if (containers is not null) Release(containers);
         }
+    }
+
+    private static void Release(Dictionary<string, FileBytes> containers)
+    {
+        foreach (FileBytes container in containers.Values) container.Dispose();
+        containers.Clear();
     }
 
     /// <summary>Puts every target of <paramref name="pack"/> back to its on-console original.</summary>
@@ -628,9 +668,9 @@ public sealed class ThemeApplier
             if (!NoOriginal.Contains(logical)) NoOriginal.Add(logical);
             return false;
         }
-        byte[] original = _files.ReadAllBytes(source);
-        if (source != device) WriteVerified(device, original, ThemePack.Hash(original));
-        WriteBackup(logical, $"{_dataRoot}/{BackupFolder}/{logical}", original);
+        using FileBytes original = _files.ReadFile(source);
+        if (source != device) WriteVerified(device, original.Span, ThemePack.Hash(original.Span));
+        WriteBackup(logical, $"{_dataRoot}/{BackupFolder}/{logical}", original.Span);
         AddToIndex(logical);
         return true;
     }
@@ -655,11 +695,25 @@ public sealed class ThemeApplier
     /// Backs up every planned file and checks each payload against the console's own file (the backup: the live
     /// file may hold an earlier theme). Plans that do not fit are removed and listed in <see cref="Skipped"/>.
     /// Writes only under the data root. Returns the stock copy of each container with named icons or sounds, which
-    /// they are patched onto.
+    /// they are patched onto; the caller disposes them.
     /// </summary>
-    private Dictionary<string, byte[]> Prepare(ThemePack pack, List<Plan> plans)
+    private Dictionary<string, FileBytes> Prepare(ThemePack pack, List<Plan> plans)
     {
-        var containers = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var containers = new Dictionary<string, FileBytes>(StringComparer.Ordinal);
+        try
+        {
+            PrepareFiles(pack, plans, containers);
+        }
+        catch
+        {
+            Release(containers);
+            throw;
+        }
+        return containers;
+    }
+
+    private void PrepareFiles(ThemePack pack, List<Plan> plans, Dictionary<string, FileBytes> containers)
+    {
         var drop = new HashSet<Plan>();
         _slots.Clear();
         List<IGrouping<string, Plan>> files = plans.GroupBy(p => p.Device, StringComparer.Ordinal).ToList();
@@ -680,77 +734,85 @@ public sealed class ThemeApplier
                 drop.UnionWith(file);
                 continue;
             }
-            byte[] stock = PrepareBackup(first);
-            bool patched = false;
-            foreach (Plan plan in file)
+            FileBytes? stock = PrepareBackup(first);
+            try
             {
-                byte[] payload;
-                try
+                bool patched = false;
+                foreach (Plan plan in file)
                 {
-                    payload = PayloadFor(pack, plan);
-                }
-                catch (InvalidDataException ex)
-                {
-                    Skipped.Add($"{plan.Logical}: the theme's file could not be unpacked ({ex.Message})");
-                    drop.Add(plan);
-                    continue;
-                }
-                if (ThemePack.IsPatchLayer(plan.Target.Layer))
-                {
-                    patched = true;
+                    byte[] payload;
                     try
                     {
-                        if (plan.Target.Layer == ThemePack.VagLayer)
+                        payload = PayloadFor(pack, plan);
+                    }
+                    catch (InvalidDataException ex)
+                    {
+                        Skipped.Add($"{plan.Logical}: the theme's file could not be unpacked ({ex.Message})");
+                        drop.Add(plan);
+                        continue;
+                    }
+                    if (ThemePack.IsPatchLayer(plan.Target.Layer))
+                    {
+                        patched = true;
+                        try
                         {
-                            (int offset, int length, int rate) = RcoVag.Find(stock, plan.Target.Resource!);
-                            RcoVag.Fit(payload, stock.AsSpan(offset, length), rate);
-                            _slots[(plan.Device, plan.Target.Layer, plan.Target.Resource!)] = (offset, length, rate);
+                            if (plan.Target.Layer == ThemePack.VagLayer)
+                            {
+                                (int offset, int length, int rate) = RcoVag.Find(stock.Span, plan.Target.Resource!);
+                                RcoVag.Fit(payload, stock.Span.Slice(offset, length), rate);
+                                _slots[(plan.Device, plan.Target.Layer, plan.Target.Resource!)] = (offset, length, rate);
+                            }
+                            else
+                            {
+                                (int offset, int length) = RcoSvg.Find(stock.Span, plan.Target.Resource!);
+                                RcoSvg.Fit(payload, length);
+                                _slots[(plan.Device, plan.Target.Layer, plan.Target.Resource!)] = (offset, length, 0);
+                            }
                         }
-                        else
+                        catch (ThemePackException ex)
                         {
-                            (int offset, int length) = RcoSvg.Find(stock, plan.Target.Resource!);
-                            RcoSvg.Fit(payload, length);
-                            _slots[(plan.Device, plan.Target.Layer, plan.Target.Resource!)] = (offset, length, 0);
+                            Skipped.Add($"{plan.Target.Resource}: {ex.Message}");
+                            drop.Add(plan);
                         }
                     }
-                    catch (ThemePackException ex)
+                    else if (PayloadCompat.Mismatch(payload, stock.Span, sameSize: !IsTitleBackground(plan.Target.Path)) is { } mismatch)
                     {
-                        Skipped.Add($"{plan.Target.Resource}: {ex.Message}");
+                        Skipped.Add($"{plan.Logical}: {mismatch}");
                         drop.Add(plan);
                     }
                 }
-                else if (PayloadCompat.Mismatch(payload, stock, sameSize: !IsTitleBackground(plan.Target.Path)) is { } mismatch)
+                if (!patched)
+                    continue;
+                if (KeepEarlierThemes && IsLastWritten(first.Device, stock.Span))
                 {
-                    Skipped.Add($"{plan.Logical}: {mismatch}");
-                    drop.Add(plan);
+                    // The stock copy is let go before the live one is read: one whole copy at a time.
+                    stock.Dispose();
+                    stock = null;
+                    containers[first.Device] = _files.ReadFile(first.Device);
+                }
+                else
+                {
+                    containers[first.Device] = stock;
+                    stock = null;
                 }
             }
-            if (!patched)
-                continue;
-            if (KeepEarlierThemes && IsLastWritten(first.Device, stock))
+            finally
             {
-                // The stock copy is let go before the live one is read: one whole copy at a time.
-                stock = null!;
-                containers[first.Device] = _files.ReadAllBytes(first.Device);
-            }
-            else
-            {
-                containers[first.Device] = stock;
+                stock?.Dispose();
             }
         }
         plans.RemoveAll(drop.Contains);
-        return containers;
     }
 
     private static bool IsTitleBackground(string targetPath) =>
         targetPath == AssetRoots.AllAppsBackground || AssetRoots.IsAppBackground(targetPath, out _);
 
     /// <summary>
-    /// Returns the console's original of a file: its backup, made now from the live file when there is none yet,
-    /// or replaced by the live file when the system replaced it since the app wrote it. An existing backup is
-    /// otherwise never overwritten. Holds one whole copy at a time: the live file is compared by a streamed hash.
+    /// Returns the console's original of a file, which the caller disposes: its backup, made now from the live file when
+    /// there is none yet, or replaced by the live file when the system replaced it since the app wrote it. An existing
+    /// backup is otherwise never overwritten. Holds one whole copy at a time: the live file is compared by a streamed hash.
     /// </summary>
-    private byte[] PrepareBackup(Plan plan)
+    private FileBytes PrepareBackup(Plan plan)
     {
         string liveHash = _files.Hash(plan.Device);
         if (!_files.Exists(plan.Backup))
@@ -759,35 +821,60 @@ public sealed class ThemeApplier
             if (OriginalSource(plan.Logical, plan.Device, liveHash, strict: false) is not { } source)
             {
                 if (!NoOriginal.Contains(plan.Logical)) NoOriginal.Add(plan.Logical);
-                return _files.ReadAllBytes(plan.Device);
+                return _files.ReadFile(plan.Device);
             }
-            byte[] first = _files.ReadAllBytes(source);
-            if (source == plan.Device && LooksThemed(plan.Logical, liveHash, () => first, live: true))
+            FileBytes first = _files.ReadFile(source);
+            try
             {
-                // Another tool's theme, not the original: the app keeps no backup a restore would take for one.
-                if (!NoOriginal.Contains(plan.Logical)) NoOriginal.Add(plan.Logical);
+                if (source == plan.Device && LooksThemed(plan.Logical, liveHash, () => first.Span, live: true))
+                {
+                    // Another tool's theme, not the original: the app keeps no backup a restore would take for one.
+                    if (!NoOriginal.Contains(plan.Logical)) NoOriginal.Add(plan.Logical);
+                    return first;
+                }
+                WriteBackup(plan.Logical, plan.Backup, first.Span);
+                AddToIndex(plan.Logical);
                 return first;
             }
-            WriteBackup(plan.Logical, plan.Backup, first);
-            AddToIndex(plan.Logical);
-            return first;
+            catch
+            {
+                first.Dispose();
+                throw;
+            }
         }
         AddToIndex(plan.Logical);   // a backup made before the index existed
-        byte[]? stock = _files.ReadAllBytes(plan.Backup);
-        string stockHash = ThemePack.Hash(stock);
-        bool listed = Stock.TryStock(plan.Logical, out string catalog);
-        if (listed ? stockHash == catalog : !LooksThemed(plan.Logical, stockHash, () => stock, live: false))
-            RecordOriginal(plan.Logical, stockHash);   // a backup made before the record
-        else if (!listed && !NoOriginal.Contains(plan.Logical))
-            NoOriginal.Add(plan.Logical);   // a backup made from a theme's file: a restore will not put it back
-        // A backup that is not this firmware's original while the live file is: the live file becomes the backup.
-        bool wrongBackup = listed && stockHash != catalog && liveHash == catalog;
-        if (!wrongBackup && (liveHash == stockHash || !IsReplaced(plan.Device, liveHash)))
-            return stock;
-        stock = null;
-        byte[] live = _files.ReadAllBytes(plan.Device);
-        Refresh(plan.Logical, plan.Backup, live, systemUpdate: !wrongBackup);
-        return live;
+        bool wrongBackup;
+        FileBytes stock = _files.ReadFile(plan.Backup);
+        try
+        {
+            string stockHash = ThemePack.Hash(stock.Span);
+            bool listed = Stock.TryStock(plan.Logical, out string catalog);
+            if (listed ? stockHash == catalog : !LooksThemed(plan.Logical, stockHash, () => stock.Span, live: false))
+                RecordOriginal(plan.Logical, stockHash);   // a backup made before the record
+            else if (!listed && !NoOriginal.Contains(plan.Logical))
+                NoOriginal.Add(plan.Logical);   // a backup made from a theme's file: a restore will not put it back
+            // A backup that is not this firmware's original while the live file is: the live file becomes the backup.
+            wrongBackup = listed && stockHash != catalog && liveHash == catalog;
+            if (!wrongBackup && (liveHash == stockHash || !IsReplaced(plan.Device, liveHash)))
+                return stock;
+        }
+        catch
+        {
+            stock.Dispose();
+            throw;
+        }
+        stock.Dispose();
+        FileBytes live = _files.ReadFile(plan.Device);
+        try
+        {
+            Refresh(plan.Logical, plan.Backup, live.Span, systemUpdate: !wrongBackup);
+            return live;
+        }
+        catch
+        {
+            live.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -818,7 +905,7 @@ public sealed class ThemeApplier
     /// the app's own (see <see cref="IsReplaced"/>) and as long as the stock copy, so every slot is where the stock
     /// copy has it.
     /// </summary>
-    private bool IsLastWritten(string device, byte[] stock)
+    private bool IsLastWritten(string device, ReadOnlySpan<byte> stock)
     {
         string liveHash = _files.Hash(device);
         return liveHash != ThemePack.Hash(stock) && !IsReplaced(device, liveHash) && _files.Length(device) == stock.Length;
@@ -831,8 +918,15 @@ public sealed class ThemeApplier
     private bool IsReplaced(string device, string liveHash) =>
         Written().TryGetValue(device, out string? last) && liveHash != last;
 
+    /// <summary><see cref="Refresh"/> with the console's file at <paramref name="device"/>, read whole only for it.</summary>
+    private void RefreshFromLive(string logical, string backup, string device, bool systemUpdate = true)
+    {
+        using FileBytes live = _files.ReadFile(device);
+        Refresh(logical, backup, live.Span, systemUpdate);
+    }
+
     /// <summary>Keeps the old backup under <see cref="ReplacedFolder"/> and makes the live file the new original.</summary>
-    private void Refresh(string logical, string backup, byte[] live, bool systemUpdate = true)
+    private void Refresh(string logical, string backup, ReadOnlySpan<byte> live, bool systemUpdate = true)
     {
         string stamp = FormatUtc(_clock()).Replace(":", "").Replace("-", "");
         string aside = $"{_dataRoot}/{ReplacedFolder}/{stamp}/{logical}";
@@ -892,36 +986,47 @@ public sealed class ThemeApplier
     {
         if (!_files.Exists(device)) return false;
         string liveHash = _files.Hash(device), originalHash = _files.Hash(backup);
-        byte[]? original = null;
-        if (LooksThemed(logical, originalHash, () => original ??= _files.ReadAllBytes(backup), live: false))
+        FileBytes? original = null;
+        try
         {
-            // No catalog knows the file, and the backup looks like a theme's (made from another tool's file): it is never
-            // put back, nor recorded as the original.
-            if (!NoOriginal.Contains(logical)) NoOriginal.Add(logical);
-            return false;
-        }
-        if (Stock.TryStock(logical, out string stock) && originalHash != stock)
-        {
-            // Not this firmware's original (a backup made from a theme's file): it is never put back. When the live file
-            // is the original, it becomes the backup.
-            if (liveHash != stock)
+            if (LooksThemed(logical, originalHash, () => (original ??= _files.ReadFile(backup)).Span, live: false))
             {
+                // No catalog knows the file, and the backup looks like a theme's (made from another tool's file): it is never
+                // put back, nor recorded as the original.
                 if (!NoOriginal.Contains(logical)) NoOriginal.Add(logical);
                 return false;
             }
-            Refresh(logical, backup, _files.ReadAllBytes(device), systemUpdate: false);
+            if (Stock.TryStock(logical, out string stock) && originalHash != stock)
+            {
+                // Not this firmware's original (a backup made from a theme's file): it is never put back. When the live file
+                // is the original, it becomes the backup.
+                if (liveHash != stock)
+                {
+                    if (!NoOriginal.Contains(logical)) NoOriginal.Add(logical);
+                    return false;
+                }
+                RefreshFromLive(logical, backup, device, systemUpdate: false);
+                return true;
+            }
+            RecordOriginal(logical, originalHash);
+            if (liveHash == originalHash) return true;
+            if (IsReplaced(device, liveHash))
+            {
+                RefreshFromLive(logical, backup, device);
+                return false;
+            }
+            original ??= _files.ReadFile(backup);
+            WriteVerified(device, original.Span, originalHash);
             return true;
         }
-        RecordOriginal(logical, originalHash);
-        if (liveHash == originalHash) return true;
-        if (IsReplaced(device, liveHash))
+        finally
         {
-            Refresh(logical, backup, _files.ReadAllBytes(device));
-            return false;
+            original?.Dispose();
         }
-        WriteVerified(device, original ?? _files.ReadAllBytes(backup), originalHash);
-        return true;
     }
+
+    // Reads a whole file only when asked (LooksThemed reads only an icon container).
+    private delegate ReadOnlySpan<byte> Bytes();
 
     /// <summary>
     /// Whether a file no catalog knows looks like a theme's rather than the console's original (<see cref="StockLook"/>):
@@ -929,7 +1034,7 @@ public sealed class ThemeApplier
     /// <paramref name="live"/> the tiles are compared with the live files, else with the backups. Only an icon container
     /// is read (<paramref name="read"/>). A file with a catalog hash is left to the catalog.
     /// </summary>
-    private bool LooksThemed(string logical, string sha256, Func<byte[]> read, bool live)
+    private bool LooksThemed(string logical, string sha256, Bytes read, bool live)
     {
         if (Stock.TryStock(logical, out _)) return false;
         if (logical.EndsWith(".rco", StringComparison.Ordinal)) return StockLook.UntitledThemeIcons(read()).Count > 0;
@@ -1095,13 +1200,13 @@ public sealed class ThemeApplier
     // ---- device primitives ------------------------------------------------
 
     /// <summary>Stores <paramref name="live"/> as a backup and reads it back (as a streamed hash).</summary>
-    private void WriteBackup(string logical, string backup, byte[] live)
+    private void WriteBackup(string logical, string backup, ReadOnlySpan<byte> live)
     {
         _files.CreateDirectoryRecursive(ParentOf(backup));
 
         // Written to a temporary and renamed, so an interrupted copy never becomes the permanent "original".
         string tmp = backup + ".tmp";
-        _files.WriteAllBytes(tmp, live);
+        _files.WriteFile(tmp, live);
         _files.Move(tmp, backup);
 
         string sha256 = ThemePack.Hash(live);
@@ -1143,10 +1248,10 @@ public sealed class ThemeApplier
     /// compares. The hash is recorded in <see cref="WrittenRecord"/>. <paramref name="renamed"/> runs once the
     /// device file is replaced: a write that fails before that has left the device file as it was.
     /// </summary>
-    private void WriteVerified(string device, byte[] data, string expectedSha256, Action? renamed = null)
+    private void WriteVerified(string device, ReadOnlySpan<byte> data, string expectedSha256, Action? renamed = null)
     {
         string tmp = device + ".tmp";
-        _files.WriteAllBytes(tmp, data);
+        _files.WriteFile(tmp, data);
         _files.Move(tmp, device);
         renamed?.Invoke();
 
@@ -1200,8 +1305,8 @@ public sealed class ThemeApplier
             Plan plan = touched[i];
             try
             {
-                byte[] original = _files.ReadAllBytes(plan.Backup);
-                WriteVerified(plan.Device, original, ThemePack.Hash(original));
+                using FileBytes original = _files.ReadFile(plan.Backup);
+                WriteVerified(plan.Device, original.Span, ThemePack.Hash(original.Span));
             }
             catch (Exception ex)
             {

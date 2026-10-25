@@ -147,6 +147,39 @@ public static class ThemeHelperClient
     }
 
     /// <summary>
+    /// A whole file as <see cref="FileBytes"/>, received straight into them: a large file outside the managed heap
+    /// (<see cref="LargeFile"/>).
+    /// </summary>
+    public static FileBytes ReadFile(string path)
+    {
+        using var connection = TcpConnection.Connect(SocketAddress.Loopback(Port));
+        connection.SetReceiveTimeout(ReplyTimeoutMicroseconds);
+        connection.SendAll(Encoding.ASCII.GetBytes("READ " + path + "\n"));
+        string reply = ReadLine(connection);
+        if (!reply.StartsWith("OK ", StringComparison.Ordinal) || !int.TryParse(reply.AsSpan(3), out int size))
+            throw new InvalidOperationException($"read {path} failed: {reply}");
+        FileBytes data = LargeFile.Allocate(size);
+        try
+        {
+            Span<byte> span = data.Span;
+            int done = 0;
+            while (done < size)
+            {
+                int got = connection.Receive(span[done..]);
+                if (got <= 0) throw new InvalidOperationException($"read {path} ended after {done} of {size} bytes");
+                done += got;
+            }
+            connection.SendAll("QUIT\n"u8);
+            return data;
+        }
+        catch
+        {
+            data.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Lower-case hex SHA-256 of a file, streamed through READ, so a large file is never held whole (the icon
     /// container is about 100 MB before firmware 13.00).
     /// </summary>
@@ -172,7 +205,8 @@ public static class ThemeHelperClient
         return digest.FinishHex();
     }
 
-    public static void Write(string path, byte[] data)
+    /// <summary>Writes a whole file from any memory (also a <see cref="FileBytes"/> outside the managed heap).</summary>
+    public static void Write(string path, ReadOnlySpan<byte> data)
     {
         string reply = Request($"WRITE {path} {data.Length}", data, out _);
         if (reply != "WRITE wrote=" + data.Length) throw new InvalidOperationException($"write {path} failed: {reply}");
@@ -319,13 +353,13 @@ public static class ThemeHelperClient
     private const uint RestartTimeoutMicroseconds = 120_000_000;
 
     /// <summary>Sends one command (plus an optional body), reads the status line and, for READ, the data.</summary>
-    private static string Request(string command, byte[]? body, out byte[]? readData)
+    private static string Request(string command, ReadOnlySpan<byte> body, out byte[]? readData)
     {
         readData = null;
         using var connection = TcpConnection.Connect(SocketAddress.Loopback(Port));
         connection.SetReceiveTimeout(ReplyTimeoutMicroseconds);
         connection.SendAll(Encoding.ASCII.GetBytes(command + "\n"));
-        if (body is not null)
+        if (!body.IsEmpty)
         {
             try { connection.SendAll(body); }
             catch (Exception ex)
@@ -353,7 +387,7 @@ public static class ThemeHelperClient
             readData = data;
         }
         // A WRITE that did not complete ends the connection on the helper's side: nothing more to send.
-        if (body is null || reply == "WRITE wrote=" + body.Length)
+        if (body.IsEmpty || reply == "WRITE wrote=" + body.Length)
             connection.SendAll("QUIT\n"u8);
         return reply;
     }
@@ -400,12 +434,16 @@ public sealed class HelperDeviceFiles : IDeviceFiles
 
     public byte[] ReadAllBytes(string path) => IsThemeRoot(path) ? ThemeHelperClient.Read(path) : _local.ReadAllBytes(path);
 
+    public FileBytes ReadFile(string path) => IsThemeRoot(path) ? ThemeHelperClient.ReadFile(path) : _local.ReadFile(path);
+
     public string Hash(string path) => IsThemeRoot(path) ? ThemeHelperClient.Hash(path) : _local.Hash(path);
 
-    public void WriteAllBytes(string path, byte[] data)
+    public void WriteAllBytes(string path, byte[] data) => WriteFile(path, data);
+
+    public void WriteFile(string path, ReadOnlySpan<byte> data)
     {
         if (IsThemeRoot(path)) ThemeHelperClient.Write(path, data);
-        else _local.WriteAllBytes(path, data);
+        else _local.WriteFile(path, data);
     }
 
     public void Move(string from, string to)

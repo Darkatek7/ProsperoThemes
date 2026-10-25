@@ -101,7 +101,8 @@ Tested on 13.00, but nothing in the app is tied to it: before anything is writte
 replaces is compared with the console's own copy (same image size and texture format). What does not fit
 this console is skipped and listed, never written. After a system update the app notices files the update
 replaced and takes those as the new defaults, so Restore defaults never puts an old firmware's file back.
-It then offers to apply your theme again.
+It then offers to apply your theme again. Before 13.00 the file with the system icons and sounds is about 100 MB; the
+app holds files that large outside its own memory, so preparing the backups no longer runs out of memory (issue #13).
 
 On another firmware, please send a report. The first time you open the System tab on a firmware this app has no
 measurements for, it asks once ("Send report" or "Not now"; it does not ask again for that firmware). You can also

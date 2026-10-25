@@ -164,6 +164,67 @@ public class RcoSvgTests
         Assert.Equal(Container(), files.Files[RcoDevice]);
     }
 
+    [Fact]
+    public void Whole_files_are_held_one_at_a_time_and_always_let_go()
+    {
+        // Issue #13: on 12.40 the container is about 100 MB, and two in a row ran the app out of memory. The console
+        // keeps FileBytes outside the managed heap; here they are counted.
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+        var counted = new CountedFiles(files);
+        ThemePack a = SvgPack("a", ("iconid_settings", Star));
+
+        Assert.True(new ThemeApplier(counted, () => 0).Apply(a).Success);   // the backup made from the live file
+        Assert.True(new ThemeApplier(counted, () => 0).Apply(SvgPack("b", ("iconid_notification", Star))).Success);
+        // Kept themes: the stock copy is read, let go, and the live one read instead.
+        Assert.True(new ThemeApplier(counted, () => 0) { KeepEarlierThemes = true }.Apply(a).Success);
+        files.CorruptMoveTo = RcoDevice;   // a failed verification rolls back from the backup
+        Assert.False(new ThemeApplier(counted, () => 0).Apply(SvgPack("c", ("iconid_settings", Star))).Success);
+        Assert.True(new ThemeApplier(counted, () => 0).RestoreOriginals().Success);
+
+        Assert.Equal(Container(), files.Files[RcoDevice]);
+        Assert.True(counted.Reads >= 5);
+        Assert.Equal(1, counted.MostLive);
+        Assert.Equal(0, counted.Live);
+    }
+
+    /// <summary>Device files whose <see cref="IDeviceFiles.ReadFile"/> counts the buffers it hands out until they are disposed.</summary>
+    private sealed class CountedFiles(MemoryDeviceFiles inner) : IDeviceFiles
+    {
+        public int Reads, Live, MostLive;
+
+        public FileBytes ReadFile(string path)
+        {
+            byte[] data = inner.ReadAllBytes(path);
+            Reads++;
+            MostLive = Math.Max(MostLive, ++Live);
+            return new Counted(this, data);
+        }
+
+        private sealed class Counted(CountedFiles owner, byte[] data) : FileBytes
+        {
+            private bool _disposed;
+            public override Span<byte> Span => _disposed ? throw new ObjectDisposedException(nameof(Counted)) : data;
+            public override void Dispose()
+            {
+                if (_disposed) return;
+                _disposed = true;
+                owner.Live--;
+            }
+        }
+
+        public bool Exists(string path) => inner.Exists(path);
+        public long Length(string path) => inner.Length(path);
+        public byte[] ReadAllBytes(string path) => inner.ReadAllBytes(path);
+        public string Hash(string path) => inner.Hash(path);
+        public void WriteAllBytes(string path, byte[] data) => inner.WriteAllBytes(path, data);
+        public void Move(string from, string to) => inner.Move(from, to);
+        public void DeleteFile(string path) => inner.DeleteFile(path);
+        public void CreateDirectoryRecursive(string path) => inner.CreateDirectoryRecursive(path);
+        public void RemountSystemExRw() => inner.RemountSystemExRw();
+        public IReadOnlyList<string> ListDirectories(string path) => inner.ListDirectories(path);
+    }
+
     private static int Count(string text, string part)
     {
         int count = 0;

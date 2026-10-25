@@ -63,6 +63,13 @@ launch evidence are recorded separately below.
   (made from another tool's theme, as on a 12.40 console whose 13 tile backgrounds were one picture) is never written
   back nor recorded as an original, and a first apply keeps no backup of such a live file; both are named. The System tab shows the firmware
   (`SystemInfo.SystemSoftwareVersion`, "13.000.040" on the test console); `state.json` records it.
+- **Large files stay out of the managed heap:** the applier reads whole target files as `FileBytes`; from 16 MiB on
+  (`LargeFile`) they sit in flexible memory. Before 13.00 the icon container is about 100 MB, and the 256 MiB heap could
+  not take it: 12.40 failed with "preparing the backups failed, nothing was written: Arg_OutOfMemoryException" (issue
+  #13). Measured on 13.00 (2026-10-25): with the app idle the heap held 36 MiB live and 68 MiB committed; two ~100 MB
+  arrays in a row took it to 153 MiB committed, and after them and an apply it stayed at 233 MiB, while about 1.6 GiB of
+  flexible memory was free. On the PC under the same heap limits, a second ~100 MB array in a row (the kept-themes path:
+  stock copy, then the live one) failed at about 110 MiB live.
 - **Firmware report** (System tab, Firmware report row): writes `/data/prospero-themes/reports/firmware-<version>.json`
   (and a copy to `/mnt/usb0` when a drive is connected): for every file in the bundled
   `catalog/13.00.json`, the system tile backgrounds and tile icons and the icon container, whether it
@@ -334,6 +341,11 @@ The deployer preserves an existing app in a dated backup, verifies every upload 
 then atomically publishes `/data/homebrew/PPSA90210`. It uses ShadowMount's `/api/v1/scan` request, rather
 than the old direct `/user/app` registration experiment described below. On 2026-10-13 the console
 reported ShadowMount+ `1.7-beta5fix1` and API port `10101`.
+
+A deferred scan (`scan_deferred`, reason `game_active` or `runtime_prepared`) leaves the app mounted from the folder
+that was published at the last scan that ran, which the next deploy has renamed into
+`/data/prospero-themes/app-backup/`: the console then keeps starting that older build (seen 2026-10-25, the deferral held
+even with the app closed). Copying the new `eboot.bin` into that folder, with the app closed, ran the new build.
 
 ## What it is
 
