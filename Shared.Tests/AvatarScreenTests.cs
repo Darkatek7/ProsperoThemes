@@ -91,7 +91,11 @@ public class AvatarScreenTests
         browser.Update(Right);
         Assert.Equal(1, browser.Selected);
         browser.Update(Up);
-        Assert.Equal(1, browser.Selected);                          // Up does not move to the previous card
+        Assert.Equal(1, browser.Selected);                          // Up does not move to the previous card; it reaches the search chip
+        Assert.True(browser.LibrarySearchFocused);
+        browser.Update(Down);                                       // and Down comes back to the packs
+        Assert.False(browser.LibrarySearchFocused);
+        Assert.False(browser.AvatarRowFocused);
         browser.Update(Down);                                       // Down goes to the avatars, not to the next card
         Assert.Equal(1, browser.Selected);
         Assert.True(browser.AvatarRowFocused);

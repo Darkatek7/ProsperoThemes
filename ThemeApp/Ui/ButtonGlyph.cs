@@ -4,7 +4,7 @@ using SharpProspero.Graphics;
 
 namespace ProsperoThemes.App.Ui;
 
-internal enum PadButton { Cross, Circle, Square, Triangle, DPad, Options, L1, R1, R2 }
+internal enum PadButton { Cross, Circle, Square, Triangle, DPad, Options, L1, R1, R2, DPadUp }
 
 /// <summary>
 /// PlayStation-style controller hint icons in one colour, drawn with <see cref="Paint"/> because the UI fonts have
@@ -34,7 +34,8 @@ internal static class ButtonGlyph
     /// Draws the glyph with its top-left at (x, y) and returns the drawn width.
     /// Round buttons are a filled <paramref name="bg"/> disc with the symbol (an outlined cross, circle, square or
     /// triangle) in <paramref name="fg"/>; DPad and Options are drawn in <paramref name="fg"/> directly (it must be
-    /// opaque); L1/R1/R2 are a <paramref name="bg"/> pill with the label in <paramref name="fg"/> (the label is
+    /// opaque); DPadUp is the DPad with only its upper arm in <paramref name="fg"/> and the rest of the cross faded toward the ink
+    /// (the button that is meant is Up); L1/R1/R2 are a <paramref name="bg"/> pill with the label in <paramref name="fg"/> (the label is
     /// skipped when no font is given).
     /// </summary>
     public static int Draw(Surface s, PadButton button, int x, int y, int size, Color fg, Color bg, AtlasFont? font)
@@ -117,6 +118,17 @@ internal static class ButtonGlyph
                 int round = Math.Max(1, arm / 3);
                 Paint.FillRoundedRect(s, 0, offset, size, arm, round, fg);
                 Paint.FillRoundedRect(s, offset, 0, arm, size, round, fg);
+                break;
+            }
+            case PadButton.DPadUp:
+            {
+                // The whole cross in a faded shade (opaque, so the sprite blends cleanly), then the upper arm in full strength.
+                int arm = size / 3, offset = (size - arm) / 2;
+                int round = Math.Max(1, arm / 3);
+                Color faded = Color.Lerp(fg, Theme.Ink, 0.6f);
+                Paint.FillRoundedRect(s, 0, offset, size, arm, round, faded);
+                Paint.FillRoundedRect(s, offset, 0, arm, size, round, faded);
+                Paint.FillRoundedRect(s, offset, 0, arm, offset + arm, round, fg);
                 break;
             }
             case PadButton.Options:

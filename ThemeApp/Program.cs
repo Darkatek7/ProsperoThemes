@@ -22,6 +22,10 @@ internal sealed class ThemeApp : ProsperoApp
 {
     private readonly ThemeBrowser _browser = new();
     private readonly Dispatcher _results = new();
+    // The library in its order (the applied theme first, then the sort), and the part of it the Library shows: the packs that match its
+    // search (LibraryFilter), or all of them without one. Everything that works on "the selected pack" (_browser.Selected) reads
+    // _entries, which is what the renderer and the preview draw; whatever is about the whole library (the look, names, badges) reads _library.
+    private IReadOnlyList<ThemeLibraryEntry> _library = Array.Empty<ThemeLibraryEntry>();
     private IReadOnlyList<ThemeLibraryEntry> _entries = Array.Empty<ThemeLibraryEntry>();
     // The themes the console shows now (look.json), read after every scan and every job; the library's last card saves it.
     private List<LookLayer>? _look;
@@ -119,6 +123,8 @@ internal sealed class ThemeApp : ProsperoApp
     // The sort the avatar list load that runs (or ran last) was started with: a Square press that moves the pills while it
     // runs is noticed against it. -1 before any load.
     private int _avatarJobSort = -1;
+    // The search term of that load, for the same check (a new term while it runs moves on to the new list).
+    private string _avatarJobQuery = "";
     // An avatar list load (or the load of the pictures it still lacks) runs. A new sort, a download or a like asks it to stop
     // (_stopAvatarList, read by the worker between pictures); the worker sets _avatarListStopped when it did, and
     // _avatarListPosted once the list it loads is on screen. OnFrame then loads the list again (_avatarListWanted: a sort pressed
@@ -262,8 +268,7 @@ internal sealed class ThemeApp : ProsperoApp
                     if (_focusAfterScan is { } focus)
                     {
                         _focusAfterScan = null;
-                        for (int i = 0; i < _entries.Count; i++)
-                            if (_entries[i].Manifest.Id == focus) _browser.Select(i);
+                        SelectInLibrary(e => e.Manifest.Id == focus);
                     }
                     if (update is not null && firmware is not null)
                     {
@@ -281,7 +286,7 @@ internal sealed class ThemeApp : ProsperoApp
                         _renderer.Notify(snapshot.Message, NoticeLevel.Info);
                     }
                     else if (notify) _renderer.Notify(snapshot.Message, NoticeLevel.Success);
-                    _renderer.Status = ThemeRenderer.Plural(_entries.Count, "theme");
+                    _renderer.Status = ThemeRenderer.Plural(_library.Count, "theme");
                     _renderer.Busy = false;
                     _busy = false;
                     if (_applyAfterScan is { } downloaded)
@@ -320,7 +325,7 @@ internal sealed class ThemeApp : ProsperoApp
     {
         _look = look;
         _renderer.Look = look;
-        _browser.LookSavable = LookPack.Savable(look, _entries.Select(e => e.Path));
+        _browser.LookSavable = LookPack.Savable(look, _library.Select(e => e.Path));
     }
 
     /// <summary>
@@ -329,9 +334,9 @@ internal sealed class ThemeApp : ProsperoApp
     /// </summary>
     private void SaveLook(List<LookLayer> look)
     {
-        string name = LookPack.NextName(_entries.Select(e => e.Manifest.Name));
+        string name = LookPack.NextName(_library.Select(e => e.Manifest.Name));
         var saved = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (ThemeLibraryEntry entry in _entries) saved.TryAdd(entry.Manifest.Id, entry.Manifest.Name);
+        foreach (ThemeLibraryEntry entry in _library) saved.TryAdd(entry.Manifest.Id, entry.Manifest.Name);
         _renderer.Notify("Saving your look…", NoticeLevel.Info);
         StartWork(() =>
         {
@@ -411,18 +416,55 @@ internal sealed class ThemeApp : ProsperoApp
     }
 
     /// <summary>
-    /// Puts <paramref name="entries"/> in the library's order (the applied theme first, then <see cref="AppSettings.LibrarySort"/>).
-    /// The focus stays on the pack it was on; a scan (<paramref name="scanned"/>) also passes the new count on.
+    /// Puts <paramref name="entries"/> (the whole library) in the library's order (the applied theme first, then <see cref="AppSettings.LibrarySort"/>)
+    /// and shows the packs that match the Library's search. The focus stays on the pack it was on (the first shown one when that is
+    /// not shown any more); a scan (<paramref name="scanned"/>) also passes the count on.
     /// </summary>
     private void OrderLibrary(IReadOnlyList<ThemeLibraryEntry> entries, string? applied, bool scanned = false)
     {
         string? focused = _browser.Selected >= 0 && _browser.Selected < _entries.Count ? _entries[_browser.Selected].Path : null;
-        List<ThemeLibraryEntry> ordered = LibraryOrder.Sort(entries, applied, _settings.LibrarySort, _added);
-        _entries = ordered;
-        if (scanned) _browser.SetCount(ordered.Count);
-        int index = focused is null ? -1 : ordered.FindIndex(e => e.Path == focused);
+        _library = LibraryOrder.Sort(entries, applied, _settings.LibrarySort, _added);
+        ShowLibrary(focused, announceCount: scanned);
+    }
+
+    /// <summary>
+    /// Derives the shown packs (<see cref="_entries"/>) from the library and the browser's search term, and puts the focus on the pack
+    /// at <paramref name="focused"/> (a path) when it is still shown (else on the first one with <paramref name="refocus"/>). The browser gets the counts when they may
+    /// have changed (<paramref name="announceCount"/>).
+    /// </summary>
+    private void ShowLibrary(string? focused, bool announceCount, bool refocus = false)
+    {
+        _entries = LibraryFilter.Apply(_library, _browser.LibraryQuery);
+        if (announceCount) _browser.SetCount(_entries.Count, _library.Count);
+        int index = focused is null ? -1 : _entries.ToList().FindIndex(e => e.Path == focused);
         if (index >= 0) _browser.Select(index);
+        else if (refocus && _entries.Count > 0) _browser.Select(0);   // the focused pack does not match: the first one that does
         _renderer.LibraryReordered();
+    }
+
+    /// <summary>The Library's search term changed: show the packs that match it, keeping the focus on the pack that was focused when it still matches.</summary>
+    private void FilterLibrary()
+    {
+        string? focused = _browser.Selected >= 0 && _browser.Selected < _entries.Count ? _entries[_browser.Selected].Path : null;
+        ShowLibrary(focused, announceCount: true, refocus: true);
+    }
+
+    /// <summary>
+    /// Puts the focus on the library pack that <paramref name="match"/> names. When the Library's search hides it, the search is taken
+    /// off first (a pack the user just downloaded or saved must not vanish behind a term). Returns whether such a pack exists.
+    /// </summary>
+    private bool SelectInLibrary(Func<ThemeLibraryEntry, bool> match)
+    {
+        ThemeLibraryEntry? wanted = _library.FirstOrDefault(match);
+        if (wanted is null) return false;
+        if (!_entries.Contains(wanted))
+        {
+            _browser.ClearLibraryQuery();
+            ShowLibrary(wanted.Path, announceCount: true);
+        }
+        int index = _entries.ToList().FindIndex(e => e.Path == wanted.Path);
+        if (index >= 0) _browser.Select(index);
+        return index >= 0;
     }
 
     /// <summary>Triangle in the library: name or newest first. The applied theme stays in front either way.</summary>
@@ -431,7 +473,7 @@ internal sealed class ThemeApp : ProsperoApp
         LibrarySort sort = _settings.LibrarySort == LibrarySort.Name ? LibrarySort.Newest : LibrarySort.Name;
         _settings = _settings with { LibrarySort = sort };
         _renderer.LibrarySort = sort;
-        OrderLibrary(_entries, _renderer.AppliedId);
+        OrderLibrary(_library, _renderer.AppliedId);
         try { WriteSettings(); }
         catch { /* the order lasts until the app quits */ }
     }
@@ -572,7 +614,7 @@ internal sealed class ThemeApp : ProsperoApp
                 ShowLook(look);
                 _renderer.Status = status;
                 // The theme now on the console leads the row; the focus stays on the pack it was on.
-                if (applied != _renderer.AppliedId) OrderLibrary(_entries, applied);
+                if (applied != _renderer.AppliedId) OrderLibrary(_library, applied);
                 _renderer.AppliedId = applied;
                 _renderer.Notify(message, ok ? NoticeLevel.Success : NoticeLevel.Error, holdResult);
                 _renderer.Busy = false;
@@ -640,10 +682,11 @@ internal sealed class ThemeApp : ProsperoApp
                 if (LookHasSounds()) _browser.AskSoundVolume();
                 else _renderer.Notify("Your look has no theme music or sounds. The volume counts for the next theme with them.", NoticeLevel.Info);
                 break;
-            case ThemeAction.ApplySoundVolume when _look is { } volumeLook && SystemUpdate.FromLook(volumeLook, _entries) is { } volumePlan:
+            case ThemeAction.ApplySoundVolume when _look is { } volumeLook && SystemUpdate.FromLook(volumeLook, _library) is { } volumePlan:
                 StartHelperWork("Applying your look again…", needsHelper: true, _ => ReapplyLook(volumePlan, "Applying your look again…"));
                 break;
             case ThemeAction.ToggleLibrarySort: ToggleLibrarySort(); break;
+            case ThemeAction.LibraryFilter: FilterLibrary(); break;
             case ThemeAction.PreviewMusic: _preview.ToggleMusic(); break;
             case ThemeAction.ImportUsb:
                 _avatarScanAfterWork = true;   // the import also takes avatars
@@ -1003,6 +1046,7 @@ internal sealed class ThemeApp : ProsperoApp
         _renderer.AvatarStoreStatus = "";
         _renderer.AvatarStoreError = false;
         _renderer.AvatarStoreListSort = -1;
+        _renderer.AvatarStoreListQuery = "";
         _avatarListWanted = _avatarPreviewsMissing = false;
         RefreshAvatarStoreBadges();
         try
@@ -1543,9 +1587,8 @@ internal sealed class ThemeApp : ProsperoApp
     /// </summary>
     private void OfferApply(string digest)
     {
-        int index = _entries.ToList().FindIndex(e => CommunityList.LibraryDigest(e.Path) == digest);
-        if (index < 0 || _browser.View != ThemeView.Community || _browser.Dialog != DialogKind.None) return;
-        _browser.Select(index);
+        if (_browser.View != ThemeView.Community || _browser.Dialog != DialogKind.None) return;
+        if (!SelectInLibrary(e => CommunityList.LibraryDigest(e.Path) == digest)) return;
         _browser.ApplyAfterDownload();
     }
 
@@ -1691,7 +1734,7 @@ internal sealed class ThemeApp : ProsperoApp
     private void RefreshCommunityBadges()
     {
         var digests = new HashSet<string>(StringComparer.Ordinal);
-        foreach (ThemeLibraryEntry entry in _entries)
+        foreach (ThemeLibraryEntry entry in _library)
             if (CommunityList.LibraryDigest(entry.Path) is { } digest) digests.Add(digest);
         _renderer.CommunityInLibrary = CommunityList.InLibrary(_community, _downloads, digests);
         _renderer.CommunityUpdates = CommunityList.Updates(_community, _downloads, digests);
@@ -1832,13 +1875,14 @@ internal sealed class ThemeApp : ProsperoApp
     {
         string baseUrl = _settings.StoreUrl;
         var sort = (CommunitySort)_browser.AvatarStoreSort;
-        string busyText = $"Loading avatars · {CommunityList.Label(sort)}…";
+        string query = _browser.AvatarStoreQuery;
+        string busyText = (query.Length > 0 ? $"Searching avatars for “{query}”" : "Loading avatars") + $" · {CommunityList.Label(sort)}…";
         if (_busy)
         {
             if (_avatarListLoading)
             {
-                // Back on the sort that loads: it simply goes on (unless a queued download or like waits for it to stop).
-                bool moved = (int)sort != _avatarJobSort;
+                // Back on the sort and term that load: it simply goes on (unless a queued download or like waits for it to stop).
+                bool moved = (int)sort != _avatarJobSort || query != _avatarJobQuery;
                 _stopAvatarList = moved || _avatarQueued is not null;
                 _avatarListWanted = moved;
                 if (moved)
@@ -1860,7 +1904,7 @@ internal sealed class ThemeApp : ProsperoApp
         _avatarListPosted = false;
         bool started = StartAvatarStoreWork(busyText, http =>
         {
-            HttpResponse answer = http.GetWithRetry(AvatarStore.ListUrl(baseUrl, sort, pageSize: 36));
+            HttpResponse answer = http.GetWithRetry(AvatarStore.ListUrl(baseUrl, sort, pageSize: 36, query: query));
             if (!answer.IsSuccess) return new StoreResult("Store responded with status " + answer.StatusCode + ".", NoticeLevel.Error);
             List<StoreAvatar> list = AvatarStore.Parse(System.Text.Encoding.UTF8.GetString(answer.Body), baseUrl);
             // Asked to stop while the list was on its way: the old list stays on screen until the new one is here.
@@ -1870,13 +1914,19 @@ internal sealed class ThemeApp : ProsperoApp
                 return new StoreResult("", NoticeLevel.Success);
             }
             _avatarListPosted = true;
+            // An avatar the store renamed since it was downloaded gets the new name in the library too.
+            bool renamed = false;
+            try { renamed = AvatarLibrary.RememberNames(AppData.Files, list, AppData.Files.ListFiles(AvatarLibrary.Root)); }
+            catch { /* the names stay as they were */ }
             _results.Post(() =>
             {
+                if (renamed) _avatarScanAfterWork = true;
                 _renderer.ResetAvatarStore();
                 _avatarStore = list;
                 _renderer.AvatarStore = list;
-                // The header names the sort this list came with, not the one the pill shows now.
+                // The header names the sort and the search this list came with, not the ones the pill and the chip show now.
                 _renderer.AvatarStoreListSort = (int)sort;
+                _renderer.AvatarStoreListQuery = query;
                 // The cards that wait for their picture show a placeholder until the pictures are in (StartAvatarStoreWork ends it).
                 _renderer.AvatarStorePicturesLoading = true;
                 _browser.SetAvatarStoreCount(list.Count);
@@ -1884,11 +1934,14 @@ internal sealed class ThemeApp : ProsperoApp
             });
             if (!LoadAvatarPreviews(http, list)) return new StoreResult("", NoticeLevel.Success);
             // A loaded list needs no toast: the screen shows the cards.
-            return list.Count == 0 ? new StoreResult("No avatars in the store yet.", NoticeLevel.Info) : new StoreResult("", NoticeLevel.Success);
+            return list.Count == 0
+                ? new StoreResult(query.Length > 0 ? $"No avatars match “{query}”." : "No avatars in the store yet.", NoticeLevel.Info)
+                : new StoreResult("", NoticeLevel.Success);
         }, loadsList: true);
         if (started)
         {
             _avatarJobSort = (int)sort;
+            _avatarJobQuery = query;
             _avatarListLoading = true;
         }
     }
@@ -1973,6 +2026,10 @@ internal sealed class ThemeApp : ProsperoApp
             bool added;
             try { added = AvatarLibrary.Add(AppData.Files, pack); }
             catch (Exception ex) { return new StoreResult("Download failed: " + ex.Message, NoticeLevel.Error); }
+            // The library shows the store's name, which can differ from the one in the pack (the store fixes bad names).
+            string digest = ThemePack.Hash(pack);
+            try { AvatarLibrary.RememberNames(AppData.Files, [avatar with { Sha256 = digest }], [digest + AvatarPack.Extension]); }
+            catch { /* the pack's own name then */ }
             _results.Post(() =>
             {
                 // The store counted this download; show it without reloading the list.

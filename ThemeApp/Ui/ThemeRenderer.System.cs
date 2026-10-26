@@ -439,11 +439,16 @@ public sealed partial class ThemeRenderer
     /// The on-screen keyboard for the store address, or for the Community search (<see cref="StoreAddressEditor.IsSearch"/>):
     /// input box with caret, key grid, and one line of help.
     /// </summary>
-    private void DrawStoreAddress(Surface s, StoreAddressEditor editor, int enter, double seconds)
+    private void DrawStoreAddress(Surface s, StoreAddressEditor editor, int enter, double seconds, ThemeView searchOrigin = ThemeView.Community)
     {
         // The cover behind the screen is already calmed (see Backdrop), so the keys read the same on any theme.
         bool search = editor.IsSearch;
-        DrawSysHeading(s, "COMMUNITY STORE", search ? "Search themes" : "Store address", enter);
+        // The search keyboard says what it searches: the store's themes, the store's avatars, or the library.
+        (string eyebrow, string title, string hint) = !search ? ("COMMUNITY STORE", "Store address", "")
+            : searchOrigin == ThemeView.Avatars ? ("COMMUNITY AVATARS", "Search avatars", "Options searches. Search for nothing to see every avatar again.")
+            : searchOrigin == ThemeView.Library ? ("YOUR LIBRARY", "Search your library", "Options searches. Search for nothing to see every theme again. Nothing is sent to the store.")
+            : ("COMMUNITY STORE", "Search themes", "Options searches. Search for nothing to see every theme again.");
+        DrawSysHeading(s, eyebrow, title, enter);
         string text = editor.Text;
         if (_keyboardCountFor != text.Length + 1000 * editor.Limit)
         {
@@ -480,7 +485,7 @@ public sealed partial class ThemeRenderer
         if (seconds % 1.0 < .6) s.FillRect(caretX, textY + 3, 3, _body.LineHeight - 6, Accent);
 
         if (editor.Notice.Length > 0) ClipLeft(_small, s, editor.Notice, Theme.SafeX, KeyboardNoticeY + enter, Warn, Theme.ContentWidth);
-        else ClipLeft(_small, s, search ? "Options searches. Search for nothing to see every theme again." : "Leave empty and save to remove the store.",
+        else ClipLeft(_small, s, search ? hint : "Leave empty and save to remove the store.",
             Theme.SafeX, KeyboardNoticeY + enter, Muted, Theme.ContentWidth);
 
         // Every key first, then the one focus ring: it reaches past the gap into the neighbouring keys.

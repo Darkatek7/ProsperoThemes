@@ -8,19 +8,29 @@ namespace ProsperoThemes.App.Ui;
 
 public sealed partial class ThemeRenderer
 {
+    // Up from the row of packs reaches the search chip beside "Your collection", so every footer of the row says so.
     private static readonly HintItem[] LibraryHintItems =
-        [new(PadButton.Cross, "Details"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Sort"), new(PadButton.Options, "Reload")];
+        [new(PadButton.Cross, "Details"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Sort"), new(PadButton.Options, "Reload"), new(PadButton.DPadUp, "Search")];
     private static readonly HintItem[] LibraryEmptyHintItems = [new(PadButton.Options, "Reload")];
+    private static readonly HintItem[] LibrarySearchableEmptyHintItems = [new(PadButton.Options, "Reload"), new(PadButton.DPadUp, "Search")];
     private static readonly HintItem[] LookCardHintItems =
-        [new(PadButton.Cross, "Save as theme"), new(PadButton.Triangle, "Sort"), new(PadButton.Options, "Reload")];
+        [new(PadButton.Cross, "Save as theme"), new(PadButton.Triangle, "Sort"), new(PadButton.Options, "Reload"), new(PadButton.DPadUp, "Search")];
+    // With the search chip focused: X opens the keyboard, or takes the term off when there is one; Circle goes back to the packs.
+    private static readonly HintItem[] LibrarySearchHintItems =
+        [new(PadButton.Cross, "Search"), new(PadButton.Triangle, "Sort"), new(PadButton.Options, "Reload"), new(PadButton.Circle, "Back")];
+    private static readonly HintItem[] LibraryClearHintItems =
+        [new(PadButton.Cross, "Clear search"), new(PadButton.Triangle, "Sort"), new(PadButton.Options, "Reload"), new(PadButton.Circle, "Back")];
 
     /// <summary>
     /// The footer hints of the library: those of the avatar row while it has the focus; with no theme there is nothing to open or
     /// preview, only to look for packs again.
     /// </summary>
-    private HintItem[] LibraryHints(ThemeBrowser browser) =>
+    internal HintItem[] LibraryHints(ThemeBrowser browser) =>
         browser.AvatarRowFocused ? AvatarHints(browser)
-        : browser.LookCardFocused ? LookCardHintItems : browser.Selected >= 0 ? LibraryHintItems : LibraryEmptyHintItems;
+        : browser.LibrarySearchFocused ? (browser.LibraryQuery.Length > 0 ? LibraryClearHintItems : LibrarySearchHintItems)
+        : browser.LookCardFocused ? LookCardHintItems
+        : browser.Selected >= 0 ? LibraryHintItems
+        : browser.LibrarySearchAvailable ? LibrarySearchableEmptyHintItems : LibraryEmptyHintItems;
 
     // ---- Layout -----------------------------------------------------------------------------------------------------
 
@@ -87,8 +97,13 @@ public sealed partial class ThemeRenderer
     private IReadOnlyList<string> _lookDescription = [];
     private string _lookContents = "", _lookMeta = "";
     private IReadOnlyList<string>? _emptyText;
-    private string _countText = "";
+    private string _countText = "", _countQuery = "";
     private int _countFor = -1;
+    private readonly SearchChipLabel _libraryChip = new();
+    // The "no match" text of the empty hero, wrapped once per term.
+    private string? _noMatchFor;
+    private int _noMatchTotal = -1;
+    private IReadOnlyList<string> _noMatchText = [];
     private LibrarySort _countSort;
 
     /// <summary>The order of the library row (after the applied theme), named next to the count.</summary>
@@ -109,6 +124,7 @@ public sealed partial class ThemeRenderer
         _selectedKey = _warmedFor = null;
         _hero = null;
         _countFor = -1;
+        _noMatchFor = null;
     }
 
     private HeroText HeroOf(ThemeLibraryEntry entry)
@@ -151,12 +167,14 @@ public sealed partial class ThemeRenderer
             const int top = Theme.HeaderRuleY + 1;
             Surface above = s.Region(0, top, Theme.ScreenWidth, Theme.ScreenHeight - top);
             int shifted = enter - heroShift - top;
-            if (selected is null) DrawEmptyHero(above, shifted);
+            if (selected is null && browser.LibraryQuery.Length > 0 && browser.LibraryTotal > 0) DrawNoMatchHero(above, browser, shifted);
+            else if (selected is null) DrawEmptyHero(above, shifted);
             else if (browser.LookCardFocused) DrawLookHero(above, shifted);
             else DrawHero(above, selected, shifted);
         }
         if (slide > 0) DrawLiftWash(s, slide);
-        DrawCollection(s, browser.Selected, entries, delta, browser.LookSavable, browser.LookCardFocused, slide, avatars);
+        // The packs show no ring while the avatar row or the search chip has the focus.
+        DrawCollection(s, browser, entries, delta, slide, avatars || browser.LibrarySearchFocused);
         DrawAvatarRow(s, browser, slide, delta, snap);
         WarmBackdrop(selected, seconds);
     }
@@ -243,28 +261,55 @@ public sealed partial class ThemeRenderer
         }
     }
 
-    // lift is how far the row has slid up for the avatar row; with the focus there (avatarRow) the selected pack keeps its place
-    // in the row but is drawn like the others, without a ring.
-    private void DrawCollection(Surface s, int selected, IReadOnlyList<ThemeLibraryEntry> entries, double delta, bool lookCard, bool lookFocused,
-        int lift, bool avatarRow)
+    // With a search that matches nothing the library is not empty: the message says what was searched and how to see the packs again.
+    private void DrawNoMatchHero(Surface s, ThemeBrowser browser, int enter)
     {
+        if (_noMatchFor != browser.LibraryQuery || _noMatchTotal != browser.LibraryTotal)
+        {
+            _noMatchFor = browser.LibraryQuery;
+            _noMatchTotal = browser.LibraryTotal;
+            _noMatchText = _body.Wrap("No theme in your library has “" + _noMatchFor + "” in its name, author or description. "
+                + "Press X on the search chip to see all " + Plural(browser.LibraryTotal, "theme") + " again.", 760, 3);
+        }
+        const int centre = Theme.ScreenWidth / 2;
+        int top = 296 + enter;
+        DrawMid(_small, s, "YOUR LIBRARY", centre, top, Accent);
+        top += _small.LineHeight + 8;
+        DrawMid(_screenHeading, s, "No matching themes", centre, top, White);
+        top += _screenHeading.LineHeight + 12;
+        for (int i = 0; i < _noMatchText.Count; i++)
+        {
+            DrawMid(_body, s, _noMatchText[i], centre, top, Muted);
+            top += _body.LineHeight;
+        }
+    }
+
+    // lift is how far the row has slid up for the avatar row; with the focus there (avatarRow, also true for the search chip) the
+    // selected pack keeps its place in the row but is drawn like the others, without a ring.
+    private void DrawCollection(Surface s, ThemeBrowser browser, IReadOnlyList<ThemeLibraryEntry> entries, double delta, int lift, bool avatarRow)
+    {
+        int selected = browser.Selected;
+        bool lookCard = browser.LookCardShown, lookFocused = browser.LookCardFocused, filtering = browser.LibraryQuery.Length > 0;
         int collectionTop = CollectionTop - lift, cardY = CardY - lift, cardTitleY = CardTitleY - lift, clipTop = RowClipTop - lift;
         // "Your collection" and its count share one baseline.
         int baseline = collectionTop + Ascent(_heading);
         DrawLeft(_heading, s, "Your collection", Theme.SafeX, collectionTop, White);
-        if (_countFor != entries.Count || _countSort != LibrarySort)
+        if (_countFor != entries.Count || _countSort != LibrarySort || _countQuery != browser.LibraryQuery)
         {
             _countFor = entries.Count;
             _countSort = LibrarySort;
-            _countText = entries.Count > 1 ? Plural(entries.Count, "theme") + "  ·  " + LibraryOrder.Label(LibrarySort)
-                : Plural(entries.Count, "theme");
+            _countQuery = browser.LibraryQuery;
+            // "31 themes  ·  A to Z", and with a search "3 themes  ·  “kanto”  ·  A to Z".
+            _countText = Plural(entries.Count, "theme") + (filtering ? "  ·  “" + browser.LibraryQuery + "”" : "")
+                + (entries.Count > 1 ? "  ·  " + LibraryOrder.Label(LibrarySort) : "");
         }
         DrawLeft(_small, s, _countText, Theme.SafeX + _heading.MeasureText("Your collection") + 16, baseline - Ascent(_small), Muted);
+        if (browser.LibrarySearchAvailable) DrawLibraryChip(s, browser, collectionTop);
 
         // Scroll: the focused card stays the third one when the row is long enough (and the row never scrolls past
         // its ends); the offset eases toward that, and settles exactly so a still screen is a still picture.
         // After the packs: the card that saves the look (when there is one to save), then the one that points to USB Import.
-        int items = entries.Count + (lookCard ? 2 : 1);
+        int items = entries.Count + (lookCard ? 2 : filtering ? 0 : 1);   // a search shows only what matches: no "Import from USB" card
         int maxScroll = Math.Max(0, items * CardStride - CardGap - Theme.ContentWidth);
         int focus = lookFocused ? entries.Count : selected;
         float target = focus < 0 ? 0 : Math.Clamp((focus - 2) * CardStride, 0, maxScroll);
@@ -309,6 +354,19 @@ public sealed partial class ThemeRenderer
             }
             ClipLeft(_body, row, entry.Manifest.Name, lx, titleY, focused ? White : Muted, CardW);
         }
+    }
+
+    // The search chip at the right end of the "Your collection" line: "Search", or the term with a cross. Lit while a term is in force.
+    private void DrawLibraryChip(Surface s, ThemeBrowser browser, int collectionTop)
+    {
+        _libraryChip.Update(_label, browser.LibraryQuery);
+        int w = _libraryChip.Width, x = Theme.ContentRight - w, top = collectionTop + (_heading.LineHeight - CommunitySortH) / 2;
+        bool focused = browser.LibrarySearchFocused;
+        DrawCommunityPill(s, x, top, w, browser.LibraryQuery.Length > 0, focused, _libraryChip.Text);
+        if (!focused) return;
+        const int room = 14;
+        Surface ring = s.Region(x - room, top - room, w + 2 * room, CommunitySortH + 2 * room);
+        Paint.FocusRing(ring, room, room, w, CommunitySortH, CommunitySortH / 2, Accent);
     }
 
     // The last card of the row: a quiet card that says where more themes come from. Opaque, so the theme's art behind

@@ -19,6 +19,8 @@ public sealed partial class ThemeRenderer
     public IReadOnlySet<string> AvatarStoreLiked { get; set; } = new HashSet<string>();
     /// <summary>The sort (a <see cref="CommunitySort"/> value) the list on screen was loaded with, or -1 before any list.</summary>
     public int AvatarStoreListSort { get; set; } = -1;
+    /// <summary>The search term the list on screen was loaded with ("" for none), like <see cref="AvatarStoreListSort"/>; read once a list was loaded.</summary>
+    public string AvatarStoreListQuery { get; set; } = "";
     /// <summary>The Avatars tab's empty or error text ("Loading avatars…", "Can't reach the store: …"); drawn only while the list is empty.</summary>
     public string AvatarStoreStatus { get; set; } = "";
     /// <summary>Whether <see cref="AvatarStoreStatus"/> reports a failed load.</summary>
@@ -62,8 +64,11 @@ public sealed partial class ThemeRenderer
     private float _avatarStoreScroll;
     private int _avatarStoreTop;
     private bool _avatarStoreScrollReady;
-    private string _avatarStoreCountText = "";
+    private string _avatarStoreCountText = "", _avatarStoreCountQuery = "";
     private int _avatarStoreCountFor = -1, _avatarStoreCountSort = -1;
+    private readonly SearchChipLabel _avatarStoreChip = new();
+    /// <summary>The text on the Avatars tab's search chip as last drawn ("Search", or the term with a cross); for the tests.</summary>
+    internal string AvatarStoreChipText => _avatarStoreChip.Text;
     private string? _avatarStoreStateHeading, _avatarStoreStateText;
     private IReadOnlyList<string> _avatarStoreStateBody = Array.Empty<string>();
     // The line under the name in the download question, for the avatar it was made for.
@@ -83,22 +88,52 @@ public sealed partial class ThemeRenderer
 
     // ---- Footer -----------------------------------------------------------------------------------------------------------
 
-    private static readonly HintItem[] AvatarStoreLikeHints =
-        [new(PadButton.Cross, "Download"), new(PadButton.Triangle, "Like"), new(PadButton.Square, "Sort"), new(PadButton.Options, "Refresh")];
-    private static readonly HintItem[] AvatarStoreUnlikeHints =
-        [new(PadButton.Cross, "Download"), new(PadButton.Triangle, "Unlike"), new(PadButton.Square, "Sort"), new(PadButton.Options, "Refresh")];
+    // On a card: Download, Like (Unlike), Sort, Refresh; on the top row of cards a fifth hint says that Up reaches the search chip.
+    // Indexed by [liked][topRow], made once so the footer allocates nothing.
+    private static readonly HintItem[][][] AvatarStoreCardHints = BuildAvatarStoreCardHints();
+
+    private static HintItem[][][] BuildAvatarStoreCardHints()
+    {
+        var sets = new HintItem[2][][];
+        for (int liked = 0; liked < 2; liked++)
+        {
+            sets[liked] = new HintItem[2][];
+            for (int top = 0; top < 2; top++)
+            {
+                var hints = new List<HintItem>
+                {
+                    new(PadButton.Cross, "Download"), new(PadButton.Triangle, liked == 1 ? "Unlike" : "Like"),
+                    new(PadButton.Square, "Sort"), new(PadButton.Options, "Refresh"),
+                };
+                if (top == 1) hints.Add(new(PadButton.DPadUp, "Search"));
+                sets[liked][top] = hints.ToArray();
+            }
+        }
+        return sets;
+    }
+
     private static readonly HintItem[] AvatarStoreEmptyHints =
-        [new(PadButton.Options, "Refresh"), new(PadButton.Square, "Sort"), new(PadButton.Circle, "Back")];
+        [new(PadButton.Options, "Refresh"), new(PadButton.Square, "Sort"), new(PadButton.DPadUp, "Search"), new(PadButton.Circle, "Back")];
+    // With the search chip focused: X opens the keyboard, or takes the term off when there is one.
+    private static readonly HintItem[] AvatarStoreSearchHints =
+        [new(PadButton.Cross, "Search"), new(PadButton.Square, "Sort"), new(PadButton.Options, "Refresh"), new(PadButton.Circle, "Back")];
+    private static readonly HintItem[] AvatarStoreClearHints =
+        [new(PadButton.Cross, "Clear search"), new(PadButton.Square, "Sort"), new(PadButton.Options, "Refresh"), new(PadButton.Circle, "Back")];
 
     /// <summary>The store avatar under the cursor on the Avatars tab, or null when the list is empty.</summary>
     internal StoreAvatar? FocusedStoreAvatar(ThemeBrowser browser) =>
         browser.AvatarStoreSelected >= 0 && browser.AvatarStoreSelected < AvatarStore.Count ? AvatarStore[browser.AvatarStoreSelected] : null;
 
-    /// <summary>The footer hints of the Avatars tab: Download, Like (Unlike for one this console liked), Sort and Refresh on a card; with no list, only Refresh, Sort and Back.</summary>
-    internal HintItem[] AvatarStoreHints(ThemeBrowser browser) =>
-        FocusedStoreAvatar(browser) is { } avatar
-            ? (AvatarStoreLiked.Contains(avatar.Id) ? AvatarStoreUnlikeHints : AvatarStoreLikeHints)
-            : AvatarStoreEmptyHints;
+    /// <summary>
+    /// The footer hints of the Avatars tab: Download, Like (Unlike for one this console liked), Sort and Refresh on a card, with the way to the
+    /// search chip on the top row; with the chip focused, its own; with no list, only Refresh, Sort, Search and Back.
+    /// </summary>
+    internal HintItem[] AvatarStoreHints(ThemeBrowser browser)
+    {
+        if (browser.AvatarSearchFocused) return browser.AvatarStoreQuery.Length > 0 ? AvatarStoreClearHints : AvatarStoreSearchHints;
+        if (FocusedStoreAvatar(browser) is not { } avatar) return AvatarStoreEmptyHints;
+        return AvatarStoreCardHints[AvatarStoreLiked.Contains(avatar.Id) ? 1 : 0][browser.AvatarStoreSelected < ThemeBrowser.AvatarStoreColumns ? 1 : 0];
+    }
 
     // ---- Screen -----------------------------------------------------------------------------------------------------------
 
@@ -131,17 +166,38 @@ public sealed partial class ThemeRenderer
         }
         // Square sorts on every card here (it previews nothing), so the hint always follows the pills.
         Hint(s, PadButton.Square, "Sort", x + Theme.Unit, top + (CommunitySortH - _small.LineHeight) / 2);
+        DrawAvatarStoreChip(s, browser, top);
     }
 
-    // "6 avatars · Top rated", from the sort the list was loaded with (the pills may have moved on); formatted again only when it changes.
-    private string AvatarStoreCountText(int count, ThemeBrowser browser)
+    // The search chip after the Sort hint, where the Themes tab's chips begin: "Search", or the term with a cross that says X removes it.
+    private void DrawAvatarStoreChip(Surface s, ThemeBrowser browser, int top)
+    {
+        _avatarStoreChip.Update(_label, browser.AvatarStoreQuery);
+        int left = _communityChipsLeft, w = _avatarStoreChip.Width;
+        Paint.FillRect(s, left - CommunityChipsGap / 2, top + 8, 1, CommunitySortH - 16, White.WithAlpha(36));
+        bool focused = browser.AvatarSearchFocused;
+        DrawCommunityPill(s, left, top, w, browser.AvatarStoreQuery.Length > 0, focused, _avatarStoreChip.Text);
+        if (!focused) return;
+        // The ring and its glow reach 12 px past the chip, so they get a band a little wider than the chip.
+        const int room = 14;
+        Surface ring = s.Region(left - room, top - room, w + 2 * room, CommunitySortH + 2 * room);
+        Paint.FocusRing(ring, room, room, w, CommunitySortH, CommunitySortH / 2, Accent);
+    }
+
+    // The search term the list on screen was loaded with; before the app has loaded any list (the tests draw one directly) the term in force.
+    private string AvatarStoreLoadedQuery(ThemeBrowser browser) => AvatarStoreListSort is >= 0 and <= 2 ? AvatarStoreListQuery : browser.AvatarStoreQuery;
+
+    // "6 avatars · Top rated" (with the term: "2 avatars · “house” · Top rated"), from the sort the list was loaded with (the pills may have moved on); formatted again only when it changes.
+    internal string AvatarStoreCountText(int count, ThemeBrowser browser)
     {
         int sort = AvatarStoreListSort is >= 0 and <= 2 ? AvatarStoreListSort : browser.AvatarStoreSort;
-        if (count != _avatarStoreCountFor || sort != _avatarStoreCountSort)
+        string query = AvatarStoreLoadedQuery(browser);
+        if (count != _avatarStoreCountFor || sort != _avatarStoreCountSort || query != _avatarStoreCountQuery)
         {
             _avatarStoreCountFor = count;
             _avatarStoreCountSort = sort;
-            _avatarStoreCountText = Plural(count, "avatar") + " · " + CommunityList.Label((CommunitySort)sort);
+            _avatarStoreCountQuery = query;
+            _avatarStoreCountText = Plural(count, "avatar") + (query.Length > 0 ? " · “" + query + "”" : "") + " · " + CommunityList.Label((CommunitySort)sort);
         }
         return _avatarStoreCountText;
     }
@@ -184,7 +240,7 @@ public sealed partial class ThemeRenderer
             if (index == selected) { focusShown = true; focusX = x - CommunityBandLeft; focusY = y - CommunityBandTop; }
         }
         // After every card, so the glow lies over the neighbours instead of under them.
-        if (focusShown) Paint.FocusRing(band, focusX, focusY, AvatarStoreCardW, AvatarStoreCardH, Theme.RadiusCard);
+        if (focusShown && !browser.AvatarSearchFocused) Paint.FocusRing(band, focusX, focusY, AvatarStoreCardW, AvatarStoreCardH, Theme.RadiusCard);
         PrefetchAvatarStoreCards(items, top, rows);
         _avatarStoreMoving = _avatarStoreScroll != target || _avatarStorePending;
     }
@@ -216,6 +272,12 @@ public sealed partial class ThemeRenderer
         if (browser.StoreUrl.Length == 0) { heading = "No store set"; body = "Set the store address on the System tab."; }
         else if (Busy) { heading = "Loading avatars…"; body = "Getting the list from the store."; }
         else if (AvatarStoreError) { heading = "Can’t load the avatars"; body = AvatarStoreStatus; }
+        else if (AvatarStoreListSort is >= 0 and <= 2 && AvatarStoreListQuery.Length > 0)
+        {
+            // A search that found nothing: the chip with the term is how to get every avatar back.
+            heading = "No avatars match “" + AvatarStoreListQuery + "”";
+            body = "Try other words, or press X on the search chip to see every avatar.";
+        }
         else if (AvatarStoreListSort is >= 0 and <= 2) { heading = "No avatars in the store yet"; body = "Press Options to check again."; }
         else { heading = "No avatars loaded"; body = "Press Options to refresh."; }
         bool failed = !Busy && browser.StoreUrl.Length > 0 && AvatarStoreError;

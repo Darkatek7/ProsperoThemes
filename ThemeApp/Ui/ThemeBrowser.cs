@@ -8,7 +8,8 @@ namespace ProsperoThemes.App.Ui;
 
 /// <summary>
 /// StoreAddress is the keyboard screen: opened from System, not a header tab, and it returns there. Search is the same
-/// keyboard for the Community search: opened from the search chip, and it returns to Community. Community is the Themes tab;
+/// keyboard for the three searches (<see cref="ThemeBrowser.SearchOrigin"/>): the Themes tab's, the Avatars tab's and the Library's,
+/// opened from the search chip of that screen, and it returns there. Community is the Themes tab;
 /// Avatars is the store's avatars (the tab after it). The app's own avatars are the Library's second row
 /// (<see cref="ThemeBrowser.AvatarRowFocused"/>), not a view of their own.
 /// </summary>
@@ -27,13 +28,15 @@ public enum ThemeView { Library, Detail, Preview, Community, Import, System, Sto
 /// what it knows).
 /// ToggleBackgroundScope: the System row for app backgrounds. ToggleSounds: the System row for music and sounds. ToggleAiThemes: the System row (or the Community chip's setting) for AI themes. RemoveTheme: the selected pack leaves the library. Busy: a press that needed the app to be idle (the app
 /// answers it with a "Please wait" notice); no system-changing action is ever emitted while the app is busy.
+/// LibraryFilter: the Library's search term changed (typed, or taken off with X on its chip); the app shows the packs that match it
+/// (<see cref="ThemeBrowser.LibraryQuery"/>) and passes the count on with <see cref="ThemeBrowser.SetCount"/>.
 /// AvatarStoreRefresh: the Avatars tab asks for the store's list (entered with none, a new sort, or Options). AvatarDownload and
 /// AvatarDownloadSet: the answers of the download question over a store avatar (the second also sets it as the profile picture once
 /// it is in the app). AvatarLike: Triangle on a store avatar, which likes it or takes the like back.
 /// AvatarApply, AvatarReset and AvatarRemove: the answers of the avatar questions, for the card at <see cref="ThemeBrowser.AvatarIndex"/>
 /// of the Library's avatar row (AvatarReset is the Console picture card).
 /// </summary>
-public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityDownloadApply, CommunityPreview, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, RestartShell, ChangeSoundVolume, ChangeMusicVolume, AskSoundVolume, ApplySoundVolume, ToggleAiThemes, ReportLater, UpdateApp, CheckAppUpdate, AvatarApply, AvatarReset, AvatarRemove, AvatarStoreRefresh, AvatarDownload, AvatarDownloadSet, AvatarLike, Busy }
+public enum ThemeAction { None, ImportUsb, Reload, Apply, RestoreOriginals, CommunityRefresh, CommunityDownload, CommunityDownloadApply, CommunityPreview, CommunityLike, SaveStoreUrl, FirmwareReport, ToggleBackgroundScope, ToggleEarlierThemes, ToggleSounds, RemoveTheme, PreviewMusic, ToggleLibrarySort, Reapply, ReapplyLater, SaveLook, RestartShell, ChangeSoundVolume, ChangeMusicVolume, AskSoundVolume, ApplySoundVolume, ToggleAiThemes, ReportLater, UpdateApp, CheckAppUpdate, AvatarApply, AvatarReset, AvatarRemove, AvatarStoreRefresh, AvatarDownload, AvatarDownloadSet, AvatarLike, LibraryFilter, Busy }
 
 /// <summary>The two scenes of the preview: the home screen with its row of tiles, and the control centre's row of buttons.</summary>
 public enum PreviewScene { Home, ControlCentre }
@@ -202,6 +205,25 @@ public sealed class ThemeBrowser
     public string CommunityQuery { get; private set; } = "";
     /// <summary>The keyboard behind <see cref="ThemeView.Search"/>.</summary>
     public StoreAddressEditor SearchEditor { get; private set; } = StoreAddressEditor.ForSearch();
+    /// <summary>The screen the keyboard behind <see cref="ThemeView.Search"/> was opened from, and returns to: Community, Avatars or Library.</summary>
+    public ThemeView SearchOrigin { get; private set; } = ThemeView.Community;
+    /// <summary>What the Avatars tab searches for (the store's <c>q=</c>); empty for no search.</summary>
+    public string AvatarStoreQuery { get; private set; } = "";
+    /// <summary>Whether the Avatars tab's search chip (above the grid) has the focus and not a card.</summary>
+    public bool AvatarSearchFocused { get; private set; }
+    /// <summary>What the Library shows only the packs for (name, author or description, see <see cref="LibraryFilter"/>); empty for all.</summary>
+    public string LibraryQuery { get; private set; } = "";
+    /// <summary>Whether the Library's search chip (beside "Your collection") has the focus and not a card.</summary>
+    public bool LibrarySearchFocused { get; private set; }
+    /// <summary>All packs of the library, whatever the search shows (<see cref="SetCount"/>).</summary>
+    public int LibraryTotal => _libraryTotal;
+    /// <summary>Whether the Library has a search chip to reach: there are packs to search, or a term to take off.</summary>
+    public bool LibrarySearchAvailable => _libraryTotal > 0 || LibraryQuery.Length > 0;
+    /// <summary>
+    /// Whether the card that saves the look follows the packs: the look can be saved (<see cref="LookSavable"/>) and the Library is not
+    /// narrowed by a search, whose result is a part of the library and not the whole.
+    /// </summary>
+    public bool LookCardShown => LookSavable && LibraryQuery.Length == 0;
     /// <summary>The saved store address: shown on System and what the editor starts from. The app keeps it current.</summary>
     public string StoreUrl { get; set; } = "";
     /// <summary>The keyboard behind <see cref="ThemeView.StoreAddress"/>; keeps its text after the screen is left.</summary>
@@ -226,7 +248,7 @@ public sealed class ThemeBrowser
     public const int AvatarStoreColumns = 6;
     private int _avatarStoreCount;
     private int _communityCount;
-    private int _count;
+    private int _count, _libraryTotal;
     private ThemeView _previewOrigin = ThemeView.Library;
     // The ApplyParts dialog asks where an app background goes next, when the pack has one and it stays ticked.
     private bool _scopeAfterParts;
@@ -235,9 +257,14 @@ public sealed class ThemeBrowser
     // ApplyAfterDownload asked for the apply question; the next Update opens it.
     private bool _askApply;
 
-    public void SetCount(int count)
+    /// <summary>
+    /// The packs the Library shows (the ones that match <see cref="LibraryQuery"/>); <paramref name="total"/> is the whole library
+    /// (the count when not given). The focus is kept inside the shown ones.
+    /// </summary>
+    public void SetCount(int count, int total = -1)
     {
         _count = Math.Max(0, count);
+        _libraryTotal = total < 0 ? _count : Math.Max(total, _count);
         Selected = _count == 0 ? -1 : Math.Clamp(Selected, 0, _count - 1);
         // The preview of a store theme is not of a library pack, so it stays.
         if (_count == 0 && View is ThemeView.Detail or ThemeView.Preview && !PreviewOfStore) View = ThemeView.Library;
@@ -336,6 +363,43 @@ public sealed class ThemeBrowser
         View = ThemeView.StoreAddress;
     }
 
+    // Opens the shared keyboard for the search of the screen the chip is on, empty (typing starts on the next frame).
+    private void OpenSearch(ThemeView origin)
+    {
+        SearchEditor = StoreAddressEditor.ForSearch();
+        SearchOrigin = origin;
+        View = ThemeView.Search;
+    }
+
+    // What Options in the keyboard does: a term that differs from the one in force asks the screen it came from to show it.
+    private void ApplySearch(string query)
+    {
+        switch (SearchOrigin)
+        {
+            case ThemeView.Avatars when query != AvatarStoreQuery:
+                AvatarStoreQuery = query;
+                AvatarStoreSelected = _avatarStoreCount == 0 ? -1 : 0;
+                _action = ThemeAction.AvatarStoreRefresh;
+                break;
+            case ThemeView.Library when query != LibraryQuery:
+                LibraryQuery = query;
+                _action = ThemeAction.LibraryFilter;
+                break;
+            case ThemeView.Community when query != CommunityQuery:
+                CommunityQuery = query;
+                CommunitySelected = _communityCount == 0 ? -1 : 0;
+                _action = ThemeAction.CommunityRefresh;
+                break;
+        }
+    }
+
+    /// <summary>Takes the Library's search term off (the app does it when a pack it must show is outside the search); asks for nothing.</summary>
+    public void ClearLibraryQuery()
+    {
+        LibraryQuery = "";
+        LibrarySearchFocused = false;
+    }
+
     // The tabs in header order; Detail and Preview belong to the library.
     private static readonly ThemeView[] Tabs = [ThemeView.Library, ThemeView.Community, ThemeView.Avatars, ThemeView.Import, ThemeView.System];
 
@@ -397,18 +461,12 @@ public sealed class ThemeBrowser
         }
         if (View == ThemeView.Search)
         {
-            // O goes back without searching; Options searches for what is typed (nothing typed shows every theme).
-            if (input.Cancel) View = ThemeView.Community;
+            // O goes back without searching; Options searches for what is typed (nothing typed shows everything again).
+            if (input.Cancel) View = SearchOrigin;
             else if (options)
             {
-                View = ThemeView.Community;
-                string query = SearchEditor.Text.Trim();
-                if (query != CommunityQuery)
-                {
-                    CommunityQuery = query;
-                    CommunitySelected = _communityCount == 0 ? -1 : 0;
-                    _action = ThemeAction.CommunityRefresh;
-                }
+                View = SearchOrigin;
+                ApplySearch(SearchEditor.Text.Trim());
             }
             else
             {
@@ -426,13 +484,13 @@ public sealed class ThemeBrowser
         if (input.Cancel || options && View == ThemeView.Detail)
         {
             View = ThemeView.Library;
-            CommunityChipFocused = false;
+            CommunityChipFocused = AvatarSearchFocused = LibrarySearchFocused = false;
             return;
         }
         if (input.PageDown || input.PageUp)
         {
-            // The store tab is entered on its cards, whatever had the focus when it was left.
-            CommunityChipFocused = false;
+            // The store tabs and the Library are entered on their cards, whatever had the focus when they were left.
+            CommunityChipFocused = AvatarSearchFocused = LibrarySearchFocused = false;
             int tab = Math.Max(0, Array.IndexOf(Tabs, View));
             tab = (tab + (input.PageDown ? 1 : Tabs.Length - 1)) % Tabs.Length;
             View = Tabs[tab];
@@ -460,7 +518,18 @@ public sealed class ThemeBrowser
             UpdateAvatarStore(input, preview, options, triangle);
             return;
         }
-        if (!LookSavable) LookCardFocused = false;
+        if (!LookCardShown) LookCardFocused = false;
+        // The search chip beside "Your collection": Up from the packs (or from an empty result) reaches it, Down comes back.
+        if (View == ThemeView.Library && LibrarySearchFocused)
+        {
+            UpdateLibrarySearch(input, options, triangle);
+            return;
+        }
+        if (View == ThemeView.Library && input.Up && LibrarySearchAvailable)
+        {
+            LibrarySearchFocused = true;
+            return;
+        }
         // Down from the themes (or from the empty library) goes to the avatar row below them.
         if (View == ThemeView.Library && input.Down)
         {
@@ -482,14 +551,14 @@ public sealed class ThemeBrowser
         }
         else if (View == ThemeView.Library && _count > 0)
         {
-            if (input.Right && Selected == _count - 1 && LookSavable) LookCardFocused = true;
+            if (input.Right && Selected == _count - 1 && LookCardShown) LookCardFocused = true;
             else if (input.Right) Selected = Math.Min(_count - 1, Selected + 1);
             if (input.Left) Selected = Math.Max(0, Selected - 1);
             if (input.Home) Selected = 0;
             if (input.End)
             {
                 Selected = _count - 1;
-                LookCardFocused = LookSavable;
+                LookCardFocused = LookCardShown;
             }
             if (input.Confirm && !LookCardFocused) View = ThemeView.Detail;
             else if (triangle) _action = ThemeAction.ToggleLibrarySort;
@@ -651,11 +720,7 @@ public sealed class ThemeBrowser
             else if (input.Confirm && CommunityChip == SearchChip)
             {
                 // Without a term X opens the keyboard (typing starts on the next frame); with one, X removes it.
-                if (CommunityQuery.Length == 0)
-                {
-                    SearchEditor = StoreAddressEditor.ForSearch();
-                    View = ThemeView.Search;
-                }
+                if (CommunityQuery.Length == 0) OpenSearch(ThemeView.Community);
                 else
                 {
                     CommunityQuery = "";
@@ -715,7 +780,25 @@ public sealed class ThemeBrowser
     // the Library like on every tab (handled before this).
     private void UpdateAvatarStore(UiInput input, bool sort, bool options, bool triangle)
     {
-        if (_avatarStoreCount > 0)
+        if (AvatarSearchFocused)
+        {
+            // The one chip above the grid: X opens the keyboard (typing starts on the next frame), or with a term takes it off;
+            // Down comes back to the cards. Square and Options work from here like anywhere on the tab.
+            if (input.Down) AvatarSearchFocused = false;
+            else if (input.Confirm)
+            {
+                if (AvatarStoreQuery.Length == 0) OpenSearch(ThemeView.Avatars);
+                else
+                {
+                    AvatarStoreQuery = "";
+                    AvatarStoreSelected = _avatarStoreCount == 0 ? -1 : 0;
+                    _action = ThemeAction.AvatarStoreRefresh;
+                }
+            }
+        }
+        else if (input.Up && (_avatarStoreCount == 0 || AvatarStoreSelected < AvatarStoreColumns))
+            AvatarSearchFocused = true;
+        else if (_avatarStoreCount > 0)
         {
             const int columns = AvatarStoreColumns;
             if (input.Right) AvatarStoreSelected = Math.Min(_avatarStoreCount - 1, AvatarStoreSelected + 1);
@@ -740,6 +823,24 @@ public sealed class ThemeBrowser
             _action = ThemeAction.AvatarStoreRefresh;
         }
         else if (options) _action = ThemeAction.AvatarStoreRefresh;
+    }
+
+    // The Library's search chip: X opens the keyboard, or with a term takes it off (the app then shows every pack); Down goes back
+    // to the packs (Circle does too, handled before), Triangle still sorts and Options reads the library again.
+    private void UpdateLibrarySearch(UiInput input, bool options, bool triangle)
+    {
+        if (input.Down) LibrarySearchFocused = false;
+        else if (input.Confirm)
+        {
+            if (LibraryQuery.Length == 0) OpenSearch(ThemeView.Library);
+            else
+            {
+                LibraryQuery = "";
+                _action = ThemeAction.LibraryFilter;
+            }
+        }
+        else if (triangle) _action = ThemeAction.ToggleLibrarySort;
+        else if (options) _action = ThemeAction.Reload;
     }
 
     // The Library's avatar row: Left and Right move over the cards (Console picture first), X asks to set the focused avatar or to

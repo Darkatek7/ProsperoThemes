@@ -368,7 +368,7 @@ public sealed partial class ThemeRenderer
         _tabsRight = x - TabGap;
     }
 
-    private void DrawHeader(Surface s, ThemeView view)
+    private void DrawHeader(Surface s, ThemeView view, ThemeView searchOrigin = ThemeView.Community)
     {
         // Original mark: an orbit with its own small moon, no platform branding asset. Its left edge is the safe margin.
         Paint.StrokeCircle(s, Theme.SafeX + 20.5f, HeaderCenterY, 20.5f, 2.5f, White);
@@ -380,7 +380,9 @@ public sealed partial class ThemeRenderer
         DrawLeft(_small, s, "T H E M E S", wordX + _heading.MeasureText("prospero") + 12, baseline - Ascent(_small), Muted);
 
         if (_tabX is null || _tabWidth is null) LayoutTabs();
-        int active = view switch { ThemeView.Community or ThemeView.Search => 1, ThemeView.Avatars => 2, ThemeView.Import => 3, ThemeView.System or ThemeView.StoreAddress => 4, _ => 0 };
+        bool searching = view == ThemeView.Search;
+        if (searching) view = searchOrigin;
+        int active = view switch { ThemeView.Community => 1, ThemeView.Avatars => 2, ThemeView.Import => 3, ThemeView.System or ThemeView.StoreAddress => 4, _ => 0 };
         for (int i = 0; i < TabNames.Length; i++)
         {
             bool on = i == active;
@@ -389,7 +391,7 @@ public sealed partial class ThemeRenderer
             DrawMid(font, s, TabNames[i], _tabX![i] + _tabWidth![i] / 2, HeaderCenterY - font.LineHeight / 2, on ? White : Muted);
         }
         // L1 and R1 flank the tabs; on the keyboard the tabs do not switch, so the glyphs stay away.
-        if (view is not (ThemeView.StoreAddress or ThemeView.Search))
+        if (view is not ThemeView.StoreAddress && !searching)
         {
             int glyphTop = HeaderCenterY - GlyphSize / 2;
             ButtonGlyph.Draw(s, PadButton.L1, _tabsLeft - TabGlyphGap - ButtonGlyph.Width(PadButton.L1, GlyphSize), glyphTop, GlyphSize, Ink, Muted, _small);
@@ -426,6 +428,14 @@ public sealed partial class ThemeRenderer
 
     /// <summary>Width of one hint (glyph, gap, label) as <see cref="Hint"/> draws it, without the gap after it.</summary>
     private int HintWidth(HintItem hint) => ButtonGlyph.Width(hint.Button, GlyphSize) + GlyphGap + _small.MeasureText(hint.Label);
+
+    /// <summary>The width of the footer bar for <paramref name="hints"/> (what <see cref="HintBar"/> takes); for the tests.</summary>
+    internal int HintBarWidth(ReadOnlySpan<HintItem> hints)
+    {
+        int total = -HintGap;
+        foreach (HintItem hint in hints) total += HintWidth(hint) + HintGap;
+        return total;
+    }
 
     /// <summary>
     /// Draws a row of hints that ends at <paramref name="right"/> (the console's own style: the bar sits at the safe

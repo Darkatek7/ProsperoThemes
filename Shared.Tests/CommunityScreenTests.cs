@@ -223,7 +223,7 @@ public unsafe class CommunityScreenTests
         using var screen = new Screen(3);
         ThemeRenderer r = screen.Renderer;
         string[] Labels() => r.CommunityHints(screen.Browser).Select(h => h.Label).ToArray();
-        Assert.Equal(["Download", "Preview", "Like", "Refresh"], Labels());
+        Assert.Equal(["Download", "Preview", "Like", "Refresh", "Search · Filters"], Labels());   // the top row: Up reaches the chips
         screen.Browser.Update(Up);
         Assert.Equal(["Select", "Move · Down for themes", "Sort", "Back"], Labels());
         Assert.True(r.CommunityHints(screen.Browser).Length <= 4);
@@ -232,7 +232,7 @@ public unsafe class CommunityScreenTests
         r.Community = Array.Empty<CommunityTheme>();
         Assert.Equal(["Select", "Move", "Sort", "Back"], Labels());
         screen.Browser.Update(Down);
-        Assert.Equal(["Refresh", "Back"], Labels());
+        Assert.Equal(["Refresh", "Search · Filters", "Back"], Labels());
     }
 
     [Fact]
@@ -504,19 +504,21 @@ public unsafe class CommunityScreenTests
         ThemeRenderer r = screen.Renderer;
         string[] Labels() => r.CommunityHints(screen.Browser).Select(h => h.Label).ToArray();
 
-        Assert.Equal(["Download", "Preview", "Like", "Refresh"], Labels());
+        // The cards are on the top row, where Up reaches the chips: a fifth hint says so (never on the lower rows).
+        const string Chips = "Search · Filters";
+        Assert.Equal(["Download", "Preview", "Like", "Refresh", Chips], Labels());
         r.CommunityLiked = new HashSet<string> { "id0" };
-        Assert.Equal(["Download", "Preview", "Unlike", "Refresh"], Labels());
+        Assert.Equal(["Download", "Preview", "Unlike", "Refresh", Chips], Labels());
         r.CommunityUpdates = new HashSet<string> { "id0" };
-        Assert.Equal(["Update", "Preview", "Unlike", "Refresh"], Labels());
+        Assert.Equal(["Update", "Preview", "Unlike", "Refresh", Chips], Labels());
         r.CommunityLiked = new HashSet<string>();
-        Assert.Equal(["Update", "Preview", "Like", "Refresh"], Labels());
-        Assert.True(r.CommunityHints(screen.Browser).Length <= 4);
+        Assert.Equal(["Update", "Preview", "Like", "Refresh", Chips], Labels());
+        Assert.True(r.CommunityHints(screen.Browser).Length <= 5);
         // The same arrays every time: nothing is built per frame.
         Assert.Same(r.CommunityHints(screen.Browser), r.CommunityHints(screen.Browser));
 
         r.Community = Array.Empty<CommunityTheme>();
-        Assert.Equal(["Refresh", "Back"], Labels());
+        Assert.Equal(["Refresh", "Search · Filters", "Back"], Labels());
     }
 
     [Fact]

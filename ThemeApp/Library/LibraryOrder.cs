@@ -94,3 +94,71 @@ public static class LibraryOrder
         return changed;
     }
 }
+
+/// <summary>
+/// The Library's search: a local filter of the collection by name, author and description, with no network. The match
+/// ignores case and accents and takes the words of the term in any order (every word has to appear somewhere in the three
+/// texts). The folding is a small table of its own, not the framework's normalization: the keyboard only types a to z, and
+/// the console's runtime may not carry the culture data the PC has, so the PC tests and the console must agree.
+/// </summary>
+public static class LibraryFilter
+{
+    /// <summary>The longest term the library search takes (the keyboard's own limit).</summary>
+    public const int MaxLength = 60;
+
+    /// <summary>
+    /// The entries whose name, author or description contain every word of <paramref name="query"/>, in their order. An empty
+    /// term (or only spaces) returns <paramref name="entries"/> itself.
+    /// </summary>
+    public static IReadOnlyList<ThemeLibraryEntry> Apply(IReadOnlyList<ThemeLibraryEntry> entries, string? query)
+    {
+        string[] words = Words(query);
+        if (words.Length == 0) return entries;
+        var shown = new List<ThemeLibraryEntry>();
+        foreach (ThemeLibraryEntry entry in entries)
+            if (Matches(entry, words)) shown.Add(entry);
+        return shown;
+    }
+
+    /// <summary>Whether one entry matches the term.</summary>
+    public static bool Matches(ThemeLibraryEntry entry, string? query) => Matches(entry, Words(query));
+
+    private static bool Matches(ThemeLibraryEntry entry, string[] words)
+    {
+        if (words.Length == 0) return true;
+        string text = Fold(entry.Manifest.Name) + "\n" + Fold(entry.Manifest.Author) + "\n" + Fold(entry.Manifest.Description);
+        foreach (string word in words)
+            if (!text.Contains(word, StringComparison.Ordinal)) return false;
+        return true;
+    }
+
+    private static string[] Words(string? query) =>
+        string.IsNullOrWhiteSpace(query) ? [] : Fold(query).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+    /// <summary>Lowercase, accents and umlauts removed, ß as ss, typographic quotes and dashes as plain ones; whitespace as one space.</summary>
+    public static string Fold(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (char raw in text)
+        {
+            char c = char.ToLowerInvariant(raw);
+            switch (c)
+            {
+                case 'à' or 'á' or 'â' or 'ã' or 'ä' or 'å': sb.Append('a'); break;
+                case 'ç': sb.Append('c'); break;
+                case 'è' or 'é' or 'ê' or 'ë': sb.Append('e'); break;
+                case 'ì' or 'í' or 'î' or 'ï': sb.Append('i'); break;
+                case 'ñ': sb.Append('n'); break;
+                case 'ò' or 'ó' or 'ô' or 'õ' or 'ö' or 'ø': sb.Append('o'); break;
+                case 'ù' or 'ú' or 'û' or 'ü': sb.Append('u'); break;
+                case 'ý' or 'ÿ': sb.Append('y'); break;
+                case 'ß': sb.Append("ss"); break;
+                case '’' or '‘' or '‚': sb.Append('\''); break;
+                case '–' or '—': sb.Append('-'); break;
+                default: sb.Append(char.IsWhiteSpace(c) ? ' ' : c); break;
+            }
+        }
+        return sb.ToString();
+    }
+}

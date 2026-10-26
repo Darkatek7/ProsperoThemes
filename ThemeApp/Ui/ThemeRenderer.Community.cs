@@ -40,17 +40,37 @@ public sealed partial class ThemeRenderer
 
     // ---- Footer hints ---------------------------------------------------------------------------------------------------
 
-    // On a card: X asks (download, download and apply), Square previews it without keeping it. At most four hints, so the
-    // footer leaves out Back; Circle still goes back, as it does on the Library's footer.
-    private static readonly HintItem[] CommunityDownloadLikeHints =
-        [new(PadButton.Cross, "Download"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Like"), new(PadButton.Options, "Refresh")];
-    private static readonly HintItem[] CommunityDownloadUnlikeHints =
-        [new(PadButton.Cross, "Download"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Unlike"), new(PadButton.Options, "Refresh")];
-    private static readonly HintItem[] CommunityUpdateLikeHints =
-        [new(PadButton.Cross, "Update"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Like"), new(PadButton.Options, "Refresh")];
-    private static readonly HintItem[] CommunityUpdateUnlikeHints =
-        [new(PadButton.Cross, "Update"), new(PadButton.Square, "Preview"), new(PadButton.Triangle, "Unlike"), new(PadButton.Options, "Refresh")];
-    private static readonly HintItem[] CommunityEmptyHints = [new(PadButton.Options, "Refresh"), new(PadButton.Circle, "Back")];
+    // On a card: X asks (download, download and apply), Square previews it without keeping it. On the top row of cards a fifth
+    // hint says that Up leads to the chips (the search and the filters), which is otherwise hard to find. Circle still goes back,
+    // as it does on the Library's footer. Indexed by [update][liked][topRow], made once so the footer allocates nothing.
+    private static readonly HintItem[][][][] CommunityCardHintSets = BuildCommunityCardHints();
+
+    private static HintItem[][][][] BuildCommunityCardHints()
+    {
+        var sets = new HintItem[2][][][];
+        for (int update = 0; update < 2; update++)
+        {
+            sets[update] = new HintItem[2][][];
+            for (int liked = 0; liked < 2; liked++)
+            {
+                sets[update][liked] = new HintItem[2][];
+                for (int top = 0; top < 2; top++)
+                {
+                    var hints = new List<HintItem>
+                    {
+                        new(PadButton.Cross, update == 1 ? "Update" : "Download"), new(PadButton.Square, "Preview"),
+                        new(PadButton.Triangle, liked == 1 ? "Unlike" : "Like"), new(PadButton.Options, "Refresh"),
+                    };
+                    if (top == 1) hints.Add(new(PadButton.DPadUp, "Search · Filters"));
+                    sets[update][liked][top] = hints.ToArray();
+                }
+            }
+        }
+        return sets;
+    }
+
+    private static readonly HintItem[] CommunityEmptyHints =
+        [new(PadButton.Options, "Refresh"), new(PadButton.DPadUp, "Search · Filters"), new(PadButton.Circle, "Back")];
     // With the filter chips focused: X picks the chip; the d-pad hint says how to get back to the cards when there are some.
     private static readonly HintItem[] CommunityChipHints =
         [new(PadButton.Cross, "Select"), new(PadButton.DPad, "Move · Down for themes"), new(PadButton.Square, "Sort"), new(PadButton.Circle, "Back")];
@@ -59,7 +79,8 @@ public sealed partial class ThemeRenderer
 
     /// <summary>
     /// The footer hints of the store: Update instead of Download for a theme with a newer version, Unlike instead of
-    /// Like for one this console liked, Preview for the fullscreen preview of the card. With no list there is nothing to download or like, only to refresh. While the
+    /// Like for one this console liked, Preview for the fullscreen preview of the card. On the top row of cards, where Up
+    /// reaches the chips, a hint says so. With no list there is nothing to download or like, only to refresh. While the
     /// filter chips have the focus the cards are not in play, so the hints are the chips' (also for an empty list: the
     /// chips are how to pick another category).
     /// </summary>
@@ -67,9 +88,8 @@ public sealed partial class ThemeRenderer
     {
         if (browser.CommunityChipFocused) return Community.Count == 0 ? CommunityChipEmptyHints : CommunityChipHints;
         if (Community.Count == 0 || SelectedCommunityId is not { } id) return CommunityEmptyHints;
-        bool update = CommunityUpdates.Contains(id), liked = CommunityLiked.Contains(id);
-        return update ? (liked ? CommunityUpdateUnlikeHints : CommunityUpdateLikeHints)
-                      : (liked ? CommunityDownloadUnlikeHints : CommunityDownloadLikeHints);
+        bool top = browser.CommunitySelected < ThemeBrowser.CommunityColumns;
+        return CommunityCardHintSets[CommunityUpdates.Contains(id) ? 1 : 0][CommunityLiked.Contains(id) ? 1 : 0][top ? 1 : 0];
     }
 
     // ---- Layout -----------------------------------------------------------------------------------------------------------
@@ -201,6 +221,25 @@ public sealed partial class ThemeRenderer
         if (_communityChipQuery.Length == 0) return "Search";
         string term = _communityChipQuery.Length > 20 ? _communityChipQuery[..19] + "…" : _communityChipQuery;
         return "“" + term + "” ×";
+    }
+
+    /// <summary>
+    /// The label and width of a search chip (the Avatars tab's and the Library's): "Search", or the term (cut when long) with a cross
+    /// that says X removes it. Made again only when the term changes, so a steady frame allocates nothing.
+    /// </summary>
+    private sealed class SearchChipLabel
+    {
+        private string _query = "";
+        public string Text { get; private set; } = "Search";
+        public int Width { get; private set; }
+
+        public void Update(AtlasFont font, string query)
+        {
+            if (Width > 0 && query == _query) return;
+            _query = query;
+            Text = query.Length == 0 ? "Search" : "“" + (query.Length > 20 ? query[..19] + "…" : query) + "” ×";
+            Width = font.MeasureText(Text) + 2 * CommunityChipPad;
+        }
     }
 
     private void LayoutCommunityRow()

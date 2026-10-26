@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using ProsperoThemes.App.Ui;
 using ProsperoThemes.Shared;
 
@@ -24,6 +25,16 @@ public static class AvatarLibrary
     /// <summary>The most avatars the grid shows; four DXT5 files and a preview are about 300 KB each.</summary>
     public const int MaxAvatars = 128;
 
+    /// <summary>
+    /// The store's names for the avatars, one <c>&lt;sha256&gt; &lt;name&gt;</c> line each. The store can rename an avatar after a
+    /// check (its pack keeps the name it was made with), and the pack itself is never rewritten, because its file name is its
+    /// hash. A pack without a line here shows its own name.
+    /// </summary>
+    public const string NamesPath = "/data/prospero-themes/avatar-names.txt";
+
+    /// <summary>The most names <see cref="NamesPath"/> keeps, and the longest name.</summary>
+    public const int MaxNames = 512, MaxNameLength = 80;
+
     public static bool IsPack(string name) => name.EndsWith(AvatarPack.Extension, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
@@ -37,6 +48,9 @@ public static class AvatarLibrary
         var sorted = new List<string>();
         foreach (string name in names) if (IsPack(name)) sorted.Add(name);
         sorted.Sort(StringComparer.Ordinal);
+        Dictionary<string, string> storeNames;
+        try { storeNames = ReadNames(files); }
+        catch { storeNames = new(StringComparer.Ordinal); }   // the packs' own names then
         foreach (string name in sorted)
         {
             if (entries.Count >= MaxAvatars) break;
@@ -46,7 +60,8 @@ public static class AvatarLibrary
                 long size = files.Length(path);
                 if (size <= 0 || size > AvatarPack.ArchiveCap) throw new ThemePackException($"is {size} bytes, over {AvatarPack.ArchiveCap}");
                 AvatarPack pack = Check(files.ReadAllBytes(path));
-                entries.Add(new AvatarEntry(path, new AvatarTile(pack.Id, pack.Name, pack.Author, pack.Preview())));
+                string shown = DigestOf(name) is { } digest && storeNames.TryGetValue(digest, out string? storeName) ? storeName : pack.Name;
+                entries.Add(new AvatarEntry(path, new AvatarTile(pack.Id, shown, pack.Author, pack.Preview())));
             }
             catch (Exception ex) { if (errors.Count < 4) errors.Add(name + ": " + ex.Message); }
         }
@@ -79,6 +94,56 @@ public static class AvatarLibrary
     }
 
     /// <summary>
+    /// The names in <see cref="NamesPath"/> by digest (lowercase); empty when there is no file. Lines that are not a digest and a
+    /// name are skipped.
+    /// </summary>
+    public static Dictionary<string, string> ReadNames(IDeviceFiles files)
+    {
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!files.Exists(NamesPath)) return names;
+        foreach (string line in Encoding.UTF8.GetString(files.ReadAllBytes(NamesPath)).Split('\n'))
+        {
+            int space = line.IndexOf(' ');
+            if (space <= 0 || !CommunityList.IsDigest(line[..space])) continue;
+            string name = Clean(line[(space + 1)..]);
+            if (name.Length > 0 && names.Count < MaxNames) names[line[..space].ToLowerInvariant()] = name;
+        }
+        return names;
+    }
+
+    /// <summary>
+    /// Keeps the store's names for <paramref name="avatars"/>, but only for packs among <paramref name="libraryFileNames"/> (the
+    /// files in <see cref="Root"/>), so a list load does not fill the file with avatars this console never had. Returns whether a
+    /// name changed; the file is written only then (.tmp, then rename).
+    /// </summary>
+    public static bool RememberNames(IDeviceFiles files, IEnumerable<StoreAvatar> avatars, IEnumerable<string> libraryFileNames)
+    {
+        var present = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string path in libraryFileNames)
+            if (DigestOf(path[(path.LastIndexOf('/') + 1)..]) is { } digest) present.Add(digest);
+        Dictionary<string, string> names = ReadNames(files);
+        bool changed = false;
+        foreach (StoreAvatar avatar in avatars)
+        {
+            string name = Clean(avatar.Name);
+            if (avatar.Sha256?.ToLowerInvariant() is not { } digest || !present.Contains(digest) || name.Length == 0) continue;
+            if (names.TryGetValue(digest, out string? known) && known == name) continue;
+            if (!names.ContainsKey(digest) && names.Count >= MaxNames) continue;
+            names[digest] = name;
+            changed = true;
+        }
+        if (!changed) return false;
+        var text = new StringBuilder();
+        var digests = new List<string>(names.Keys);
+        digests.Sort(StringComparer.Ordinal);
+        foreach (string digest in digests) text.Append(digest).Append(' ').Append(names[digest]).Append('\n');
+        files.CreateDirectoryRecursive(NamesPath[..NamesPath.LastIndexOf('/')]);
+        files.WriteAllBytes(NamesPath + ".tmp", Encoding.UTF8.GetBytes(text.ToString()));
+        files.Move(NamesPath + ".tmp", NamesPath);
+        return true;
+    }
+
+    /// <summary>
     /// Moves an avatar into <see cref="Attic"/> under its own file name. Only packs directly in <see cref="Root"/> qualify. A
     /// picture already set stays on the console; the backup that Console picture puts back is not touched.
     /// </summary>
@@ -91,6 +156,23 @@ public static class AvatarLibrary
         string target = Attic + "/" + file;
         for (int n = 2; files.Exists(target); n++) target = Attic + "/" + stem + "-" + n + AvatarPack.Extension;
         files.Move(path, target);
+    }
+
+    // The digest a file named <sha256>.p5avatar is stored under, lowercase; null for any other name.
+    private static string? DigestOf(string fileName)
+    {
+        if (!IsPack(fileName)) return null;
+        string stem = fileName[..^AvatarPack.Extension.Length];
+        return CommunityList.IsDigest(stem) ? stem.ToLowerInvariant() : null;
+    }
+
+    // One line of the names file: no line breaks or other control characters, trimmed, at most MaxNameLength characters.
+    private static string Clean(string name)
+    {
+        var clean = new StringBuilder(name.Length);
+        foreach (char c in name) clean.Append(char.IsControl(c) ? ' ' : c);
+        string text = clean.ToString().Trim();
+        return text.Length > MaxNameLength ? text[..MaxNameLength].TrimEnd() : text;
     }
 
     // Opens and validates; the first error is the message.

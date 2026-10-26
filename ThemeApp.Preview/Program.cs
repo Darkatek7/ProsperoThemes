@@ -39,6 +39,9 @@ if (demoPack is not null)
 }
 var browser = new ThemeBrowser();
 browser.SetCount(entries.Count);
+// The Library's packs on screen: all of them, or the ones the Library's search leaves (what the app keeps as its shown list; the
+// browser's Selected indexes this one).
+IReadOnlyList<ThemeLibraryEntry> libraryShown = entries;
 using var canvas = new PixelBuffer(1920, 1080);
 using var renderer = new ThemeRenderer(name => File.ReadAllBytes(Path.Combine(assets, name)), Decode);
 renderer.Status = "PC preview";
@@ -50,10 +53,19 @@ using var preview = new PreviewController(renderer, browser, new NullPreviewAudi
 // One frame of buttons the way the app feeds them to the browser and the preview (music is Square, controls are Triangle).
 void Press(UiInput input, bool square = false, bool triangle = false)
 {
-    preview.BeforeUpdate(entries);
+    preview.BeforeUpdate(libraryShown);
     browser.Update(input, preview: square, triangle: triangle);
     Dispatch(browser.TakeAction());
-    preview.Update(entries);
+    preview.Update(libraryShown);
+}
+
+// What the app does for LibraryFilter: the shown packs, the counts for the browser, the focus on the first match.
+void ShowFiltered()
+{
+    libraryShown = LibraryFilter.Apply(entries, browser.LibraryQuery);
+    browser.SetCount(libraryShown.Count, entries.Count);
+    browser.Select(0);
+    renderer.LibraryReordered();
 }
 
 // The Community tab: a store list from the loaded packs, card 2 already in the library, card 3 with an update.
@@ -101,7 +113,8 @@ IReadOnlySet<string> avatarInLibrary = new HashSet<string>(["house-2", "house-7"
 // What the app does when the Avatars list arrives: the store's answer for the browser's sort replaces the list and its pictures.
 void ReloadAvatarStore()
 {
-    List<StoreAvatar> shown = PreviewData.AvatarListing(avatarStore, (CommunitySort)browser.AvatarStoreSort);
+    string query = browser.AvatarStoreQuery;
+    List<StoreAvatar> shown = PreviewData.AvatarListing(avatarStore, (CommunitySort)browser.AvatarStoreSort, query);
     renderer.ResetAvatarStore();
     renderer.AvatarStore = shown;
     foreach (StoreAvatar a in shown)
@@ -113,7 +126,8 @@ void ReloadAvatarStore()
     renderer.AvatarStoreInLibrary = avatarInLibrary;
     renderer.AvatarStoreLiked = avatarLiked;
     renderer.AvatarStoreListSort = browser.AvatarStoreSort;
-    renderer.AvatarStoreStatus = "";
+    renderer.AvatarStoreListQuery = query;
+    renderer.AvatarStoreStatus = shown.Count == 0 && query.Length > 0 ? $"No avatars match \u201c{query}\u201d." : "";
     renderer.AvatarStoreError = false;
     browser.SetAvatarStoreCount(shown.Count);
 }
@@ -124,6 +138,7 @@ void Dispatch(ThemeAction action)
 {
     if (action == ThemeAction.PreviewMusic) preview.ToggleMusic();
     if (action == ThemeAction.AvatarStoreRefresh) ReloadAvatarStore();
+    if (action == ThemeAction.LibraryFilter) ShowFiltered();
     if (action is ThemeAction.AvatarLike or ThemeAction.AvatarDownload or ThemeAction.AvatarDownloadSet
         && browser.AvatarStoreSelected >= 0 && browser.AvatarStoreSelected < renderer.AvatarStore.Count)
     {
@@ -158,8 +173,10 @@ void Dispatch(ThemeAction action)
     renderer.Notify($"“{card.Name}” is now in your library (PC preview only).", NoticeLevel.Success);
     if (action == ThemeAction.CommunityDownloadApply)
     {
-        // The scan after the download selects the pack and the browser asks to apply it, as it does for the Detail's X.
-        browser.Select(entries.IndexOf(entry));
+        // The scan after the download selects the pack and the browser asks to apply it, as it does for the Detail's X. A search that
+        // hides the pack is taken off first.
+        if (!libraryShown.Contains(entry)) { browser.ClearLibraryQuery(); ShowFiltered(); }
+        browser.Select(libraryShown.ToList().IndexOf(entry));
         browser.ApplyAfterDownload();
     }
 }
@@ -279,14 +296,14 @@ if (args.Contains("--screenshots"))
         if (browser.Dialog != dialog) throw new InvalidOperationException($"{name}: the dialog is {browser.Dialog}, not {dialog}");
         for (int i = 0; i <= frames; i++)
         {
-            renderer.Draw(canvas.AsSurface(), browser, entries, 3 + i / 60.0, 1 / 60.0);
-            preview.Update(entries);
+            renderer.Draw(canvas.AsSurface(), browser, libraryShown, 3 + i / 60.0, 1 / 60.0);
+            preview.Update(libraryShown);
         }
         File.WriteAllBytes(Path.Combine(output, name + ".png"), PngWriter.Encode(canvas.AsSurface()));
         Console.WriteLine("saved " + name + ".png");
     }
     // Frames of a screen as the app shows them while the pad is left alone (the eased scrolls settle).
-    void Settle() { for (int i = 0; i <= 60; i++) renderer.Draw(canvas.AsSurface(), browser, entries, 3 + i / 60.0, 1 / 60.0); }
+    void Settle() { for (int i = 0; i <= 60; i++) renderer.Draw(canvas.AsSurface(), browser, libraryShown, 3 + i / 60.0, 1 / 60.0); }
     Save("library", ThemeView.Library);
     browser.Update(UiInput.None with { Right = true }); Save("library-second", ThemeView.Library);   // Selected moved right by one: the applied pack
     browser.Update(UiInput.None with { Right = true }); Save("library-applied", ThemeView.Library);   // the badge on a card that is not focused
@@ -305,6 +322,56 @@ if (args.Contains("--screenshots"))
     var back = new UiInput(false, false, false, false, false, true);
     var down = new UiInput(false, true, false, false, false, false);
     var up = new UiInput(true, false, false, false, false, false);
+    // The Library's search: Up from the packs focuses the chip beside "Your collection", X opens the keyboard, Options filters. The app
+    // shows the packs that match (LibraryFilter) and tells the browser the counts; the shots show the chip, the keyboard, the narrowed
+    // row, a term nothing matches, and the row again after the chip's X took the term off.
+    {
+        var kRight = UiInput.None with { Right = true };
+        var kLeft = UiInput.None with { Left = true };
+        void TypeInLibrary(string text)
+        {
+            foreach (char ch in text)
+            {
+                var keys = browser.SearchEditor.Keys;
+                int row = -1, column = -1;
+                for (int r = 0; r < keys.Count && row < 0; r++)
+                    for (int c = 0; c < keys[r].Count; c++)
+                        if (keys[r][c].Text == ch.ToString()) { row = r; column = c; break; }
+                if (row < 0) throw new InvalidOperationException($"No key types {ch}");
+                while (browser.SearchEditor.Row != row) browser.Update(browser.SearchEditor.Row < row ? down : up);
+                while (browser.SearchEditor.Column != column) browser.Update(browser.SearchEditor.Column < column ? kRight : kLeft);
+                browser.Update(press);
+            }
+        }
+        void ApplyLibrarySearch()
+        {
+            browser.Update(UiInput.None, options: true);
+            if (browser.TakeAction() != ThemeAction.LibraryFilter) throw new InvalidOperationException("Options did not ask for the library filter");
+            ShowFiltered();
+        }
+        browser.Update(up);
+        if (!browser.LibrarySearchFocused) throw new InvalidOperationException("Up from the packs did not focus the library search chip");
+        Save("library-search-chip", ThemeView.Library);
+        browser.Update(press);
+        string libraryWord = new string(entries[1].Manifest.Name.ToLowerInvariant().Where(char.IsAsciiLetterLower).Take(4).ToArray());
+        TypeInLibrary(libraryWord);
+        Save("library-search-keyboard", ThemeView.Search);
+        ApplyLibrarySearch();
+        Save("library-search", ThemeView.Library);
+        browser.Update(press);   // the chip's X takes the term off
+        if (browser.TakeAction() != ThemeAction.LibraryFilter) throw new InvalidOperationException("X on the library chip did not take the term off");
+        ShowFiltered();
+        browser.Update(press);
+        TypeInLibrary("qqxz");
+        ApplyLibrarySearch();
+        Save("library-search-none", ThemeView.Library);
+        browser.Update(press);
+        browser.TakeAction();
+        ShowFiltered();
+        browser.Update(down);
+        browser.Select(1);   // the second pack stays selected for the rest of the shots
+        Save("library-after-search", ThemeView.Library);
+    }
     browser.Update(press); Save("detail", ThemeView.Detail);
     // What the console has of the pack, once the app checked it: everything, then a console without some of its files.
     {
@@ -522,6 +589,29 @@ if (args.Contains("--screenshots"))
     if (browser.TakeAction() != ThemeAction.AvatarStoreRefresh) throw new InvalidOperationException("Square on the Avatars tab did not ask for the list");
     ReloadAvatarStore();
     Save("avatars-tab-sort-downloads", ThemeView.Avatars);
+    // The search: Up from the first row focuses the chip after the Sort hint, X opens the keyboard, Options asks the store for the term.
+    browser.Update(up);
+    if (!browser.AvatarSearchFocused) throw new InvalidOperationException("Up from the first row did not focus the avatar search chip");
+    Save("avatars-tab-search-chip", ThemeView.Avatars);
+    browser.Update(press);
+    Type("house");
+    Save("avatars-tab-search-keyboard", ThemeView.Search);
+    browser.Update(UiInput.None, options: true);
+    if (browser.TakeAction() != ThemeAction.AvatarStoreRefresh) throw new InvalidOperationException("Options did not ask for the avatar search");
+    ReloadAvatarStore();
+    Save("avatars-tab-search", ThemeView.Avatars);
+    browser.Update(press);   // the chip's X takes the term off
+    browser.TakeAction();
+    browser.Update(press);
+    Type("qqxz");
+    browser.Update(UiInput.None, options: true);
+    browser.TakeAction();
+    ReloadAvatarStore();
+    Save("avatars-tab-search-none", ThemeView.Avatars);
+    browser.Update(press);
+    browser.TakeAction();
+    ReloadAvatarStore();
+    browser.Update(down);
     browser.Update(UiInput.None with { PageDown = true });
     browser.StoreUrl = AppSettings.DefaultStoreUrl;
     // USB Import: the card for the web creator (QR code) beside it; with no store set, the card alone; with a long address of
@@ -535,7 +625,7 @@ if (args.Contains("--screenshots"))
     browser.Update(UiInput.None with { PageDown = true });
     browser.StoreUrl = "http://192.168.0.5:8080"; Save("system", ThemeView.System);
     // The store knows of a later release (AppUpdate): the version row says so.
-    renderer.AppVersion = "01.000.036";
+    renderer.AppVersion = "01.000.037";
     renderer.NewerVersion = "01.000.022"; Save("system-update", ThemeView.System);
     renderer.NewerVersion = "";
     renderer.UpdateState = AppUpdate.State.None;
@@ -558,7 +648,7 @@ if (args.Contains("--screenshots"))
     browser.Update(up);
     renderer.NewerVersion = "01.000.027";
     renderer.UpdateState = AppUpdate.State.Ready;
-    renderer.AppUpdateText = AppUpdate.DialogText("01.000.037", "01.000.036", 8_576_241);
+    renderer.AppUpdateText = AppUpdate.DialogText("01.000.038", "01.000.037", 8_576_241);
     Save("system-app-update", ThemeView.System);
     browser.Update(press, appUpdate: AppUpdate.State.Ready); Save("dialog-app-update", ThemeView.System, DialogKind.AppUpdate);
     browser.Update(down, appUpdate: AppUpdate.State.Ready); Save("dialog-app-update-cancel", ThemeView.System, DialogKind.AppUpdate);
@@ -688,12 +778,12 @@ app.MapGet("/frame.bmp", () =>
         // over the frames the page asks for), and a picture the frame asked for is loaded and drawn in the same request.
         double now = 3 + clock.Elapsed.TotalSeconds, delta = Math.Clamp(now - lastFrame, 1.0 / 60, .1);
         lastFrame = now;
-        preview.Update(entries);
-        renderer.Draw(canvas.AsSurface(), browser, entries, now, delta);
+        preview.Update(libraryShown);
+        renderer.Draw(canvas.AsSurface(), browser, libraryShown, now, delta);
         for (int round = 0; round < 3 && renderer.Preview.Wanted is not null; round++)
         {
-            preview.Update(entries);
-            renderer.Draw(canvas.AsSurface(), browser, entries, now, delta);
+            preview.Update(libraryShown);
+            renderer.Draw(canvas.AsSurface(), browser, libraryShown, now, delta);
         }
         return Results.Bytes(BmpEncoder.Encode(canvas.AsSurface()), "image/bmp");
     }
@@ -704,10 +794,10 @@ app.MapPost("/input/{key}", (string key) =>
     {
         var input = new UiInput(key == "up", key == "down", key == "left", key == "right", key == "confirm", key == "back")
         { PageUp = key == "l1", PageDown = key == "r1", Home = key == "home", End = key == "end" };
-        bool asksScope = browser.Selected >= 0 && entries[browser.Selected].Manifest.Targets.Any(t => t.Path == AssetRoots.AllAppsBackground);
-        ThemePart parts = browser.Selected >= 0 ? ThemeParts.In(entries[browser.Selected].Manifest) : ThemePart.None;
+        bool asksScope = browser.Selected >= 0 && libraryShown[browser.Selected].Manifest.Targets.Any(t => t.Path == AssetRoots.AllAppsBackground);
+        ThemePart parts = browser.Selected >= 0 ? ThemeParts.In(libraryShown[browser.Selected].Manifest) : ThemePart.None;
         SyncCard();
-        preview.BeforeUpdate(entries);
+        preview.BeforeUpdate(libraryShown);
         browser.Update(input, preview: key == "preview", options: key == "options", triangle: key == "triangle",
             asksScope: asksScope, allAppsScope: allAppsScope, busy: false, parts: parts, sounds: renderer.Sounds,
             communityUpdate: CardUnderCursor() is { } card && renderer.CommunityUpdates.Contains(card.Id));
@@ -716,11 +806,11 @@ app.MapPost("/input/{key}", (string key) =>
         // The app's frame loop opens the apply question that "Download and apply" asked for on its next frame; here that is now.
         if (action == ThemeAction.CommunityDownloadApply && browser.Selected >= 0)
         {
-            ThemeLibraryEntry fetched = entries[browser.Selected];
+            ThemeLibraryEntry fetched = libraryShown[browser.Selected];
             browser.Update(UiInput.None, asksScope: fetched.Manifest.Targets.Any(t => t.Path == AssetRoots.AllAppsBackground),
                 allAppsScope: allAppsScope, parts: ThemeParts.In(fetched.Manifest), sounds: renderer.Sounds);
         }
-        preview.Update(entries);
+        preview.Update(libraryShown);
         SyncCard();
         const string pcOnly = "This PC preview doesn’t write to a console; the PS5 app does.";
         // The preview's built-in store answers sort and category like the real one (Options reloads the same list).
@@ -729,7 +819,7 @@ app.MapPost("/input/{key}", (string key) =>
         if (action == ThemeAction.Apply)
         {
             if (browser.ApplyAsksScope) { allAppsScope = browser.ApplyAllApps; renderer.AllAppsBackgrounds = allAppsScope; }
-            renderer.AppliedId = entries[browser.Selected].Manifest.Id;
+            renderer.AppliedId = libraryShown[browser.Selected].Manifest.Id;
             renderer.Notify("Applied (PC preview only). " + pcOnly, NoticeLevel.Success);
         }
         if (action == ThemeAction.RestoreOriginals) { renderer.AppliedId = null; renderer.Notify("Restored (PC preview only). " + pcOnly, NoticeLevel.Success); }
@@ -756,7 +846,7 @@ app.MapPost("/input/{key}", (string key) =>
         return Results.Json(new { view = browser.View.ToString(), selected = browser.Selected, overlay = browser.ShowOverlay, dialog = browser.Dialog.ToString() });
     }
 });
-app.MapGet("/state", () => { lock (gate) return Results.Json(new { view = browser.View.ToString(), selected = browser.Selected, count = entries.Count, overlay = browser.ShowOverlay, dialog = browser.Dialog.ToString(), system = browser.SystemSelected }); });
+app.MapGet("/state", () => { lock (gate) return Results.Json(new { view = browser.View.ToString(), selected = browser.Selected, count = libraryShown.Count, overlay = browser.ShowOverlay, dialog = browser.Dialog.ToString(), system = browser.SystemSelected }); });
 app.Run();
 
 static unsafe PixelBuffer Decode(byte[] bytes)

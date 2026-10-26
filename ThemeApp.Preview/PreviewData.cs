@@ -126,14 +126,19 @@ internal static class PreviewData
         return list;
     }
 
-    /// <summary>What the store answers for an avatar list request in the order of <paramref name="sort"/>.</summary>
-    public static List<StoreAvatar> AvatarListing(IReadOnlyList<StoreAvatar> store, CommunitySort sort) =>
-        (sort switch
+    /// <summary>What the store answers for an avatar list request in the order of <paramref name="sort"/>, for the search <paramref name="query"/>.</summary>
+    public static List<StoreAvatar> AvatarListing(IReadOnlyList<StoreAvatar> store, CommunitySort sort, string query = "")
+    {
+        // The store's search: the term anywhere in the name, the author or the description.
+        IEnumerable<StoreAvatar> avatars = query.Length == 0 ? store
+            : store.Where(a => (a.Name + "\n" + a.Author + "\n" + a.Description).Contains(query, StringComparison.OrdinalIgnoreCase));
+        return (sort switch
         {
-            CommunitySort.Downloads => store.OrderByDescending(a => a.Downloads),
-            CommunitySort.New => store.Reverse(),
-            _ => store.OrderByDescending(a => a.Likes),
+            CommunitySort.Downloads => avatars.OrderByDescending(a => a.Downloads),
+            CommunitySort.New => avatars.Reverse(),
+            _ => avatars.OrderByDescending(a => a.Likes),
         }).ToList();
+    }
 
     /// <summary>The id of the card at <paramref name="index"/> as a set, or an empty set when the store has no such card.</summary>
     public static HashSet<string> Card(IReadOnlyList<CommunityTheme> store, int index)

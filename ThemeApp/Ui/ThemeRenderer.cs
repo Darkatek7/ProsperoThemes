@@ -289,6 +289,8 @@ public sealed partial class ThemeRenderer : IDisposable
 
     // The selected library entry of the current Draw, for the footer hints.
     private ThemeLibraryEntry? _selected;
+    /// <summary>The library pack the last <see cref="Draw"/> showed as the selected one (the hero, the detail, the preview); for the tests.</summary>
+    internal ThemeLibraryEntry? DrawnEntry => _selected;
 
     public void Draw(Surface surface, ThemeBrowser browser, IReadOnlyList<ThemeLibraryEntry> entries, double seconds, double delta = 1.0 / 60)
     {
@@ -318,7 +320,7 @@ public sealed partial class ThemeRenderer : IDisposable
         }
         ReleasePreview();
         Backdrop(surface, browser.View, selected);
-        DrawHeader(surface, browser.View);
+        DrawHeader(surface, browser.View, browser.SearchOrigin);
         int enter = (int)(16 * Math.Exp(-Math.Max(0, seconds - _viewStart) * 9));
         switch (browser.View)
         {
@@ -327,9 +329,9 @@ public sealed partial class ThemeRenderer : IDisposable
             case ThemeView.Community: DrawCommunity(surface, browser, enter); break;
             case ThemeView.Avatars: DrawAvatarStore(surface, browser, enter); break;
             case ThemeView.Import: DrawImport(surface, enter); break;
-            case ThemeView.System: DrawSystem(surface, browser, entries.Count, enter); break;
+            case ThemeView.System: DrawSystem(surface, browser, browser.LibraryTotal > 0 ? browser.LibraryTotal : entries.Count, enter); break;
             case ThemeView.StoreAddress: DrawStoreAddress(surface, browser.StoreEditor, enter, seconds); break;
-            case ThemeView.Search: DrawStoreAddress(surface, browser.SearchEditor, enter, seconds); break;
+            case ThemeView.Search: DrawStoreAddress(surface, browser.SearchEditor, enter, seconds, browser.SearchOrigin); break;
         }
         if (dialog) DrawDialogScrim(surface, browser, selected, entries.Count, seconds);
         else ReleaseDialogBase();
@@ -371,7 +373,7 @@ public sealed partial class ThemeRenderer : IDisposable
     {
         Color c = color ?? Muted;
         // Round buttons are a filled disc in c with a dark symbol; d-pad and options are plain outlines in c.
-        Color fg = button is PadButton.DPad or PadButton.Options ? c : Ink;
+        Color fg = button is PadButton.DPad or PadButton.DPadUp or PadButton.Options ? c : Ink;
         int w = ButtonGlyph.Draw(s, button, x, GlyphTop(_small, y), GlyphSize, fg, c, _small);
         int labelX = x + w + GlyphGap;
         DrawLeft(_small, s, label, labelX, y, c);

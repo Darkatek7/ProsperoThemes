@@ -12,6 +12,23 @@ launch evidence are recorded separately below.
 
 - Library navigation uses the d-pad or left stick. X opens details; Square opens fullscreen preview; Options
   reloads the library. Left and Right move along the theme row; Down from it reaches the avatar row (see "Avatars").
+- **Library search** (`ThemeBrowser.LibraryQuery`, `LibraryFilter` in `Library/LibraryOrder.cs`): D-pad up from the theme row
+  (also from the "Save current look" card, and from an empty result) focuses the Search chip at the right end of the "Your
+  collection" line. X on it opens the keyboard of the Themes search (the same screen, `ThemeBrowser.SearchOrigin` says where
+  it returns to); Options filters; X on the chip with a term takes it off; Down or Circle goes back to the packs, Triangle
+  (order) and Options (reload) work from the chip. The filter is local, with no network: a pack stays when its name, author
+  and description together contain every word of the term (case, accents and umlauts do not matter; the folding is a table
+  in `LibraryFilter.Fold`, not the framework's, so the console and the PC tests agree). The header names the count and the
+  term ("3 themes  ·  "kanto"  ·  A to Z"); nothing matching shows "No matching themes" with the way back, and there is no
+  "Import from USB" card while a term is on. The "Save current look" card is left out while a term is on (the result is only a part
+  of the library). The app keeps two lists: the whole library in its order (`_library`: look, names, badges) and the shown
+  packs (`_entries`: what `Selected`, the hero, Details, Preview and Apply index). The focus stays on the pack it was on when
+  it still matches, else goes to the first match; a pack that arrives while a term hides it (Download and apply, Save look)
+  takes the term off first. The System tab's count is the whole library.
+- **Footer hints for the searches:** the D-pad-up glyph (`PadButton.DPadUp`: the d-pad with only its upper arm bright) plus
+  "Search" shows in the Library's footer and on the Avatars tab's top row of cards ("Search · Filters" on the Themes tab, where
+  Up lands on the chips, the search being the first). They are drawn only where Up really reaches the chips, so the Themes and
+  Avatars footers have five hints on the top row and four below it.
 - **Preview** is an interactive stand-in for the console's home screen, made of what the pack brings (see
   "The preview" below). D-pad Left/Right moves the focus along the row of tiles (or along the control centre's
   buttons), L1/R1 switch Games and Media, Triangle goes between the home screen and the control centre, X hides the
@@ -155,7 +172,7 @@ launch evidence are recorded separately below.
   applied theme changes on the console only after it is applied again.
 - **Themes controls** (Themes tab): the d-pad moves between the cards, X asks what to do with the theme (see below),
   Square previews it, Triangle likes, Options refreshes the list, Circle goes back to the Library. The footer lists
-  Download (Update), Preview, Like (Unlike) and Refresh. The sort (Top rated, Most downloaded, New) is Square on the chips
+  Download (Update), Preview, Like (Unlike) and Refresh, and on the top row also "Search · Filters" (Up reaches the chips). The sort (Top rated, Most downloaded, New) is Square on the chips
   (and with no cards, when there is nothing to preview); its hint sits beside the pills only while the chips have the focus.
 - **Download question** (X on a card): "Download" / "Download and apply" / "Cancel" ("Update" / "Update and apply" for a
   card with a newer version). Focus starts on "Download", so a plain download is X, X. The X that opens the question never
@@ -305,7 +322,11 @@ carries a theme file, and a theme never carries an avatar.
   "Your avatars", is read with every library scan, with "Console picture" first. Down from the themes reaches the row;
   Left and Right move along it; Up or Circle goes back. X on an avatar asks "Set as profile picture"; X on Console picture
   asks "Use console picture" (focus on Cancel); Triangle asks "Remove avatar" (focus on Cancel) and moves the pack to
-  `/data/prospero-themes/attic/`. Options reloads the library. The avatar in use is marked "In use".
+  `/data/prospero-themes/attic/`. Options reloads the library. The avatar in use is marked "In use". A tile shows the
+  store's name when the pack came from the store: the store can fix a bad name after its check, while the pack keeps the
+  name it was made with and is never rewritten (its file name is its hash). The names are kept in
+  `/data/prospero-themes/avatar-names.txt`, one `<sha256> <name>` line each, written at a download and refreshed when
+  the Avatars tab loads a list that names an avatar in the library differently. A USB import shows the pack's own name.
 - **Avatars tab** (`Library/AvatarStore.cs`, `ThemeRenderer.AvatarStore.cs`): the store's list, `GET /api/avatars` with the
   sort, page and page size, in six columns. The list and its pictures load in a job of their own, so the Themes tab's list
   is not touched. Square cycles the sort (Top rated, Most downloaded, New); Options loads the list again. X asks "Download" (focus),
@@ -313,6 +334,13 @@ carries a theme file, and a theme never carries an avatar.
   "Download and set" sets the picture once the pack is in the library. Triangle likes or unlikes: POST or DELETE on
   `/api/avatars/<id>/like` with the console's `X-Device-Id`, and the liked ids are kept in
   `/data/prospero-themes/avatar-likes.json`. Cards of packs already in the library carry "In library".
+- **Avatars search** (`ThemeBrowser.AvatarStoreQuery`, `AvatarSearchFocused`): the same as the Themes tab's, with one chip, the
+  Search chip right of the sort pills' Sort hint. Up from the top row of cards (or with no cards) focuses it, Down returns, X
+  opens the shared keyboard (titled "Search avatars") or takes the term off, Options on the keyboard searches, Square and
+  Options still work from the chip. The list reloads with `&q=<term>` (`AvatarStore.ListUrl`); the header names the term the
+  list was loaded with ("4 avatars · "house" · Most downloaded"), and an empty result says "No avatars match ...". A new
+  term or sort while a load runs stops it after the picture on its way and loads the new list. The tab loads one page of
+  36 (there is no paging), so the count is the loaded list. Only the store's list is searched, never the app's own avatars.
 - **Setting a picture** (`Library/AvatarApplier.cs`): the user's profile folder is found through ThemeHelper (`LIST`, the
   `0x<ID>` folder under `/system_data/priv/cache/profile/`), and the user is the one who started the app. The first apply
   copies the files it will replace to `/data/prospero-themes/avatar-backup/0x<ID>/` with a `state.json`; the four
@@ -339,7 +367,9 @@ three kinds of toast, the Applied badge) to `ThemeApp.Preview/out/`. The Themes 
 (`community-preview*`), the Download and Update questions (`dialog-community-download`, `dialog-community-update`) and the apply
 question that "Download and apply" leads to (`dialog-community-download-apply`); the PC preview treats a card's pack as the library
 pack it was made from, so nothing is fetched or written there. The avatar shots (`library-avatars-*`, `avatars-tab*`,
-`dialog-avatar-*`) cover the Library's avatar row and the Avatars tab with its questions.
+`dialog-avatar-*`) cover the Library's avatar row and the Avatars tab with its questions. The searches have their own shots:
+`library-search-*` and `library-after-search` (the chip, the keyboard, the narrowed row, a term nothing matches), `avatars-tab-search-*`
+(the chip, the keyboard, the result and the empty result) and the Themes ones (`community-search-*`).
 
 ## Home screen restart
 
