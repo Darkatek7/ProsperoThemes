@@ -1420,6 +1420,158 @@ public class ThemeApplierTests
         if (logical is not null) Assert.Equal(logical, found);
     }
 
+    // ---- PS4 titles: the theme's BC7 background becomes their DXT1 one ------------
+
+    private const string Ps5Title = "PPSA01650", Cusa = "CUSA01127";
+    private static string TitleFile(string tid) => $"/user/appmeta/{tid}/pic0.dds";
+    private static string TitleBackup(string tid) => $"/data/prospero-themes/backup/original/appmeta/{tid}/pic0.dds";
+
+    // A 64x32 BC7 picture: halved, it fills the 32x16 DXT1 file the fake PS4 titles have (the real sizes are 3840x2160 and 1920x1080).
+    private static byte[] ThemePicture() => Dxt1Kit.Bc7(64, 32, Dxt1Kit.Colour);
+
+    /// <summary>A console with one PS5 title (a BC7 background of its own) and PS4 titles (32x16 DXT1, each file marked differently).</summary>
+    private static FakeDeviceFiles Ps4Console(params string[] ps4Titles)
+    {
+        var fake = new FakeDeviceFiles();
+        fake.Files[TitleFile(Ps5Title)] = BackgroundKit.Dds(128, 64, 200, 100, 40);
+        for (int i = 0; i < ps4Titles.Length; i++)
+            fake.Files[TitleFile(ps4Titles[i])] = Dxt1Kit.Console(32, 16, (byte)(0x10 * (i + 1)));
+        return fake;
+    }
+
+    private static ThemeApplier AllApps(FakeDeviceFiles fake) => new(fake, () => FixedNow) { IncludeAllApps = true };
+
+    [Fact]
+    public void The_all_apps_background_is_converted_to_dxt1_for_a_ps4_title_and_written_as_it_is_for_a_ps5_title()
+    {
+        FakeDeviceFiles fake = Ps4Console(Cusa);
+        byte[] ps5Original = fake.Files[TitleFile(Ps5Title)], ps4Original = fake.Files[TitleFile(Cusa)];
+        byte[] picture = ThemePicture();
+        ThemeApplier applier = AllApps(fake);
+
+        ApplyResult result = applier.Apply(MakePack(null, (AssetRoots.AllAppsBackground, picture)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Empty(applier.Skipped);
+        Assert.Equal(new[] { TitleFile(Cusa), TitleFile(Ps5Title) }.Order(), result.Written.Order());
+        Assert.Equal(picture, fake.Files[TitleFile(Ps5Title)]);
+
+        byte[] written = fake.Files[TitleFile(Cusa)];
+        Assert.Equal(ps4Original.Length, written.Length);
+        Assert.Equal(ps4Original.AsSpan(0, 128).ToArray(), written.AsSpan(0, 128).ToArray());
+        Assert.Equal(TitleBackground.ToDxt1(picture, ps4Original, out _), written);
+        Assert.NotEqual(ps4Original, written);
+
+        // Both are backed up, and the record holds what was really written.
+        Assert.Equal(ps5Original, fake.Files[TitleBackup(Ps5Title)]);
+        Assert.Equal(ps4Original, fake.Files[TitleBackup(Cusa)]);
+        string record = Encoding.UTF8.GetString(fake.Files["/data/prospero-themes/backup/written.txt"]);
+        Assert.Contains($"{Sha(written)} {TitleFile(Cusa)}", record);
+    }
+
+    [Fact]
+    public void Restoring_puts_the_original_dxt1_file_back_byte_for_byte()
+    {
+        FakeDeviceFiles fake = Ps4Console(Cusa);
+        byte[] ps4Original = fake.Files[TitleFile(Cusa)];
+        ThemePack pack = MakePack(null, (AssetRoots.AllAppsBackground, ThemePicture()));
+        ThemeApplier applier = AllApps(fake);
+        Assert.True(applier.Apply(pack).Success);
+        Assert.NotEqual(ps4Original, fake.Files[TitleFile(Cusa)]);
+
+        ApplyResult result = applier.Restore(pack);
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(ps4Original, fake.Files[TitleFile(Cusa)]);
+
+        Assert.True(applier.Apply(pack).Success);
+        Assert.NotEqual(ps4Original, fake.Files[TitleFile(Cusa)]);
+        result = applier.RestoreOriginals();
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(ps4Original, fake.Files[TitleFile(Cusa)]);
+    }
+
+    [Fact]
+    public void Applying_again_keeps_the_original_as_the_backup_and_writes_the_same_file()
+    {
+        FakeDeviceFiles fake = Ps4Console(Cusa);
+        byte[] ps4Original = fake.Files[TitleFile(Cusa)];
+        ThemePack pack = MakePack(null, (AssetRoots.AllAppsBackground, ThemePicture()));
+        ThemeApplier applier = AllApps(fake);
+        Assert.True(applier.Apply(pack).Success);
+        byte[] first = fake.Files[TitleFile(Cusa)];
+
+        ApplyResult second = applier.Apply(pack);
+
+        Assert.True(second.Success, second.Message);
+        Assert.Empty(applier.Skipped);
+        Assert.Empty(applier.Refreshed);
+        Assert.Equal(first, fake.Files[TitleFile(Cusa)]);
+        Assert.Equal(ps4Original, fake.Files[TitleBackup(Cusa)]);
+    }
+
+    [Fact]
+    public void Several_ps4_titles_share_one_conversion()
+    {
+        string[] titles = ["CUSA00001", "CUSA00002", "CUSA00003", "CUSA01127"];
+        FakeDeviceFiles fake = Ps4Console(titles);
+        byte[] picture = ThemePicture();
+        ThemeApplier applier = AllApps(fake);
+
+        ApplyResult result = applier.Apply(MakePack(null, (AssetRoots.AllAppsBackground, picture)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Empty(applier.Skipped);
+        Assert.Equal(1, applier.Conversions);
+        byte[] expected = TitleBackground.ToDxt1(picture, fake.Files[TitleBackup(titles[0])], out _)!;
+        foreach (string tid in titles)
+            Assert.Equal(expected, fake.Files[TitleFile(tid)]);
+    }
+
+    [Fact]
+    public void A_per_app_background_of_a_ps4_title_converts_too_and_leaves_the_other_titles_alone()
+    {
+        FakeDeviceFiles fake = Ps4Console(Cusa, "CUSA00001");
+        byte[] ps5Original = fake.Files[TitleFile(Ps5Title)], otherOriginal = fake.Files[TitleFile("CUSA00001")];
+        byte[] picture = ThemePicture();
+        var applier = new ThemeApplier(fake, () => FixedNow);
+
+        ApplyResult result = applier.Apply(MakePack(null, ($"apps/{Cusa}/pic0.dds", picture)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Empty(applier.Skipped);
+        Assert.Equal(new[] { TitleFile(Cusa) }, result.Written);
+        Assert.Equal(TitleBackground.ToDxt1(picture, fake.Files[TitleBackup(Cusa)], out _), fake.Files[TitleFile(Cusa)]);
+        Assert.Equal(ps5Original, fake.Files[TitleFile(Ps5Title)]);
+        Assert.Equal(otherOriginal, fake.Files[TitleFile("CUSA00001")]);
+    }
+
+    [Fact]
+    public void A_picture_the_conversion_cannot_fit_skips_the_ps4_title_and_says_why()
+    {
+        FakeDeviceFiles fake = Ps4Console(Cusa);
+        byte[] ps4Original = fake.Files[TitleFile(Cusa)];
+        byte[] odd = Dxt1Kit.Bc7(48, 24, Dxt1Kit.Colour);   // 1.5 times the console's 32x16
+        ThemeApplier applier = AllApps(fake);
+
+        ApplyResult result = applier.Apply(MakePack(null, (AssetRoots.AllAppsBackground, odd)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(odd, fake.Files[TitleFile(Ps5Title)]);
+        Assert.Equal(ps4Original, fake.Files[TitleFile(Cusa)]);
+        string skipped = Assert.Single(applier.Skipped);
+        Assert.StartsWith("appmeta/CUSA01127/pic0.dds:", skipped);
+        Assert.Contains("48x24", skipped);
+        Assert.Equal(0, applier.Conversions);
+        Assert.DoesNotContain(TitleFile(Cusa), result.Written);
+
+        // Nothing fits when the console has only the PS4 title.
+        fake = Ps4Console(Cusa);
+        fake.Files.Remove(TitleFile(Ps5Title));
+        result = AllApps(fake).Apply(MakePack(null, (AssetRoots.AllAppsBackground, odd)));
+        Assert.False(result.Success);
+        Assert.Contains("48x24", result.Message);
+    }
+
     // ---- fake -------------------------------------------------------------
 
     private sealed class FakeDeviceFiles : IDeviceFiles

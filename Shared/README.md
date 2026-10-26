@@ -29,6 +29,7 @@ happens on the PC. Anything the PC can produce, the format can already carry.
 | `ThemePack.cs` | Reads a zip or tar archive (sniffed by magic, not extension), exposes payloads, and validates a pack end to end. |
 | `PackReport.cs` | Issues and severities, so callers get a reason rather than a boolean. |
 | `Zstd.cs`, `Bc7.cs` | Decoders for the preview and for consoles before 13.00: zstd, and BC7 (all modes, also straight to half size) with the DDS header. Tested against the store's TypeScript decoder (`Shared.Tests/fixtures/bc7`). |
+| `Bc1.cs`, `TitleBackground.cs` | A BC1 (DXT1) encoder and decoder (principal-axis endpoints, least-squares refinement, 4-colour blocks only, tables for flat blocks; nothing allocated per block) and the conversion of a theme's BC7 background to a PS4 title's entry background. PS4 titles on a PS5 keep `/user/appmeta/<TID>/pic0.dds` as 1920x1080 DXT1 (128-byte legacy header, 1,036,928 bytes; measured 2026-10-26 on FW 13.00 with CUSA01127, read live by the home screen). `ToDxt1` copies the console file's own header, so flags, pitch and mip count stay as the system made them; it works a row of blocks at a time and refuses what it cannot do (not BC7, a DX10 or mipmapped or non-multiple-of-4 console file, a size that is not 1x or 2x the console's). |
 
 ## Validation rules
 

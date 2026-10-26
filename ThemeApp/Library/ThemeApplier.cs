@@ -358,7 +358,7 @@ public sealed class ThemeApplier
                         current = plan;
                         byte[] payload = PayloadFor(pack, plan);
                         byte[] music = MusicAtVolume(plan, payload);
-                        WriteVerified(plan.Device, music, plan.Unpack || music != payload ? ThemePack.Hash(music) : plan.Target.Sha256,
+                        WriteVerified(plan.Device, music, Converted(plan) || music != payload ? ThemePack.Hash(music) : plan.Target.Sha256,
                             () => touched.Add(plan));
                     }
                     if (patches.Count == 0)
@@ -416,6 +416,7 @@ public sealed class ThemeApplier
         finally
         {
             _unpacked = null;
+            ForgetDxt1();
             if (containers is not null) Release(containers);
         }
     }
@@ -431,8 +432,8 @@ public sealed class ThemeApplier
         foreach (IGrouping<string, Plan> file in plans.GroupBy(p => p.Device, StringComparer.Ordinal))
         {
             Plan plan = file.First();
-            // A container patch and an unpacked background keep the console file's size; other payloads are their own.
-            long bytes = plan.Unpack || file.Any(p => ThemePack.IsPatchLayer(p.Target.Layer))
+            // A container patch, an unpacked background and a DXT1 title background keep the console file's size; other payloads are their own.
+            long bytes = Converted(plan) || file.Any(p => ThemePack.IsPatchLayer(p.Target.Layer))
                 ? _files.Length(plan.Device)
                 : pack.Payload(plan.Target).Length;
             string folder = ParentOf(plan.Device);
@@ -863,6 +864,22 @@ public sealed class ThemeApplier
                             drop.Add(plan);
                         }
                     }
+                    else if (IsTitleBackground(plan.Target.Path) && TitleBackground.Applies(payload, stock.Span))
+                    {
+                        // A PS4 title's background is DXT1 at 1920x1080: the theme's BC7 picture is converted to it (see PayloadFor).
+                        byte[] header = stock.Span[..TitleBackground.HeaderBytes].ToArray();
+                        byte[]? converted = Dxt1For(pack, plan, header, out string refusal);
+                        string? problem = converted is null ? refusal
+                            : converted.Length != stock.Length ? $"the console's file is {stock.Length} bytes, its header says {converted.Length}"
+                            : PayloadCompat.Mismatch(converted, stock.Span, sameSize: true);
+                        if (problem is null)
+                            _dxt1Headers[plan.Device] = header;
+                        else
+                        {
+                            Skipped.Add($"{plan.Logical}: {problem}");
+                            drop.Add(plan);
+                        }
+                    }
                     else if (PayloadCompat.Mismatch(payload, stock.Span, sameSize: !IsTitleBackground(plan.Target.Path)) is { } mismatch)
                     {
                         Skipped.Add($"{plan.Logical}: {mismatch}");
@@ -1158,12 +1175,50 @@ public sealed class ThemeApplier
     // is kept, because a decoded background is 8 MB and a theme can carry 16 of them.
     private (string Path, byte[] Data)? _unpacked;
 
+    // The DXT1 title backgrounds of this apply: the first 128 bytes of the console's file (taken from its backup by Prepare) by
+    // device. A device in here gets the theme's BC7 background converted to that file's format, in the check and in the write.
+    private readonly Dictionary<string, byte[]> _dxt1Headers = new(StringComparer.Ordinal);
+
+    // The converted backgrounds by target path and console header: every PS4 title has the same header, so one conversion
+    // serves them all. A handful at most (1 MB each); the oldest goes when headers differ more than that.
+    private readonly List<(string Path, byte[] Header, byte[] Data)> _dxt1 = new();
+    private const int Dxt1CacheSize = 4;
+
+    /// <summary>How many pictures this applier converted to DXT1 (the cache makes it one per payload and header).</summary>
+    internal int Conversions { get; private set; }
+
+    private void ForgetDxt1()
+    {
+        _dxt1Headers.Clear();
+        _dxt1.Clear();
+    }
+
+    // Whether the file written for this plan is not the pack's payload as it is, and so is hashed instead of taken from the manifest.
+    private bool Converted(Plan plan) => plan.Unpack || _dxt1Headers.ContainsKey(plan.Device);
+
     private byte[] PayloadFor(ThemePack pack, Plan plan)
     {
+        if (_dxt1Headers.TryGetValue(plan.Device, out byte[]? header))
+            return Dxt1For(pack, plan, header, out string refusal) ?? throw new InvalidOperationException($"{plan.Logical}: {refusal}");
         if (!plan.Unpack) return pack.Payload(plan.Target);
         if (_unpacked is not { } last || last.Path != plan.Target.Path)
             _unpacked = last = (plan.Target.Path, Zstd.Decompress(pack.Payload(plan.Target)));
         return last.Data;
+    }
+
+    // The target's BC7 payload as the DXT1 file with this header (TitleBackground.ToDxt1), converted once per apply.
+    private byte[]? Dxt1For(ThemePack pack, Plan plan, byte[] header, out string refusal)
+    {
+        refusal = "";
+        foreach (var entry in _dxt1)
+            if (entry.Path == plan.Target.Path && entry.Header.AsSpan().SequenceEqual(header))
+                return entry.Data;
+        byte[]? data = TitleBackground.ToDxt1(pack.Payload(plan.Target), header, out refusal);
+        if (data is null) return null;
+        Conversions++;
+        if (_dxt1.Count >= Dxt1CacheSize) _dxt1.RemoveAt(0);
+        _dxt1.Add((plan.Target.Path, header, data));
+        return data;
     }
 
     /// <summary>
@@ -1192,6 +1247,7 @@ public sealed class ThemeApplier
         var perApp = new List<Plan>();
         Skipped.Clear();
         _unpacked = null;
+        ForgetDxt1();
         foreach (ThemePackTarget target in manifest.Targets)
         {
             // An unknown layer is skipped, as ThemePack.Validate's warning promises.

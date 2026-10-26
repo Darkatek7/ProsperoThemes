@@ -19,7 +19,7 @@ A theme manager for the PS5 home screen, as a native homebrew app (title ID `PPS
 - **USB import:** packs on a USB drive (its root or a `prospero-themes` folder) are checked and copied into the
   library. Avatar files (`.p5avatar`) go to your avatars.
 - **What a theme can change:** the home-screen background, including behind the system tiles (Game Library,
-  Media Gallery, All Apps and the rest), the backgrounds behind app tiles (only apps without their own image, or
+  Media Gallery, All Apps and the rest), the backgrounds behind app tiles, PS4 games included (only apps without their own image, or
   all apps), system icons (top bar, control center and power menu), the system tile icons, the UI sounds and the home music.
 - **Volume:** the System tab sets how loud a theme's UI sounds (25 % to start) and its home music (10 % to start)
   play. The app writes them again at that volume, from 10 % to 100 %.

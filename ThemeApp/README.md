@@ -41,6 +41,17 @@ launch evidence are recorded separately below.
   "Apps without their own image", "All apps" or "Cancel" (focus starts on the saved scope; the d-pad picks, X
   confirms, Circle cancels). The answer is saved as the background scope (the same setting as the App backgrounds
   row on the System tab). Packs without one get the plain "Apply theme" / "Cancel" dialog.
+- **PS4 titles (issue #14):** a PS4 title installed on a PS5 (`CUSA…`) keeps its entry background as
+  `/user/appmeta/<TID>/pic0.dds` in 1920x1080 DXT1 (legacy header, FourCC `DXT1`, one mip, exactly 1,036,928 bytes), not
+  as 3840x2160 BC7. The home screen reads that file live (measured 2026-10-26 on FW 13.00 with P.T., CUSA01127: another
+  1920x1080 DXT1 image under the console's own 128-byte header showed at once). So where a title background (all-apps or
+  `apps/<TID>/pic0.dds`) meets a console file that is a plain DXT1 DDS and the theme's payload is BC7, `ThemeApplier` does not
+  skip the title: `TitleBackground.ToDxt1` decodes the payload at the console file's size (3840x2160 halves to 1920x1080 while
+  it is decoded), encodes it as BC1 (`Shared/Bc1.cs`) and writes that under a copy of the console's own header. It is
+  converted once per apply for all such titles (cache by payload and header, 1 MB), checked against the console file's size,
+  and the hash that is verified and recorded in `backup/written.txt` is the converted file's. Backup, restore and "apply starts
+  from the defaults" work on the console's DXT1 file like on any other (the backup is the original DXT1). Another picture
+  size (not 1x or 2x the console's) is skipped with its sizes in the `Skipped` line. About 0.25 s on the PC in Release.
 - **Other firmware, system updates:** nothing in the app is tied to 13.00; it compares the console's own
   files instead. Before the first system write every target is backed up and its payload checked against
   the console's file (its backup when there is one): same DDS size and DXGI format, same PNG size, same
