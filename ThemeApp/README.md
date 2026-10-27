@@ -81,7 +81,7 @@ launch evidence are recorded separately below.
   defaults never writes an old firmware's file back.
   A file whose backup is gone (deleted from `/data`) is never taken for an original when it is a theme's:
   `backup/originals.txt` keeps the hash of every original the app saved or put back, and the bundled
-  `catalog/<firmware>.json` (StockCatalog: 9.60, 10.01, 10.40, 10.60, 11.20, 11.40, 11.60, 12.00, 12.20, 12.40, 12.70, 13.00, 13.20, 13.40, 13.42, 13.60) has the stock hash of each asset
+  `catalog/<firmware>.json` (StockCatalog: 9.60, 10.01, 10.20, 10.40, 10.60, 11.00, 11.20, 11.40, 11.60, 12.00, 12.02, 12.20, 12.40, 12.60, 12.70, 13.00, 13.20, 13.40, 13.42, 13.60) has the stock hash of each asset
   and of the icon container. A tile icon then comes back from the firmware's own copy in
   `/system_ex/rnps/apps` (on 13.00, 8 of the 9 icons are identical to it; Sony's servers updated NPXS40305).
   Any other such file has no original left on the console: Restore defaults leaves it and names it. A backup that
