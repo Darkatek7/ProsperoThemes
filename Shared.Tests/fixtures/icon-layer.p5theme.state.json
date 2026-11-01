@@ -1,0 +1,27 @@
+{
+  "pack": {
+    "id": "icon-test",
+    "name": "Icon Test",
+    "version": "1.0.0"
+  },
+  "action": "restore",
+  "when_utc": "2026-10-01T05:18:24Z",
+  "targets": [
+    {
+      "path": "/system_ex/vsh_asset/function_button_circle.png",
+      "backup": "/data/prospero-themes/backup/original/vsh_asset/function_button_circle.png"
+    },
+    {
+      "path": "/system_ex/vsh_asset/TrophyUAM_Gold.png",
+      "backup": "/data/prospero-themes/backup/original/vsh_asset/TrophyUAM_Gold.png"
+    },
+    {
+      "path": "/system_ex/vsh_asset/ac_iso_multi.png",
+      "backup": "/data/prospero-themes/backup/original/vsh_asset/ac_iso_multi.png"
+    },
+    {
+      "path": "/system_ex/vsh_asset/ScreenShare.png",
+      "backup": "/data/prospero-themes/backup/original/vsh_asset/ScreenShare.png"
+    }
+  ]
+}
