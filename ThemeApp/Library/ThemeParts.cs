@@ -29,11 +29,13 @@ public static class ThemeParts
 
     /// <summary>
     /// The part one target belongs to. Sounds are judged by the file (an <c>.at9</c>) and the vag layer, not by the
-    /// advisory "sound" tag, so a pack cannot slip a sound past a user who turned sounds off.
+    /// advisory "sound" tag, so a pack cannot slip a sound past a user who turned sounds off. A container's original
+    /// bytes are icons and sounds at once: the original comes back whole or not at all.
     /// </summary>
     public static ThemePart Of(ThemePackTarget target)
     {
         string path = target.Path;
+        if (target.Layer == ThemePack.StockLayer) return ThemePart.Icons | ThemePart.Sounds;
         if (path == AssetRoots.AllAppsBackground || AssetRoots.IsAppBackground(path, out _) || IsTitleImage(path)) return ThemePart.AppBackgrounds;
         if (target.Layer == ThemePack.VagLayer || target.Layer == "sound" || path.EndsWith(".at9", StringComparison.OrdinalIgnoreCase))
             return ThemePart.Sounds;

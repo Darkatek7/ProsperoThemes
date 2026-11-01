@@ -122,6 +122,34 @@ public static class RcoVag
         return (frames, rate);
     }
 
+    /// <summary>
+    /// Stereo frames of a stock clip for a clip of <paramref name="length"/> bytes: as they are at that length, else with
+    /// their first and last pair kept and the middle cut or padded with silence, its last frames ending the sound.
+    /// </summary>
+    public static byte[] FitStereo(ReadOnlySpan<byte> frames, int length)
+    {
+        if (frames.Length == length) return frames.ToArray();
+        byte[] fitted = new byte[length];
+        int keep = Math.Min(frames.Length, length) - 2 * Frame;
+        frames[..keep].CopyTo(fitted);
+        frames[^(2 * Frame)..].CopyTo(fitted.AsSpan(length - 2 * Frame));
+        fitted[length - 3 * Frame - Frame + 1] = 1;
+        fitted[length - 3 * Frame + 1] = 1;
+        return fitted;
+    }
+
+    /// <summary>Whether a clip's two channels are the same between its first and last pair, as a theme's mono sound leaves them (<see cref="Fit"/>).</summary>
+    public static bool ChannelsAlike(ReadOnlySpan<byte> frames)
+    {
+        for (int at = 2 * Frame; at + 4 * Frame <= frames.Length; at += 2 * Frame)
+            if (!frames.Slice(at, Frame).SequenceEqual(frames.Slice(at + Frame, Frame))) return false;
+        return true;
+    }
+
+    /// <summary>Name and sample rate of a clip's 0x30-byte header.</summary>
+    public static (string Name, int Rate) ReadHeader(ReadOnlySpan<byte> header) =>
+        (NameAt(header, 0), BinaryPrimitives.ReadInt32BigEndian(header.Slice(0x10, 4)));
+
     /// <summary>Replaces the clip <paramref name="name"/> in place.</summary>
     public static void Replace(byte[] container, string name, ReadOnlySpan<byte> vag)
     {

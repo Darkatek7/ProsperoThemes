@@ -8,8 +8,9 @@ namespace ProsperoThemes.Shared;
 /// Whether a file can still be a console's original by its look, for firmware without a measured catalog
 /// (<c>catalog/&lt;firmware&gt;.json</c>). Firmware reports from 9.60, 10.01, 11.20, 11.60, 13.00 and 13.60 agree: a stock
 /// icon container titles every icon of <see cref="ThemeIcons"/>, and the system tiles' backgrounds all differ. A
-/// replacement icon carries no title, and a theme gives many tiles one picture. Backups that had been made from a
-/// theme's files (12.40 and 13.60 reports: none of these titles, 13 tile backgrounds alike) fail both.
+/// replacement icon carries no title, and a theme gives many tiles one picture, usually the main background's too
+/// (11.60 and 13.60 reports). Backups that had been made from a theme's files (12.40 and 13.60 reports: none of these
+/// titles, 13 tile backgrounds alike) fail both.
 /// </summary>
 public static class StockLook
 {
@@ -45,6 +46,16 @@ public static class StockLook
     public static bool IsTileBackground(string logical) =>
         AssetRoots.SystemTileBackgrounds.Contains(logical, StringComparer.Ordinal)
         || AssetRoots.SystemTileBackgrounds.Any(t => AssetRoots.Uncompressed(t) == logical);
+
+    /// <summary>Whether a logical path is the main background (<see cref="AssetRoots.HubBackground"/>, also as plain DDS).</summary>
+    public static bool IsHubBackground(string logical) =>
+        logical == AssetRoots.HubBackground || logical == AssetRoots.Uncompressed(AssetRoots.HubBackground);
+
+    /// <summary>
+    /// Whether a background looks like a theme's when it shows a picture of <see cref="SharedTileHashes"/>: a tile's, or the
+    /// main background. Only the tiles make such a picture, so a main background like one single tile still passes.
+    /// </summary>
+    public static bool ShowsSharedTilePicture(string logical) => IsTileBackground(logical) || IsHubBackground(logical);
 
     /// <summary>The hashes that two or more of the tile backgrounds in <paramref name="hashes"/> (logical path → SHA-256) share.</summary>
     public static HashSet<string> SharedTileHashes(IEnumerable<KeyValuePair<string, string>> hashes) =>

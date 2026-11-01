@@ -184,7 +184,7 @@ public sealed record ThemePackManifest(
     /// <summary>Layers this build knows. An unknown layer is skipped, not refused.</summary>
     public static readonly IReadOnlySet<string> KnownLayers = new HashSet<string>(StringComparer.Ordinal)
     {
-        "background", "icon", "glyph", "sound", "video", "model", "ui", "svg", "vag",
+        "background", "icon", "glyph", "sound", "video", "model", "ui", "svg", "vag", "stock",
     };
 
     /// <summary>Parses a manifest, raising <see cref="ThemePackException"/> when it is structurally unusable.</summary>

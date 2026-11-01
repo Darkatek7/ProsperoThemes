@@ -102,6 +102,38 @@ public class FirmwareReportTests
     }
 
     [Fact]
+    public void A_main_background_with_the_tiles_picture_is_named_with_them()
+    {
+        // 11.60 and 13.60 reports: another tool's theme, the same picture on the main background and every tile.
+        string[] tiles = AssetRoots.SystemTileBackgrounds.Take(2).ToArray();
+        var files = new RcoSvgTests.MemoryDeviceFiles();
+        files.Files[Hub] = Frame(8_294_548, "other-tool");
+        foreach (string tile in tiles) files.Files["/system_ex/" + tile] = Frame(8_294_548, "other-tool");
+        var looksThemed = new List<string>();
+
+        FirmwareReport.Build(files, "13.600.007", "01.000.039", "2026-10-31T18:00:00Z",
+            [AssetRoots.HubBackground, .. tiles], looksThemed: looksThemed);
+
+        Assert.Equal([AssetRoots.HubBackground, .. tiles], looksThemed);
+    }
+
+    [Fact]
+    public void A_main_background_like_one_single_tile_is_not_named()
+    {
+        string[] tiles = AssetRoots.SystemTileBackgrounds.Take(2).ToArray();
+        var files = new RcoSvgTests.MemoryDeviceFiles();
+        files.Files[Hub] = Frame(8_294_548, "picture");
+        files.Files["/system_ex/" + tiles[0]] = Frame(8_294_548, "picture");
+        files.Files["/system_ex/" + tiles[1]] = Frame(8_294_548, "other");
+        var looksThemed = new List<string>();
+
+        FirmwareReport.Build(files, "13.600.007", "01.000.039", "2026-10-31T18:00:00Z",
+            [AssetRoots.HubBackground, .. tiles], looksThemed: looksThemed);
+
+        Assert.Empty(looksThemed);
+    }
+
+    [Fact]
     public void A_backup_that_cannot_be_read_is_reported_with_its_error_and_the_live_file_is_described()
     {
         const string RcoBackup = "/data/prospero-themes/backup/original/vsh_asset/Sce.PlayStation.PUI_UI3.rco";

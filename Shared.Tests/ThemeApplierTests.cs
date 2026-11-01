@@ -1098,6 +1098,228 @@ public class ThemeApplierTests
     private static StockCatalog CatalogWith(string logical, byte[] stock) => StockCatalog.Parse(
         $$"""{"firmware":"13.00","assets":[{"path":"{{logical}}","stock_sha256":"{{Sha(stock)}}"}]}""");
 
+    // ---- a container's original bytes (the stock layer) ---------------------
+
+    private static byte[] StockRco() => StockLookTests.StockContainer();
+
+    /// <summary>The stock container with some of its bytes changed the way a theme changes them: in place.</summary>
+    private static byte[] ThemedRco(int at = 40)
+    {
+        byte[] themed = StockRco();
+        for (int i = at; i < at + 8; i++) themed[i] ^= 0xFF;
+        return themed;
+    }
+
+    private static readonly (int Offset, int Length)[] ThemedPlace = [(40, 8)];
+
+    private static ThemePack StockPack(params (string Resource, byte[] Payload)[] targets)
+    {
+        var zip = new ZipBuilder();
+        var entries = new List<string>();
+        foreach (var (resource, payload) in targets)
+        {
+            string file = "originals/" + resource + ".bin";
+            zip.Add(file, payload);
+            entries.Add($$"""
+                {"path":"{{Rco}}","layer":"stock","resource":"{{resource}}","file":"{{file}}",
+                 "bytes":{{payload.LongLength}},"sha256":"{{Sha(payload)}}"}
+                """);
+        }
+        zip.AddText("theme.json", $$"""
+            {"format":2,"id":"t-stock","name":"Originals","author":"tests","version":"1.0",
+             "description":"stock tests","unmapped":"keep","targets":[{{string.Join(",", entries)}}]}
+            """);
+        return ThemePack.Open(zip.ToArray());
+    }
+
+    private static ThemeApplier StockApplier(FakeDeviceFiles fake) =>
+        new(fake, () => FixedNow) { Stock = CatalogWith(Rco, StockRco()) };
+
+    [Fact]
+    public void A_themed_container_without_a_backup_gets_its_original_back()
+    {
+        var fake = DeviceWithLive((RcoDevice, ThemedRco()));
+        ThemeApplier applier = StockApplier(fake);
+
+        ApplyResult result = applier.Apply(StockPack((Sha(StockRco()), RcoStockTests.Payload(StockRco(), ThemedPlace))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(StockRco(), fake.Files[RcoDevice]);
+        Assert.Empty(applier.NoOriginal);
+        Assert.Empty(applier.Skipped);
+        Assert.Contains("Icons and sounds change", result.Message);
+        Assert.DoesNotContain("no original", result.Message);
+    }
+
+    [Fact]
+    public void The_next_theme_finds_the_put_back_container_as_the_original_again()
+    {
+        var fake = DeviceWithLive((RcoDevice, ThemedRco()));
+        ThemePack pack = StockPack((Sha(StockRco()), RcoStockTests.Payload(StockRco(), ThemedPlace)));
+        Assert.True(StockApplier(fake).Apply(pack).Success);
+        Assert.False(fake.Files.ContainsKey(RcoBackup));
+
+        Assert.True(StockApplier(fake).Apply(pack).Success);
+
+        Assert.Equal(StockRco(), fake.Files[RcoBackup]);
+    }
+
+    [Fact]
+    public void Original_bytes_of_another_firmware_put_back_what_a_theme_changed()
+    {
+        (byte[] theirs, byte[] stock, byte[] themed) = RcoStockTests.Firmwares();
+        var fake = DeviceWithLive((RcoDevice, themed));
+        var applier = new ThemeApplier(fake, () => FixedNow) { Stock = RcoStockTests.Catalog(Rco, stock) };
+
+        ApplyResult result = applier.Apply(StockPack((Sha(theirs), RcoStockTests.AllOf(theirs))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(stock, fake.Files[RcoDevice]);
+        Assert.Contains("1 icon(s) and 1 sound(s) came back", result.Message);
+        Assert.Empty(applier.NoOriginal);
+    }
+
+    [Fact]
+    public void Original_bytes_of_another_firmware_leave_an_original_container_alone()
+    {
+        (byte[] theirs, byte[] stock, _) = RcoStockTests.Firmwares();
+        var fake = DeviceWithLive((RcoDevice, stock));
+        var applier = new ThemeApplier(fake, () => FixedNow) { Stock = RcoStockTests.Catalog(Rco, stock) };
+
+        Assert.True(applier.Apply(StockPack((Sha(theirs), RcoStockTests.AllOf(theirs)))).Success);
+
+        Assert.Equal(stock, fake.Files[RcoDevice]);
+    }
+
+    [Fact]
+    public void A_backup_of_this_firmware_is_written_whatever_firmware_the_bytes_are_of()
+    {
+        (byte[] theirs, byte[] stock, byte[] themed) = RcoStockTests.Firmwares();
+        var fake = DeviceWithLive((RcoDevice, themed));
+        fake.Files[RcoBackup] = stock;
+        Index(fake, Rco);
+        var applier = new ThemeApplier(fake, () => FixedNow) { Stock = RcoStockTests.Catalog(Rco, stock), KeepEarlierThemes = true };
+
+        Assert.True(applier.Apply(StockPack((Sha(theirs), RcoStockTests.AllOf(theirs)))).Success);
+
+        Assert.Equal(stock, fake.Files[RcoDevice]);
+    }
+
+    [Fact]
+    public void Nothing_to_put_back_by_name_writes_nothing()
+    {
+        byte[] themed = ThemedRco();
+        var fake = DeviceWithLive((RcoDevice, themed));
+        ThemeApplier applier = StockApplier(fake);
+
+        ApplyResult result = applier.Apply(StockPack((new string('a', 64), RcoStockTests.Payload(StockRco(), ThemedPlace))));
+
+        Assert.False(result.Success);
+        Assert.Equal(themed, fake.Files[RcoDevice]);
+    }
+
+    [Fact]
+    public void Original_bytes_need_a_catalog_to_be_checked_against()
+    {
+        byte[] themed = ThemedRco();
+        var fake = DeviceWithLive((RcoDevice, themed));
+
+        ApplyResult result = Applier(fake).Apply(StockPack((Sha(StockRco()), RcoStockTests.Payload(StockRco(), ThemedPlace))));
+
+        Assert.False(result.Success);
+        Assert.Equal(themed, fake.Files[RcoDevice]);
+    }
+
+    [Fact]
+    public void A_container_changed_outside_the_listed_places_is_left_as_it_is()
+    {
+        byte[] other = ThemedRco();
+        other[^1] ^= 0xFF;   // what a tool that does more than a theme would leave behind
+        var fake = DeviceWithLive((RcoDevice, other));
+        ThemeApplier applier = StockApplier(fake);
+
+        ApplyResult result = applier.Apply(StockPack((Sha(StockRco()), RcoStockTests.Payload(StockRco(), ThemedPlace))));
+
+        Assert.False(result.Success);
+        Assert.Contains("would not make it this firmware's original", result.Message);
+        Assert.Equal(other, fake.Files[RcoDevice]);
+        Assert.Equal(new[] { Rco }, applier.NoOriginal);
+    }
+
+    [Fact]
+    public void Places_past_the_end_of_the_container_are_refused_before_anything_changes()
+    {
+        byte[] themed = ThemedRco();
+        var fake = DeviceWithLive((RcoDevice, themed));
+        byte[] longer = new byte[themed.Length + 8];
+        ThemePack pack = StockPack((Sha(StockRco()), RcoStockTests.Payload(longer, [(40, 8), (themed.Length, 8)])));
+
+        ApplyResult result = StockApplier(fake).Apply(pack);
+
+        Assert.False(result.Success);
+        Assert.Contains("past the end", result.Message);
+        Assert.Equal(themed, fake.Files[RcoDevice]);
+    }
+
+    [Fact]
+    public void A_pack_with_several_firmwares_uses_the_one_of_this_console()
+    {
+        var fake = DeviceWithLive((RcoDevice, ThemedRco()));
+        ThemeApplier applier = StockApplier(fake);
+        byte[] wrong = RcoStockTests.Payload(new byte[StockRco().Length], ThemedPlace);
+
+        ApplyResult result = applier.Apply(StockPack(
+            (new string('a', 64), wrong),
+            (Sha(StockRco()), RcoStockTests.Payload(StockRco(), ThemedPlace))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(StockRco(), fake.Files[RcoDevice]);
+        Assert.Empty(applier.Skipped);
+    }
+
+    [Fact]
+    public void Original_bytes_also_clear_what_an_earlier_theme_left_when_earlier_themes_are_kept()
+    {
+        var fake = DeviceWithLive((RcoDevice, ThemedRco()));
+        fake.Files[RcoBackup] = StockRco();
+        Index(fake, Rco);
+        var applier = new ThemeApplier(fake, () => FixedNow) { Stock = CatalogWith(Rco, StockRco()), KeepEarlierThemes = true };
+
+        ApplyResult result = applier.Apply(StockPack((Sha(StockRco()), RcoStockTests.Payload(StockRco(), ThemedPlace))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(StockRco(), fake.Files[RcoDevice]);
+    }
+
+    [Fact]
+    public void Leaving_out_icons_and_sounds_leaves_out_the_original_bytes()
+    {
+        byte[] themed = ThemedRco();
+        var fake = DeviceWithLive((RcoDevice, themed), (Dev1, Live("one")));
+        ThemePack pack = StockPack((Sha(StockRco()), RcoStockTests.Payload(StockRco(), ThemedPlace)));
+        var applier = new ThemeApplier(fake, () => FixedNow) { Stock = CatalogWith(Rco, StockRco()), Parts = ThemePart.Background };
+
+        Assert.False(applier.Apply(pack).Success);
+
+        Assert.Equal(themed, fake.Files[RcoDevice]);
+        Assert.Equal(ThemePart.Icons | ThemePart.Sounds, ThemeParts.In(pack.Manifest));
+    }
+
+    [Fact]
+    public void A_file_with_the_firmwares_own_bytes_is_written_as_it_is_and_counts_as_put_back()
+    {
+        const string bgmPath = "vsh_asset/bgm_home.at9", bgm = "/system_ex/" + bgmPath;
+        byte[] music = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "fixtures", "atrac9", "synth-6ch.at9"));
+        var fake = DeviceWithLive((bgm, Atrac9Codec.ScaleVolume(music, 0.5)));
+        var applier = new ThemeApplier(fake, () => FixedNow) { MusicVolume = 0.1, Stock = CatalogWith(bgmPath, music) };
+
+        ApplyResult result = applier.Apply(MakePack(null, (bgmPath, music)));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(music, fake.Files[bgm]);
+        Assert.Empty(applier.NoOriginal);
+    }
+
     [Fact]
     public void A_deleted_backup_never_makes_the_themes_file_the_original()
     {
@@ -1334,6 +1556,53 @@ public class ThemeApplierTests
         Assert.Equal(Frame(1000, "ours"), fake.Files["/system_ex/" + TileA]);
         Assert.False(fake.Files.ContainsKey("/data/prospero-themes/backup/original/" + TileA));
         Assert.Equal(new[] { TileA }, applier.NoOriginal);
+    }
+
+    [Fact]
+    public void A_main_background_backup_with_the_tiles_picture_is_never_put_back()
+    {
+        byte[] theme = Frame(1000, "other-tool");
+        var fake = DeviceWithLive(("/system_ex/" + AssetRoots.HubBackground, Frame(1000, "live-hub")));
+        foreach (string logical in new[] { AssetRoots.HubBackground, TileA, TileB })
+            fake.Files["/data/prospero-themes/backup/original/" + logical] = theme;
+        Index(fake, AssetRoots.HubBackground);
+
+        ThemeApplier applier = Applier(fake);
+        applier.RestoreOriginals();
+
+        Assert.Equal(Frame(1000, "live-hub"), fake.Files["/system_ex/" + AssetRoots.HubBackground]);
+        Assert.Equal(new[] { AssetRoots.HubBackground }, applier.NoOriginal);
+    }
+
+    [Fact]
+    public void A_main_background_backup_like_one_single_tile_is_put_back()
+    {
+        byte[] picture = Frame(1000, "picture");
+        var fake = DeviceWithLive(("/system_ex/" + AssetRoots.HubBackground, Frame(1000, "live-hub")));
+        fake.Files["/data/prospero-themes/backup/original/" + AssetRoots.HubBackground] = picture;
+        fake.Files["/data/prospero-themes/backup/original/" + TileA] = picture;
+        Index(fake, AssetRoots.HubBackground);
+
+        ThemeApplier applier = Applier(fake);
+        applier.RestoreOriginals();
+
+        Assert.Equal(picture, fake.Files["/system_ex/" + AssetRoots.HubBackground]);
+        Assert.Empty(applier.NoOriginal);
+    }
+
+    [Fact]
+    public void A_first_apply_keeps_no_backup_of_a_main_background_with_the_tiles_picture()
+    {
+        byte[] theme = Frame(1000, "other-tool");
+        var fake = DeviceWithLive(("/system_ex/" + AssetRoots.HubBackground, theme), ("/system_ex/" + TileA, theme), ("/system_ex/" + TileB, theme));
+
+        ThemeApplier applier = Applier(fake);
+        ApplyResult result = applier.Apply(MakePack(null, (AssetRoots.HubBackground, Frame(1000, "ours"))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(Frame(1000, "ours"), fake.Files["/system_ex/" + AssetRoots.HubBackground]);
+        Assert.False(fake.Files.ContainsKey("/data/prospero-themes/backup/original/" + AssetRoots.HubBackground));
+        Assert.Contains(AssetRoots.HubBackground, applier.NoOriginal);
     }
 
     [Fact]

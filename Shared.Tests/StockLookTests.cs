@@ -53,4 +53,13 @@ public class StockLookTests
         Assert.True(StockLook.IsTileBackground("vsh_asset/bg_NPXS40047.dds"));
         Assert.False(StockLook.IsTileBackground("vsh_asset/bg_hub_default.dds.zst"));
     }
+
+    [Theory]
+    [InlineData("vsh_asset/bg_hub_default.dds.zst", true)]
+    [InlineData("vsh_asset/bg_hub_default.dds", true)]
+    [InlineData("vsh_asset/bg_NPXS40047.dds.zst", true)]
+    [InlineData("vsh_asset/bg_NPXS40047.dds", true)]
+    [InlineData("vsh_asset/bgm_home.at9", false)]
+    public void The_main_background_is_judged_by_the_tiles_picture_too(string logical, bool judged) =>
+        Assert.Equal(judged, StockLook.ShowsSharedTilePicture(logical));
 }

@@ -18,12 +18,19 @@ public sealed class StockCatalog
 
     /// <summary>A catalog that knows no file.</summary>
     public static readonly StockCatalog Empty = new(new Dictionary<string, string>(StringComparer.Ordinal),
-        new Dictionary<string, long>(StringComparer.Ordinal));
+        new Dictionary<string, long>(StringComparer.Ordinal), null, 0);
 
     private readonly Dictionary<string, string> _stock;
     private readonly Dictionary<string, long> _bytes;
 
-    private StockCatalog(Dictionary<string, string> stock, Dictionary<string, long> bytes) => (_stock, _bytes) = (stock, bytes);
+    private StockCatalog(Dictionary<string, string> stock, Dictionary<string, long> bytes, HashSet<int>? untitled, int icons) =>
+        (_stock, _bytes, UntitledIcons, IconCount) = (stock, bytes, untitled, icons);
+
+    /// <summary>Which icons of this firmware's stock icon container have no title, by position; null when the catalog does not say.</summary>
+    public IReadOnlySet<int>? UntitledIcons { get; }
+
+    /// <summary>How many icons this firmware's stock icon container has; 0 when the catalog does not say.</summary>
+    public int IconCount { get; }
 
     /// <summary>How many files the catalog knows.</summary>
     public int Count => _stock.Count;
@@ -65,7 +72,13 @@ public sealed class StockCatalog
                 Add(stock, bytes, assets[i]);
         JsonValue container = root["icon_container"];
         if (container.Type == JsonType.Object) Add(stock, bytes, container);
-        return stock.Count == 0 ? Empty : new StockCatalog(stock, bytes);
+        HashSet<int>? untitled = null;
+        if (container["untitled"] is { Type: JsonType.Array } list)
+        {
+            untitled = new HashSet<int>(list.Count);
+            for (int i = 0; i < list.Count; i++) untitled.Add(list[i].AsInt(-1));
+        }
+        return stock.Count == 0 ? Empty : new StockCatalog(stock, bytes, untitled, container.GetInt("icons"));
     }
 
     private static void Add(Dictionary<string, string> stock, Dictionary<string, long> bytes, JsonValue entry)

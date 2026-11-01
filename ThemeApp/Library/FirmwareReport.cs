@@ -130,7 +130,7 @@ public static class FirmwareReport
             }
             w.WriteEndArray();
             HashSet<string> shared = StockLook.SharedTileHashes(described);
-            looksThemed.AddRange(described.Where(d => StockLook.IsTileBackground(d.Key) && shared.Contains(d.Value)).Select(d => d.Key));
+            looksThemed.AddRange(described.Where(d => StockLook.ShowsSharedTilePicture(d.Key) && shared.Contains(d.Value)).Select(d => d.Key));
             w.WriteStartArray("looks_themed");
             foreach (string logical in looksThemed) w.WriteStringValue(logical);
             w.WriteEndArray();

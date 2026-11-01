@@ -248,6 +248,9 @@ public sealed class ThemeApplier
     /// </summary>
     public List<string> Refreshed { get; } = new();
 
+    // What PutBackByName brought back in this apply, for its message.
+    private string _putBack = "";
+
     private Dictionary<string, string>? _written;
     private Dictionary<string, string>? _originals;
     // The hashes two or more system tile backgrounds share (StockLook), among the backups and among the live files; found
@@ -280,6 +283,7 @@ public sealed class ThemeApplier
             Refreshed.Clear();
             NoOriginal.Clear();
             _sharedBackupTiles = _sharedLiveTiles = null;
+            _putBack = "";
 
             // Before anything on the system side is written: every target is backed up and its payload is checked
             // against the console's own file, so a target that does not fit is skipped instead of failing halfway.
@@ -360,6 +364,7 @@ public sealed class ThemeApplier
                         byte[] music = MusicAtVolume(plan, payload);
                         WriteVerified(plan.Device, music, Converted(plan) || music != payload ? ThemePack.Hash(music) : plan.Target.Sha256,
                             () => touched.Add(plan));
+                        if (IsFirmwaresOwn(plan)) NoOriginal.Remove(plan.Logical);
                     }
                     if (patches.Count == 0)
                         continue;
@@ -374,6 +379,8 @@ public sealed class ThemeApplier
                     containers.Remove(patches[0].Device);
                     foreach (Plan patch in patches)
                     {
+                        if (patch.Target.Layer == ThemePack.StockLayer)
+                            continue;   // already in the copy: Prepare wrote them to check the result
                         (int offset, int length, int rate) = _slots[(patch.Device, patch.Target.Layer, patch.Target.Resource!)];
                         byte[] fitted = patch.Target.Layer == ThemePack.VagLayer
                             ? RcoVag.Fit(SoundAtVolume(pack.Payload(patch.Target)), container.Span.Slice(offset, length), rate)
@@ -407,7 +414,7 @@ public sealed class ThemeApplier
             string skipped = Skipped.Count == 0 ? "" : $" Skipped: {string.Join("; ", Skipped)}.";
             string defaults = reset.Count == 0 ? "" : $"Put {reset.Count} earlier change(s) back to default. ";
             return new ApplyResult(true,
-                $"{ApplyRestartNote(plans, reset)}{RefreshedNote()}{defaults}Applied and verified {written.Count} target(s).{skipped} {NoOriginalNote()}".TrimEnd(), written);
+                $"{ApplyRestartNote(plans, reset)}{RefreshedNote()}{_putBack}{defaults}Applied and verified {written.Count} target(s).{skipped} {NoOriginalNote()}".TrimEnd(), written);
         }
         catch (Exception ex)
         {
@@ -829,6 +836,11 @@ public sealed class ThemeApplier
                 bool patched = false;
                 foreach (Plan plan in file)
                 {
+                    if (plan.Target.Layer == ThemePack.StockLayer)
+                    {
+                        patched = true;
+                        continue;
+                    }
                     byte[] payload;
                     try
                     {
@@ -888,7 +900,8 @@ public sealed class ThemeApplier
                 }
                 if (!patched)
                     continue;
-                if (KeepEarlierThemes && IsLastWritten(first.Device, stock.Span))
+                // Original icons and sounds start from the stock copy, whatever earlier themes are kept.
+                if (KeepEarlierThemes && !file.Any(p => p.Target.Layer == ThemePack.StockLayer) && IsLastWritten(first.Device, stock.Span))
                 {
                     // The stock copy is let go before the live one is read: one whole copy at a time.
                     stock.Dispose();
@@ -900,6 +913,7 @@ public sealed class ThemeApplier
                     containers[first.Device] = stock;
                     stock = null;
                 }
+                PutBackStock(pack, file, containers[first.Device], drop);
             }
             finally
             {
@@ -907,6 +921,76 @@ public sealed class ThemeApplier
             }
         }
         plans.RemoveAll(drop.Contains);
+    }
+
+    /// <summary>
+    /// Writes a container's original bytes (<see cref="ThemePack.StockLayer"/>) into the copy that will be written, when
+    /// the pack has them for this firmware and the result is that firmware's original, byte for byte; if it is not, a tool
+    /// changed more than icons and sounds, and the copy stays as it was. A copy that is the original already (its backup)
+    /// is simply written. With another firmware's bytes, what a theme changed comes back by name (<see cref="RcoStock.PutBackByName"/>).
+    /// </summary>
+    private void PutBackStock(ThemePack pack, IEnumerable<Plan> file, FileBytes container, HashSet<Plan> drop)
+    {
+        List<Plan> plans = file.Where(p => p.Target.Layer == ThemePack.StockLayer).ToList();
+        if (plans.Count == 0) return;
+        string logical = plans[0].Logical;
+        bool listed = Stock.TryStock(logical, out string catalog);
+        if (listed && ThemePack.Hash(container.Span) == catalog)
+        {
+            drop.UnionWith(plans.Skip(1));
+            NoOriginal.Remove(logical);
+            return;
+        }
+        Plan? own = listed ? plans.FirstOrDefault(p => p.Target.Resource == catalog) : null;
+        drop.UnionWith(plans.Skip(own is null ? 1 : 0).Where(p => p != own));
+        if (own is null)
+        {
+            PutBackByName(pack, plans[0], container, drop);
+            return;
+        }
+        byte[] before;
+        try
+        {
+            before = RcoStock.Write(pack.Payload(own.Target), container.Span);
+        }
+        catch (ThemePackException ex)
+        {
+            Skipped.Add($"{logical}: {ex.Message}");
+            drop.Add(own);
+            return;
+        }
+        if (ThemePack.Hash(container.Span) == catalog)
+        {
+            NoOriginal.Remove(logical);
+            return;
+        }
+        RcoStock.Write(before, container.Span);
+        Skipped.Add($"{logical}: the original icons and sounds would not make it this firmware's original, so it stays as it is");
+        drop.Add(own);
+    }
+
+    private void PutBackByName(ThemePack pack, Plan plan, FileBytes container, HashSet<Plan> drop)
+    {
+        RcoStock.ByName done;
+        try
+        {
+            done = RcoStock.PutBackByName(pack.Payload(plan.Target), container.Span, Stock.UntitledIcons, Stock.IconCount);
+        }
+        catch (ThemePackException ex)
+        {
+            Skipped.Add($"{plan.Logical}: {ex.Message}");
+            drop.Add(plan);
+            return;
+        }
+        int left = done.IconsLeft + done.SoundsLeft;
+        if (left > 0) Skipped.Add($"{plan.Logical}: {left} icon(s) or sound(s) of a theme could not be put back");
+        if (done.Icons + done.Sounds == 0)
+        {
+            drop.Add(plan);
+            return;
+        }
+        NoOriginal.Remove(plan.Logical);
+        _putBack = $"{done.Icons} icon(s) and {done.Sounds} sound(s) came back from another firmware's originals. ";
     }
 
     private static bool IsTitleBackground(string targetPath) =>
@@ -1068,7 +1152,7 @@ public sealed class ThemeApplier
     /// <summary>The restart note of an apply: a container that only got sounds does not claim its icons changed.</summary>
     private static string ApplyRestartNote(List<Plan> plans, List<string> reset)
     {
-        bool sounds = plans.Any(p => p.Target.Layer == ThemePack.VagLayer);
+        bool sounds = plans.Any(p => p.Target.Layer is ThemePack.VagLayer or ThemePack.StockLayer);
         var devices = plans.Where(p => !(p.Device.EndsWith(".rco", StringComparison.Ordinal)
                 && plans.All(q => q.Device != p.Device || q.Target.Layer == ThemePack.VagLayer)))
             .Select(p => p.Device).Concat(reset);
@@ -1139,15 +1223,15 @@ public sealed class ThemeApplier
 
     /// <summary>
     /// Whether a file no catalog knows looks like a theme's rather than the console's original (<see cref="StockLook"/>):
-    /// an icon container without the titles of the theme icons, or a system tile background another tile has too. With
-    /// <paramref name="live"/> the tiles are compared with the live files, else with the backups. Only an icon container
-    /// is read (<paramref name="read"/>). A file with a catalog hash is left to the catalog.
+    /// an icon container without the titles of the theme icons, a system tile background another tile has too, or a main
+    /// background two tiles have. With <paramref name="live"/> the tiles are compared with the live files, else with the
+    /// backups. Only an icon container is read (<paramref name="read"/>). A file with a catalog hash is left to the catalog.
     /// </summary>
     private bool LooksThemed(string logical, string sha256, Bytes read, bool live)
     {
         if (Stock.TryStock(logical, out _)) return false;
         if (logical.EndsWith(".rco", StringComparison.Ordinal)) return StockLook.UntitledThemeIcons(read()).Count > 0;
-        if (!StockLook.IsTileBackground(logical)) return false;
+        if (!StockLook.ShowsSharedTilePicture(logical)) return false;
         HashSet<string> shared = live ? _sharedLiveTiles ??= SharedTiles(live: true) : _sharedBackupTiles ??= SharedTiles(live: false);
         return shared.Contains(sha256);
     }
@@ -1363,12 +1447,16 @@ public sealed class ThemeApplier
         RecordOriginal(logical, sha256);
     }
 
-    // The theme's home music at MusicVolume; the payload itself at full volume, for any other file, or when the codec
-    // cannot read it (then Skipped says so and the music plays as the theme made it).
+    // Whether this plan's payload is this firmware's own file: writing it puts the original back.
+    private bool IsFirmwaresOwn(Plan plan) => Stock.TryStock(plan.Logical, out string stock) && stock == plan.Target.Sha256;
+
+    // The theme's home music at MusicVolume; the payload itself at full volume, for any other file, for the firmware's
+    // own music (the original is what was asked for), or when the codec cannot read it (then Skipped says so and the
+    // music plays as the theme made it).
     private byte[] MusicAtVolume(Plan plan, byte[] payload)
     {
         string name = plan.Device[(plan.Device.LastIndexOf('/') + 1)..];
-        if (MusicVolume >= 1.0 || double.IsNaN(MusicVolume) || !name.StartsWith("bgm_", StringComparison.Ordinal)
+        if (IsFirmwaresOwn(plan) || MusicVolume >= 1.0 || double.IsNaN(MusicVolume) || !name.StartsWith("bgm_", StringComparison.Ordinal)
             || !name.EndsWith(".at9", StringComparison.Ordinal))
             return payload;
         try

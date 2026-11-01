@@ -99,14 +99,29 @@ public static class RcoSvg
     public static System.Collections.Generic.List<(int Length, string? Title)> List(ReadOnlySpan<byte> container)
     {
         var icons = new System.Collections.Generic.List<(int, string?)>();
+        foreach ((_, int length, string? title) in Slots(container))
+            icons.Add((length, title));
+        return icons;
+    }
+
+    /// <summary>The <c>&lt;title&gt;</c> of one icon, or null.</summary>
+    public static string? TitleOf(ReadOnlySpan<byte> svg)
+    {
+        Match m = Title.Match(Encoding.UTF8.GetString(svg));
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    /// <summary>Every icon in the container, in order: where it is and its <c>&lt;title&gt;</c> (null for untitled ones).</summary>
+    public static System.Collections.Generic.List<(int Offset, int Length, string? Title)> Slots(ReadOnlySpan<byte> container)
+    {
+        var icons = new System.Collections.Generic.List<(int, int, string?)>();
         int i = 0;
         while ((i = IndexOf(container, Open, i)) >= 0)
         {
             int end = IndexOf(container, Close, i);
             if (end < 0) break;
             end += Close.Length;
-            Match m = Title.Match(Encoding.UTF8.GetString(container[i..end]));
-            icons.Add((end - i, m.Success ? m.Groups[1].Value : null));
+            icons.Add((i, end - i, TitleOf(container[i..end])));
             i = end;
         }
         return icons;

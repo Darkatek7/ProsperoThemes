@@ -78,8 +78,14 @@ public sealed class ThemePack
     /// <summary>Layer whose targets are named UI sounds (mono VAG) patched into a container, not whole files.</summary>
     public const string VagLayer = "vag";
 
+    /// <summary>
+    /// Layer whose targets are a firmware's own bytes for the icons and sounds of a container (<see cref="RcoStock"/>). The
+    /// resource is the SHA-256 of that firmware's container, so a pack can carry one for each firmware.
+    /// </summary>
+    public const string StockLayer = "stock";
+
     /// <summary>Whether a layer's targets are named resources patched into a container (several may share a path).</summary>
-    public static bool IsPatchLayer(string layer) => layer is SvgLayer or VagLayer;
+    public static bool IsPatchLayer(string layer) => layer is SvgLayer or VagLayer or StockLayer;
 
     public byte[] Payload(ThemePackTarget target)
     {
@@ -135,7 +141,7 @@ public sealed class ThemePack
             // An svg or vag target edits one named icon or sound inside a container, so several may share a path.
             bool isPatch = IsPatchLayer(t.Layer);
             if (isPatch && string.IsNullOrWhiteSpace(t.Resource))
-                report.Error("resource", $"{label}: an {t.Layer} target needs the {(t.Layer == SvgLayer ? "icon" : "sound")} name in 'resource'");
+                report.Error("resource", $"{label}: an {t.Layer} target needs the {t.Layer switch { SvgLayer => "icon name", VagLayer => "sound name", _ => "container's SHA-256" }} in 'resource'");
             if (!seen.Add(isPatch ? t.Path + "#" + t.Resource : t.Path))
                 report.Error("duplicate", $"{label}{(isPatch ? "#" + t.Resource : "")}: target appears more than once");
 
@@ -181,6 +187,13 @@ public sealed class ThemePack
             if (t.Layer == VagLayer)
             {
                 try { RcoVag.Check(payload); }
+                catch (ThemePackException ex) { report.Error("format", $"{label}#{t.Resource}: {ex.Message}"); }
+            }
+            else if (t.Layer == StockLayer)
+            {
+                if (t.Resource is { Length: > 0 } && (t.Resource.Length != 64 || !IsHex(t.Resource)))
+                    report.Error("resource", $"{label}: a {t.Layer} target needs the container's SHA-256 in 'resource'");
+                try { RcoStock.Check(payload); }
                 catch (ThemePackException ex) { report.Error("format", $"{label}#{t.Resource}: {ex.Message}"); }
             }
             else if (t.Layer == SvgLayer)

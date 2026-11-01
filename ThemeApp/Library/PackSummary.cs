@@ -43,6 +43,8 @@ public sealed class PackSummary
     public int Video { get; }
     /// <summary>Targets that belong to none of the groups (glyphs, other backgrounds, plain icons, ...).</summary>
     public int Other { get; }
+    /// <summary>Whether the pack brings back every system icon and UI sound (a <see cref="ThemePack.StockLayer"/> target, which names none).</summary>
+    public bool Originals { get; }
 
     /// <summary>
     /// The groups with something in them, in display order: home background, app background, app images, icons,
@@ -69,8 +71,9 @@ public sealed class PackSummary
     /// <summary>The groups in one line: "Background · App background · 16 icons · 9 tile icons".</summary>
     public string Text { get; }
 
-    private PackSummary(bool homeBackground, bool allApps, int perApp, int icons, int tiles, int sounds, int video, int other)
+    private PackSummary(bool homeBackground, bool allApps, int perApp, int icons, int tiles, int sounds, int video, int other, bool originals = false)
     {
+        Originals = originals;
         HomeBackground = homeBackground;
         AllApps = allApps;
         PerApp = Math.Max(0, perApp);
@@ -101,6 +104,7 @@ public sealed class PackSummary
             if (item.Counted) text.Append(item.Count).Append(' ').Append(label.ToLowerInvariant());
             else text.Append(label);
         }
+        if (Originals) text.Append(text.Length > 0 ? " · " : "").Append("all system icons and sounds");
         Groups = groups;
         Kinds = kinds;
         // A pack the store would call just "Theme" still says how many files it brings, when it brings any.
@@ -115,6 +119,7 @@ public sealed class PackSummary
     {
         bool home = false, allApps = false;
         int perApp = 0, icons = 0, tiles = 0, sounds = 0, video = 0, other = 0;
+        bool originals = false;
         foreach (ThemePackTarget t in targets)
         {
             bool counted = false;
@@ -125,9 +130,10 @@ public sealed class PackSummary
             if (t.Path.StartsWith(AssetRoots.Rnps + "/", StringComparison.Ordinal)) { tiles++; counted = true; }
             if (t.Layer == SoundLayer || t.Layer == ThemePack.VagLayer) { sounds++; counted = true; }
             if (t.Layer == VideoLayer) { video++; counted = true; }
+            if (t.Layer == ThemePack.StockLayer) { originals = true; counted = true; }
             if (!counted) other++;
         }
-        return new PackSummary(home, allApps, perApp, icons, tiles, sounds, video, other);
+        return new PackSummary(home, allApps, perApp, icons, tiles, sounds, video, other, originals);
     }
 
     /// <summary>A summary from counts, the way the store lists them (it has no video count).</summary>

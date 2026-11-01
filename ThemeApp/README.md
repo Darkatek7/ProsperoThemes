@@ -84,10 +84,16 @@ launch evidence are recorded separately below.
   `catalog/<firmware>.json` (StockCatalog: 9.60, 10.01, 10.20, 10.40, 10.60, 11.00, 11.20, 11.40, 11.60, 12.00, 12.02, 12.20, 12.40, 12.60, 12.70, 13.00, 13.20, 13.40, 13.42, 13.60) has the stock hash of each asset
   and of the icon container. A tile icon then comes back from the firmware's own copy in
   `/system_ex/rnps/apps` (on 13.00, 8 of the 9 icons are identical to it; Sony's servers updated NPXS40305).
-  Any other such file has no original left on the console: Restore defaults leaves it and names it. A backup that
+  Any other such file has no original left on the console: Restore defaults leaves it and names it. A pack can still
+  bring it back: a payload with the firmware's own bytes counts as put back, is written at full volume if it is music, and a
+  `stock` target (`Shared/RcoStock.cs`) restores the icon container's icons and sounds: exactly when it has this firmware's
+  bytes, and only if the result is the catalog's hash (otherwise the container stays and the skip note says why). With
+  another firmware's bytes it puts back what a theme changed by name: a theme's icon has lost its title, so it is an
+  untitled slot the catalog does not list, known by its length; a theme's sound keeps its name and has both channels alike. A backup that
   does not match the catalog is never written back. On firmware without a catalog (one no report came from yet) the look
   decides (`Shared/StockLook.cs`): a stock icon container titles every theme icon (home, settings, power, ps_store and
-  the rest), and the system tiles' backgrounds all differ; reports from 9.60 to 13.60 agree. A backup that fails this
+  the rest), and the system tiles' backgrounds all differ; reports from 9.60 to 13.60 agree. A main background with a
+  picture two or more tiles share counts as a theme's too (11.60 and 13.60 reports); one tile like it is not enough. A backup that fails this
   (made from another tool's theme, as on a 12.40 console whose 13 tile backgrounds were one picture) is never written
   back nor recorded as an original, and a first apply keeps no backup of such a live file; both are named. The System tab shows the firmware
   (`SystemInfo.SystemSoftwareVersion`, "13.000.040" on the test console); `state.json` records it.

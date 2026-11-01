@@ -209,8 +209,7 @@ public class CreatorPromoTests
         Assert.Equal(libraryWithout, Hash(canvas, 0, 400, 1920, 560));
     }
 
-    // The least a steady frame allocates over twenty of them: garbage made by the screen is in every frame, while the
-    // runtime's own work (JIT stubs on a first tier) comes and goes.
+    // The least a steady frame allocates over twenty of them: garbage made by the screen is in every frame.
     private static long SteadyAllocation(ThemeRenderer renderer, PixelBuffer canvas, ThemeBrowser browser)
     {
         for (int i = 0; i < 40; i++) renderer.Draw(canvas.AsSurface(), browser, None, 5 + i * 0.1);
@@ -224,20 +223,25 @@ public class CreatorPromoTests
         return least;
     }
 
-    [Fact]
-    public void The_pointers_add_no_allocation_to_a_steady_frame()
+    /// <summary>The tests that measure a frame's allocations: they run alone (<see cref="AllocationMeasuringCollection"/>).</summary>
+    [Collection(AllocationMeasuringCollection.Name)]
+    public class Allocations
     {
-        using var renderer = NewRenderer();
-        using var canvas = new PixelBuffer(1920, 1080);
-        var browser = new ThemeBrowser { StoreUrl = "" };
-        foreach (ThemeView view in new[] { ThemeView.Library, ThemeView.Community, ThemeView.Import })
+        [Fact]
+        public void The_pointers_add_no_allocation_to_a_steady_frame()
         {
-            Show(renderer, canvas, browser, view);
-            browser.StoreUrl = "";
-            long without = SteadyAllocation(renderer, canvas, browser);
-            browser.StoreUrl = DefaultStore;
-            long with = SteadyAllocation(renderer, canvas, browser);
-            Assert.True(with <= without, $"{view}: {with} bytes a frame with the pointers, {without} without");
+            using var renderer = NewRenderer();
+            using var canvas = new PixelBuffer(1920, 1080);
+            var browser = new ThemeBrowser { StoreUrl = "" };
+            foreach (ThemeView view in new[] { ThemeView.Library, ThemeView.Community, ThemeView.Import })
+            {
+                Show(renderer, canvas, browser, view);
+                browser.StoreUrl = "";
+                long without = SteadyAllocation(renderer, canvas, browser);
+                browser.StoreUrl = DefaultStore;
+                long with = SteadyAllocation(renderer, canvas, browser);
+                Assert.True(with <= without, $"{view}: {with} bytes a frame with the pointers, {without} without");
+            }
         }
     }
 }

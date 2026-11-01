@@ -769,12 +769,14 @@ THEME_ICONS = (
     "iconid_download", "iconid_sound", "iconid_mic", "iconid_ps5_wireless_controller",
 )
 TILE_BACKGROUND = re.compile(r"^vsh_asset/bg_NPXS\d{5}\.dds(\.zst)?$")
+HUB_BACKGROUND = re.compile(r"^vsh_asset/bg_hub_default\.dds(\.zst)?$")
 
 
 def report_looks_themed(report: dict) -> set:
     """Paths whose described copy in a firmware report looks like a theme's, not the console's original.
 
-    The app names them in "looks_themed" (01.000.026 on); for older reports the same rules are applied here.
+    The app names them in "looks_themed" (01.000.026 on); for older reports the same rules are applied here. Up
+    to 01.000.038 the app leaves out a main background with the tiles' picture, so that rule always runs here.
     """
     themed = set(report.get("looks_themed", []))
     by_hash = {}
@@ -788,9 +790,10 @@ def report_looks_themed(report: dict) -> set:
             titled = {x["title"].rsplit("/", 1)[-1] for x in icons if x.get("title")}
             if any(name not in titled for name in THEME_ICONS):
                 themed.add(f["path"])
-    for paths in by_hash.values():
-        if len(paths) > 1:
-            themed.update(paths)
+    shared = {sha for sha, paths in by_hash.items() if len(paths) > 1}
+    for f in report["files"]:
+        if f.get("exists") and f.get("sha256") in shared and (TILE_BACKGROUND.match(f["path"]) or HUB_BACKGROUND.match(f["path"])):
+            themed.add(f["path"])
     return themed
 
 

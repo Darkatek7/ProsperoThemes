@@ -336,39 +336,6 @@ public unsafe class CommunityScreenTests
     }
 
     [Fact]
-    public void Steady_frames_with_the_chips_focused_and_scrolled_allocate_nothing_beyond_the_focus_ring()
-    {
-        using var screen = new Screen(24);
-        screen.Renderer.CommunityListSort = 0;
-        // Paint.FocusRing allocates a few bytes in a Debug build (a collection expression) and none when optimised: measure
-        // it under the same conditions so only what the chip row itself allocates is held against it.
-        Surface scratch = screen.Canvas.AsSurface();
-        for (int i = 0; i < 3; i++) Paint.FocusRing(scratch, 100, 100, 200, 80, 14);
-        long ringBefore = GC.GetAllocatedBytesForCurrentThread();
-        Paint.FocusRing(scratch, 100, 100, 200, 80, 14);
-        long ring = GC.GetAllocatedBytesForCurrentThread() - ringBefore;
-
-        // The chips focused, the last one chosen and the row scrolled to it, with a category on the list.
-        screen.Browser.Update(Up);
-        for (int i = 0; i < ThemeBrowser.CommunityChipCount; i++) screen.Browser.Update(Right);
-        screen.Browser.Update(Confirm);
-        screen.Renderer.CommunityListCategory = screen.Browser.CommunityCategory;
-        screen.Settle();
-        screen.Frame(40);   // the runtime's own warm-up (tiered JIT) is over after a few dozen frames
-        var perFrame = new long[40];
-        for (int i = 0; i < perFrame.Length; i++)
-        {
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            screen.Frame();
-            perFrame[i] = GC.GetAllocatedBytesForCurrentThread() - before;
-        }
-        // The JIT may allocate on this thread in some frames; garbage made by the screen would show in every one.
-        int run = 0, best = 0;
-        foreach (long bytes in perFrame) { run = bytes <= ring ? run + 1 : 0; best = Math.Max(best, run); }
-        Assert.True(best >= 10, $"bytes allocated per steady frame: {string.Join(", ", perFrame)} (a focus ring is {ring})");
-    }
-
-    [Fact]
     public void Cards_leave_the_gaps_between_them_and_the_footer_band_clear()
     {
         // The screen without cards is the reference for what the backdrop looks like where nothing is drawn (its message
@@ -638,32 +605,6 @@ public unsafe class CommunityScreenTests
     // ---- Cards: cost -------------------------------------------------------------------------------------------------
 
     [Fact]
-    public void A_steady_frame_allocates_no_more_than_the_screen_with_one_card()
-    {
-        // The focus ring (a shared helper, Paint.FocusRing) allocates a little in a Debug build and not in a Release one;
-        // the cards, badges, hearts, sort control and count must add nothing to it.
-        long Steady(Screen screen)
-        {
-            screen.Settle();
-            screen.Frame(5);
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            screen.Frame(30);
-            return GC.GetAllocatedBytesForCurrentThread() - before;
-        }
-        using var one = new Screen(1);
-        long baseline = Steady(one);
-
-        using var screen = new Screen(24);
-        screen.Renderer.CommunityLiked = new HashSet<string> { "id1" };
-        screen.Renderer.CommunityUpdates = new HashSet<string> { "id2" };
-        screen.Renderer.CommunityInLibrary = new HashSet<string> { "id3" };
-        screen.Renderer.CommunityQueued = new HashSet<string> { "id4" };
-        screen.Renderer.CommunityDownloading = "id5";
-        screen.Renderer.CommunityListSort = 0;
-        Assert.True(Steady(screen) <= baseline, "the community grid allocates in a steady frame");
-    }
-
-    [Fact]
     public void A_queued_theme_and_the_one_downloading_show_their_state_on_the_card()
     {
         using var screen = new Screen(4);
@@ -848,4 +789,69 @@ public unsafe class CommunityScreenTests
     [InlineData("", null)]
     public void The_answer_says_whether_the_theme_is_liked_now(string json, bool? expected) =>
         Assert.Equal(expected, CommunityList.ParseLiked(json));
+
+    /// <summary>The tests that measure a frame's allocations: they run alone (<see cref="AllocationMeasuringCollection"/>).</summary>
+    [Collection(AllocationMeasuringCollection.Name)]
+    public class Allocations
+    {
+        [Fact]
+        public void Steady_frames_with_the_chips_focused_and_scrolled_allocate_nothing_beyond_the_focus_ring()
+        {
+            using var screen = new Screen(24);
+            screen.Renderer.CommunityListSort = 0;
+            // Paint.FocusRing allocates a few bytes in a Debug build (a collection expression) and none when optimised: measure
+            // it under the same conditions so only what the chip row itself allocates is held against it.
+            Surface scratch = screen.Canvas.AsSurface();
+            for (int i = 0; i < 3; i++) Paint.FocusRing(scratch, 100, 100, 200, 80, 14);
+            long ringBefore = GC.GetAllocatedBytesForCurrentThread();
+            Paint.FocusRing(scratch, 100, 100, 200, 80, 14);
+            long ring = GC.GetAllocatedBytesForCurrentThread() - ringBefore;
+
+            // The chips focused, the last one chosen and the row scrolled to it, with a category on the list.
+            screen.Browser.Update(Up);
+            for (int i = 0; i < ThemeBrowser.CommunityChipCount; i++) screen.Browser.Update(Right);
+            screen.Browser.Update(Confirm);
+            screen.Renderer.CommunityListCategory = screen.Browser.CommunityCategory;
+            screen.Settle();
+            screen.Frame(40);   // the runtime's own warm-up (tiered JIT) is over after a few dozen frames
+            var perFrame = new long[40];
+            for (int i = 0; i < perFrame.Length; i++)
+            {
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                screen.Frame();
+                perFrame[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+            }
+            // Garbage made by the screen would show in every frame, not only in some.
+            int run = 0, best = 0;
+            foreach (long bytes in perFrame) { run = bytes <= ring ? run + 1 : 0; best = Math.Max(best, run); }
+            Assert.True(best >= 10, $"bytes allocated per steady frame: {string.Join(", ", perFrame)} (a focus ring is {ring})");
+        }
+
+        [Fact]
+        public void A_steady_frame_allocates_no_more_than_the_screen_with_one_card()
+        {
+            // The focus ring (a shared helper, Paint.FocusRing) allocates a little in a Debug build and not in a Release one;
+            // the cards, badges, hearts, sort control and count must add nothing to it.
+            long Steady(Screen screen)
+            {
+                screen.Settle();
+                screen.Frame(5);
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                screen.Frame(30);
+                return GC.GetAllocatedBytesForCurrentThread() - before;
+            }
+            using var one = new Screen(1);
+            long baseline = Steady(one);
+
+            using var screen = new Screen(24);
+            screen.Renderer.CommunityLiked = new HashSet<string> { "id1" };
+            screen.Renderer.CommunityUpdates = new HashSet<string> { "id2" };
+            screen.Renderer.CommunityInLibrary = new HashSet<string> { "id3" };
+            screen.Renderer.CommunityQueued = new HashSet<string> { "id4" };
+            screen.Renderer.CommunityDownloading = "id5";
+            screen.Renderer.CommunityListSort = 0;
+            long grid = Steady(screen);
+            Assert.True(grid <= baseline, $"the community grid allocates in a steady frame: {grid} bytes against {baseline} with one card");
+        }
+    }
 }

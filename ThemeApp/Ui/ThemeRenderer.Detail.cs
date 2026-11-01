@@ -98,7 +98,7 @@ public sealed partial class ThemeRenderer
             : version.Length > 0 ? "Version " + version : author;
 
         // The list: the groups, then the files that belong to none of them.
-        int groups = summary.Groups.Count, rows = groups + (summary.Other > 0 ? 1 : 0);
+        int groups = summary.Groups.Count, rows = groups + (summary.Originals ? 1 : 0) + (summary.Other > 0 ? 1 : 0);
         var labels = new string[rows];
         var counts = new string[rows];
         var lacking = new bool[rows];
@@ -108,10 +108,15 @@ public sealed partial class ThemeRenderer
             labels[i] = label;
             (counts[i], lacking[i]) = FitCount(count, missing?.Count(summary.Kinds[i]) ?? 0);
         }
+        if (summary.Originals)
+        {
+            labels[groups] = "System icons and sounds";
+            counts[groups] = "All";
+        }
         if (summary.Other > 0)
         {
-            labels[groups] = summary.Other == 1 ? "Other file" : "Other files";
-            (counts[groups], lacking[groups]) = FitCount(summary.Other, missing?.Other ?? 0);
+            labels[rows - 1] = summary.Other == 1 ? "Other file" : "Other files";
+            (counts[rows - 1], lacking[rows - 1]) = FitCount(summary.Other, missing?.Other ?? 0);
         }
         t.RowLabels = labels;
         t.RowCounts = counts;

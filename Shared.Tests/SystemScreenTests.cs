@@ -85,85 +85,6 @@ public class SystemScreenTests
         return copy;
     }
 
-    // ---- Allocations ------------------------------------------------------------------------------------------------
-
-    [Fact]
-    public void Steady_frames_of_the_four_screens_allocate_nothing()
-    {
-        using var renderer = NewRenderer(FlatCover);
-        using var canvas = new PixelBuffer(1920, 1080);
-        ThemeLibraryEntry[] entries = [Pack()];
-        var browser = new ThemeBrowser();
-        browser.SetCount(entries.Length);
-        renderer.LibraryStatus = "2 imported · 1 already in library · 3 skipped · a-pack.p5theme: Pack too large (48 MiB at most).";
-        renderer.Firmware = "13.000.000";
-        renderer.AppVersion = "01.000.005";
-        browser.StoreUrl = "http://192.168.0.5:8080";
-
-        // Paint.FocusRing builds a small table with a collection expression; on the JIT's first tier (a Debug test run)
-        // that costs a few bytes per call, on the optimised JIT and on the console it costs nothing. Measure that here,
-        // under the same conditions, so only what the screens themselves allocate is held against them.
-        Surface scratch = canvas.AsSurface();
-        for (int i = 0; i < 3; i++) Paint.FocusRing(scratch, 100, 100, 200, 80, 14);
-        long ringBefore = GC.GetAllocatedBytesForCurrentThread();
-        Paint.FocusRing(scratch, 100, 100, 200, 80, 14);
-        long ring = GC.GetAllocatedBytesForCurrentThread() - ringBefore;
-
-        void Steady(string name, ThemeBrowser b, int rings = 0)
-        {
-            // Warm up: the view slides in for about half a second, caches and sprites are made on first use, and in a full
-            // test run the JIT promotes the drawing methods during the first few dozen frames.
-            for (int i = 0; i < 40; i++) renderer.Draw(canvas.AsSurface(), b, entries, 5 + i * 0.1);
-            var perFrame = new long[40];
-            for (int i = 0; i < perFrame.Length; i++)
-            {
-                long before = GC.GetAllocatedBytesForCurrentThread();
-                renderer.Draw(canvas.AsSurface(), b, entries, 10 + i * 0.4);   // the caret blinks on the way
-                perFrame[i] = GC.GetAllocatedBytesForCurrentThread() - before;
-            }
-            // Some frames may carry the runtime's own work (tiered JIT stubs allocate on the calling thread, at moments that
-            // depend on what the rest of the test run warmed up); garbage made by the screen would show in every frame, so
-            // ten clean frames in a row prove the screen itself allocates nothing.
-            int run = 0, best = 0;
-            foreach (long bytes in perFrame) { run = bytes <= rings * ring ? run + 1 : 0; best = Math.Max(best, run); }
-            Assert.True(best >= 10,
-                $"{name}: bytes allocated per steady frame: {string.Join(", ", perFrame)} (a focus ring is {ring})");
-        }
-
-        To(browser, ThemeView.Import);
-        Steady("import", browser);
-        renderer.Busy = true;
-        Steady("import busy", browser);
-        renderer.Busy = false;
-        To(browser, ThemeView.System);
-        Steady("system", browser, rings: 1);
-        browser.Update(Down);
-        Steady("system, store address row", browser, rings: 1);
-        browser.OpenStoreAddress("https://" + new string('x', 150) + ".example.de", "The address must start with http:// or https://.");
-        Steady("keyboard, long text", browser, rings: 1);
-        browser.OpenStoreAddress("");
-        Steady("keyboard, empty", browser, rings: 1);
-
-        // The download question over a store card: its name and line are made once, not per frame.
-        renderer.Community = [new CommunityTheme("id0", "Theme 0", "Author 0", "1.0", "", 1, 10, 100, null, "http://x/0",
-            Fallback: true, AllApps: true, PerApp: 1, Icons: 4, Tiles: 2)];
-        var store = new ThemeBrowser();
-        store.SetCommunityCount(1);
-        To(store, ThemeView.Community);
-        store.Update(UiInput.None with { Confirm = true });
-        Assert.Equal(DialogKind.CommunityDownload, store.Dialog);
-        Steady("community download question", store, rings: 1);
-
-        var preview = new ThemeBrowser();
-        preview.SetCount(1);
-        preview.Update(UiInput.None, preview: true);
-        Assert.Equal(ThemeView.Preview, preview.View);
-        Steady("preview", preview, rings: 1);
-        preview.Update(UiInput.None, triangle: true);
-        Assert.Equal(PreviewScene.ControlCentre, preview.PreviewScene);
-        Steady("preview, control centre", preview, rings: 1);
-    }
-
     // ---- System -----------------------------------------------------------------------------------------------------
 
     [Fact]
@@ -443,6 +364,87 @@ public class SystemScreenTests
             Settled(renderer, canvas, browser, [wrapped], 15);
             for (int y = 950; y < 1080; y++) Assert.True(RowIsFlat(canvas, y, 0, 1100), $"row {y} below a two-line name is not flat");
             Assert.False(RowIsFlat(canvas, 915, 90, 1300));   // the second line is there
+        }
+    }
+
+    /// <summary>The tests that measure a frame's allocations: they run alone (<see cref="AllocationMeasuringCollection"/>).</summary>
+    [Collection(AllocationMeasuringCollection.Name)]
+    public class Allocations
+    {
+        [Fact]
+        public void Steady_frames_of_the_four_screens_allocate_nothing()
+        {
+            using var renderer = NewRenderer(FlatCover);
+            using var canvas = new PixelBuffer(1920, 1080);
+            ThemeLibraryEntry[] entries = [Pack()];
+            var browser = new ThemeBrowser();
+            browser.SetCount(entries.Length);
+            renderer.LibraryStatus = "2 imported · 1 already in library · 3 skipped · a-pack.p5theme: Pack too large (48 MiB at most).";
+            renderer.Firmware = "13.000.000";
+            renderer.AppVersion = "01.000.005";
+            browser.StoreUrl = "http://192.168.0.5:8080";
+
+            // Paint.FocusRing builds a small table with a collection expression; on the JIT's first tier (a Debug test run)
+            // that costs a few bytes per call, on the optimised JIT and on the console it costs nothing. Measure that here,
+            // under the same conditions, so only what the screens themselves allocate is held against them.
+            Surface scratch = canvas.AsSurface();
+            for (int i = 0; i < 3; i++) Paint.FocusRing(scratch, 100, 100, 200, 80, 14);
+            long ringBefore = GC.GetAllocatedBytesForCurrentThread();
+            Paint.FocusRing(scratch, 100, 100, 200, 80, 14);
+            long ring = GC.GetAllocatedBytesForCurrentThread() - ringBefore;
+
+            void Steady(string name, ThemeBrowser b, int rings = 0)
+            {
+                // Warm up: the view slides in for about half a second, caches and sprites are made on first use, and in a full
+                // test run the JIT promotes the drawing methods during the first few dozen frames.
+                for (int i = 0; i < 40; i++) renderer.Draw(canvas.AsSurface(), b, entries, 5 + i * 0.1);
+                var perFrame = new long[40];
+                for (int i = 0; i < perFrame.Length; i++)
+                {
+                    long before = GC.GetAllocatedBytesForCurrentThread();
+                    renderer.Draw(canvas.AsSurface(), b, entries, 10 + i * 0.4);   // the caret blinks on the way
+                    perFrame[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+                }
+                // Garbage made by the screen would show in every frame, so ten clean frames in a row prove the screen itself
+                // allocates nothing.
+                int run = 0, best = 0;
+                foreach (long bytes in perFrame) { run = bytes <= rings * ring ? run + 1 : 0; best = Math.Max(best, run); }
+                Assert.True(best >= 10,
+                    $"{name}: bytes allocated per steady frame: {string.Join(", ", perFrame)} (a focus ring is {ring})");
+            }
+
+            To(browser, ThemeView.Import);
+            Steady("import", browser);
+            renderer.Busy = true;
+            Steady("import busy", browser);
+            renderer.Busy = false;
+            To(browser, ThemeView.System);
+            Steady("system", browser, rings: 1);
+            browser.Update(Down);
+            Steady("system, store address row", browser, rings: 1);
+            browser.OpenStoreAddress("https://" + new string('x', 150) + ".example.de", "The address must start with http:// or https://.");
+            Steady("keyboard, long text", browser, rings: 1);
+            browser.OpenStoreAddress("");
+            Steady("keyboard, empty", browser, rings: 1);
+
+            // The download question over a store card: its name and line are made once, not per frame.
+            renderer.Community = [new CommunityTheme("id0", "Theme 0", "Author 0", "1.0", "", 1, 10, 100, null, "http://x/0",
+                Fallback: true, AllApps: true, PerApp: 1, Icons: 4, Tiles: 2)];
+            var store = new ThemeBrowser();
+            store.SetCommunityCount(1);
+            To(store, ThemeView.Community);
+            store.Update(UiInput.None with { Confirm = true });
+            Assert.Equal(DialogKind.CommunityDownload, store.Dialog);
+            Steady("community download question", store, rings: 1);
+
+            var preview = new ThemeBrowser();
+            preview.SetCount(1);
+            preview.Update(UiInput.None, preview: true);
+            Assert.Equal(ThemeView.Preview, preview.View);
+            Steady("preview", preview, rings: 1);
+            preview.Update(UiInput.None, triangle: true);
+            Assert.Equal(PreviewScene.ControlCentre, preview.PreviewScene);
+            Steady("preview, control centre", preview, rings: 1);
         }
     }
 }

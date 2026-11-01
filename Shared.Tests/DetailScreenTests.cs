@@ -97,31 +97,6 @@ public class DetailScreenTests
 
     // ---- Cost -------------------------------------------------------------------------------------------------------
 
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public void Steady_frames_of_the_detail_screen_allocate_nothing(bool busy, bool applied)
-    {
-        using var scene = new Scene(Entry("The Simpsons - Springfield After Dark", LongDescription, StoreTargets()));
-        scene.Renderer.Busy = busy;
-        if (applied) scene.Renderer.AppliedId = scene.Entries[0].Manifest.Id;
-        for (int i = 0; i < 5; i++) scene.Draw();   // the slide-in, the first draws of every cache and the JIT are over
-
-        // Something drawn on every frame would allocate in every window. When the whole suite runs, a single burst of a
-        // couple of hundred bytes can still land in one frame of one window and never come back (measured: one frame,
-        // once; the cause was not pinned down, the glyph sprites are one cache shared by all tests running in parallel).
-        // So the screen is steady when some window of frames allocates nothing.
-        long fewest = long.MaxValue;
-        for (int attempt = 0; attempt < 10 && fewest != 0; attempt++)
-        {
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < 30; i++) scene.Draw();
-            fewest = Math.Min(fewest, GC.GetAllocatedBytesForCurrentThread() - before);
-        }
-        Assert.Equal(0, fewest);
-    }
-
     [Fact]
     public void A_settled_screen_is_a_still_picture_that_costs_no_decodes()
     {
@@ -387,5 +362,33 @@ public class DetailScreenTests
         uint corner = PixelAt(scene.Canvas, Theme.SafeX, Theme.ContentTop);
         uint edge = PixelAt(scene.Canvas, Theme.SafeX + Theme.RadiusCard, Theme.ContentTop);
         Assert.NotEqual(corner, edge);
+    }
+
+    /// <summary>The tests that measure a frame's allocations: they run alone (<see cref="AllocationMeasuringCollection"/>).</summary>
+    [Collection(AllocationMeasuringCollection.Name)]
+    public class Allocations
+    {
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(true, false)]
+        [InlineData(false, true)]
+        public void Steady_frames_of_the_detail_screen_allocate_nothing(bool busy, bool applied)
+        {
+            using var scene = new Scene(Entry("The Simpsons - Springfield After Dark", LongDescription, StoreTargets()));
+            scene.Renderer.Busy = busy;
+            if (applied) scene.Renderer.AppliedId = scene.Entries[0].Manifest.Id;
+            for (int i = 0; i < 5; i++) scene.Draw();   // the slide-in, the first draws of every cache and the JIT are over
+
+            // Something drawn on every frame would allocate in every window, so the screen is steady when some window of
+            // frames allocates nothing.
+            long fewest = long.MaxValue;
+            for (int attempt = 0; attempt < 10 && fewest != 0; attempt++)
+            {
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 30; i++) scene.Draw();
+                fewest = Math.Min(fewest, GC.GetAllocatedBytesForCurrentThread() - before);
+            }
+            Assert.Equal(0, fewest);
+        }
     }
 }

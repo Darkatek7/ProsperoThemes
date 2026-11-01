@@ -739,48 +739,6 @@ public class SearchTests
     }
 
     [Fact]
-    public void Steady_library_frames_with_the_chip_focused_and_a_term_allocate_nothing_beyond_the_focus_ring()
-    {
-        using var screen = new LibraryScreen(All, All.Length);
-        screen.Browser.Update(Up);
-        screen.Browser.Update(X);
-        Type(screen.Browser, "e");
-        screen.Browser.Update(UiInput.None, options: true);
-        screen.Browser.TakeAction();
-        screen.Entries = LibraryFilter.Apply(All, "e");
-        screen.Browser.SetCount(screen.Entries.Count, All.Length);
-        screen.Settle();
-        AssertSteady(() => screen.Frame(), FocusRingBytes(screen.Canvas.AsSurface()));
-    }
-
-    [Fact]
-    public void Steady_library_frames_with_no_match_allocate_nothing_beyond_the_focus_ring()
-    {
-        using var screen = new LibraryScreen([], 4);
-        screen.Browser.Update(Up);
-        screen.Browser.Update(X);
-        Type(screen.Browser, "q");
-        screen.Browser.Update(UiInput.None, options: true);
-        screen.Browser.TakeAction();
-        screen.Settle();
-        AssertSteady(() => screen.Frame(), FocusRingBytes(screen.Canvas.AsSurface()));
-    }
-
-    [Fact]
-    public void Steady_avatar_frames_with_the_chip_focused_and_a_term_allocate_nothing_beyond_the_focus_ring()
-    {
-        using var screen = new AvatarScreen(12);
-        screen.Browser.Update(Up);
-        screen.Browser.Update(X);
-        Type(screen.Browser, "house");
-        screen.Browser.Update(UiInput.None, options: true);
-        screen.Browser.TakeAction();
-        screen.Renderer.AvatarStoreListQuery = "house";
-        screen.Settle();
-        AssertSteady(() => screen.Frame(), FocusRingBytes(screen.Canvas.AsSurface()));
-    }
-
-    [Fact]
     public void The_keyboard_draws_for_all_three_searches()
     {
         using var screen = new LibraryScreen(All, All.Length);
@@ -793,5 +751,52 @@ public class SearchTests
         avatars.Browser.Update(X);
         long store = Hash(avatars.Settle(), 90, 130, 1740, 300);
         Assert.NotEqual(library, store);                                 // another title and another help line
+    }
+
+    /// <summary>The tests that measure a frame's allocations: they run alone (<see cref="AllocationMeasuringCollection"/>).</summary>
+    [Collection(AllocationMeasuringCollection.Name)]
+    public class Allocations
+    {
+        [Fact]
+        public void Steady_library_frames_with_the_chip_focused_and_a_term_allocate_nothing_beyond_the_focus_ring()
+        {
+            using var screen = new LibraryScreen(All, All.Length);
+            screen.Browser.Update(Up);
+            screen.Browser.Update(X);
+            Type(screen.Browser, "e");
+            screen.Browser.Update(UiInput.None, options: true);
+            screen.Browser.TakeAction();
+            screen.Entries = LibraryFilter.Apply(All, "e");
+            screen.Browser.SetCount(screen.Entries.Count, All.Length);
+            screen.Settle();
+            AssertSteady(() => screen.Frame(), FocusRingBytes(screen.Canvas.AsSurface()));
+        }
+
+        [Fact]
+        public void Steady_library_frames_with_no_match_allocate_nothing_beyond_the_focus_ring()
+        {
+            using var screen = new LibraryScreen([], 4);
+            screen.Browser.Update(Up);
+            screen.Browser.Update(X);
+            Type(screen.Browser, "q");
+            screen.Browser.Update(UiInput.None, options: true);
+            screen.Browser.TakeAction();
+            screen.Settle();
+            AssertSteady(() => screen.Frame(), FocusRingBytes(screen.Canvas.AsSurface()));
+        }
+
+        [Fact]
+        public void Steady_avatar_frames_with_the_chip_focused_and_a_term_allocate_nothing_beyond_the_focus_ring()
+        {
+            using var screen = new AvatarScreen(12);
+            screen.Browser.Update(Up);
+            screen.Browser.Update(X);
+            Type(screen.Browser, "house");
+            screen.Browser.Update(UiInput.None, options: true);
+            screen.Browser.TakeAction();
+            screen.Renderer.AvatarStoreListQuery = "house";
+            screen.Settle();
+            AssertSteady(() => screen.Frame(), FocusRingBytes(screen.Canvas.AsSurface()));
+        }
     }
 }
