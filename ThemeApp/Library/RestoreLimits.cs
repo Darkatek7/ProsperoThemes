@@ -48,6 +48,26 @@ public static class RestoreLimits
     /// </summary>
     public static NoOriginalKind Lost(NoOriginalKind kinds) => kinds;
 
+    /// <summary>The kind of one logical path (as <see cref="ThemeApplier.NoOriginal"/> and the backup index name them).</summary>
+    public static NoOriginalKind Of(string logical)
+    {
+        if (logical.EndsWith(".rco", StringComparison.OrdinalIgnoreCase)) return NoOriginalKind.IconsAndSounds;
+        if (logical.EndsWith(".at9", StringComparison.OrdinalIgnoreCase)) return NoOriginalKind.Music;
+        if (logical.StartsWith(AssetRoots.Rnps + "/", StringComparison.Ordinal)) return NoOriginalKind.TileIcons;
+        ThemePart part = ThemeParts.OfLogical(logical);
+        if (part == ThemePart.AppBackgrounds) return NoOriginalKind.AppBackgrounds;
+        if (part == ThemePart.Background) return NoOriginalKind.Backgrounds;
+        return NoOriginalKind.Other;
+    }
+
+    /// <summary>The kinds of <paramref name="logicals"/> together.</summary>
+    public static NoOriginalKind Of(IEnumerable<string> logicals)
+    {
+        NoOriginalKind kinds = NoOriginalKind.None;
+        foreach (string logical in logicals) kinds |= Of(logical);
+        return kinds;
+    }
+
     // ---- the record ---------------------------------------------------------------------------------------------------
 
     /// <summary>The logical paths of the record, tolerating a missing or broken file (blank lines and duplicates go).</summary>

@@ -106,7 +106,7 @@ public class RestoreLimitsTests
         Assert.DoesNotContain("Put every background", RestoreLimits.RowText(kinds));
         Assert.Equal("Puts back what Prospero Themes changed; your theme library stays as it is. The old backgrounds, icons and sounds " +
             "can’t come back: another tool’s theme left them.", RestoreLimits.DialogText(kinds));
-        Assert.Contains("The old backgrounds can’t come back", RestoreLimits.PartsDialogText(kinds));
+        Assert.Contains("The old backgrounds, icons and sounds can’t come back", RestoreLimits.PartsDialogText(kinds));
     }
 
     [Theory]
