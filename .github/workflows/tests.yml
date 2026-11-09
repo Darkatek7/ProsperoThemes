@@ -16,12 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The SDK branch the README names (SvenGDK/SharpProspero#6) until it is merged upstream.
+      # The SDK branch the README names, until its changes are merged upstream.
       - name: Check out SharpProspero
         uses: actions/checkout@v4
         with:
           repository: Darkatek7/SharpProspero
-          ref: sharpprospero-crt-allproc-fw13
+          ref: prospero-themes
           path: SharpProspero
 
       - uses: actions/setup-dotnet@v4

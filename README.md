@@ -181,11 +181,24 @@ research repository. They are not part of this repository, and neither building 
 
 ## Building
 
-You need:
-- .NET 10, PowerShell 7 and Python 3 (for the PC tools);
-- the [SharpProspero](https://github.com/SvenGDK/SharpProspero) SDK, with `SHARPPROSPERO_ROOT` pointing at it.
-  Until [SvenGDK/SharpProspero#6](https://github.com/SvenGDK/SharpProspero/pull/6) is merged, use that
-  branch: without it the theme helper payload does not start on firmware 13.40 and later;
+On Linux, `ThemeApp/build.sh` does all of it: it downloads the pinned .NET SDK and PowerShell into a
+tools folder, fetches the SDK branch below and takes `libc.prx` from the latest release when
+`third_party/modules/` has none.
+
+```bash
+ThemeApp/build.sh                          # the app folder in ThemeApp/out/module
+ThemeApp/build.sh --release                # dist/PPSA90210.zip and the catalog record
+ThemeApp/build.sh --deploy <console-ip>    # build, then put it on the console
+```
+
+By hand you need:
+- .NET 10 with runtime 10.0.7 (SDK 10.0.107; with 10.0.14 the link fails), PowerShell 7 and Python 3;
+- the [SharpProspero](https://github.com/SvenGDK/SharpProspero) SDK, branch
+  [`prospero-themes`](https://github.com/Darkatek7/SharpProspero/tree/prospero-themes) of the Darkatek7 fork,
+  with `SHARPPROSPERO_ROOT` pointing at it. It adds two things upstream does not have yet: the payload CRT
+  for firmware 13.40 and later ([SvenGDK/SharpProspero#6](https://github.com/SvenGDK/SharpProspero/pull/6)),
+  without which the theme helper does not start there, and an `mprotect` that walks the range region by
+  region, without which the app crashes as it starts;
 - a PS5-format `libc.prx` from a game package in `third_party/modules/` (not included here).
 
 ```powershell
