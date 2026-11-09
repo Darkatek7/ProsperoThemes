@@ -616,5 +616,67 @@
     "path": "vsh_asset/Sce.PlayStation.PUI_UI3.rco",
     "stock_bytes": 39250032,
     "stock_sha256": "6050861c54fda5ce31dbacf076bec18f0cc13d9c6cd564ead214230ef035c689"
-  }
+  },
+  "tile_icons": [
+    {
+      "path": "rnps/NPXS40047/appdb/default/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    },
+    {
+      "path": "rnps/NPXS40037/appdb/default/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    },
+    {
+      "path": "rnps/NPXS40071/appdb/default/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    },
+    {
+      "path": "rnps/NPXS40071/appdb/NPXS40139/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    },
+    {
+      "path": "rnps/NPXS40016/appdb/NPXS40053/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    },
+    {
+      "path": "rnps/NPXS40016/appdb/NPXS40054/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    },
+    {
+      "path": "rnps/NPXS40016/appdb/NPXS40056/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    },
+    {
+      "path": "rnps/NPXS40016/appdb/NPXS40305/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    },
+    {
+      "path": "rnps/NPXS40075/appdb/default/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    },
+    {
+      "path": "rnps/NPXS40063/appdb/default/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    }
+  ]
 }

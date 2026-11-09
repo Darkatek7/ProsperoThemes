@@ -821,6 +821,12 @@
       "exists": false
     },
     {
+      "path": "rnps/NPXS40075/appdb/default/icon0.png",
+      "exists": true,
+      "width": 512,
+      "height": 512
+    },
+    {
       "path": "rnps/NPXS40063/appdb/default/icon0.png",
       "exists": true,
       "width": 512,
