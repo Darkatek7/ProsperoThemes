@@ -116,7 +116,10 @@ public static class DeviceThemeLibrary
     /// Takes the files in <see cref="OriginalsFolder"/> on the first USB drive that has one as the backups of the console's
     /// files, through <see cref="ThemeApplier.ImportOriginal"/>: only a file <paramref name="stock"/> lists, with its size and
     /// SHA-256, so nothing but this firmware's own file ever becomes an original. Restore defaults then puts them back.
-    /// Files are read one at a time, a large one outside the managed heap. Null when no drive has the folder.
+    /// The icon container is the one file whose original differs between firmware: another firmware's original (by the
+    /// catalogs the app carries) is kept through <see cref="ThemeApplier.ImportOtherFirmware"/>, and Restore defaults puts
+    /// back from it by name what a theme changed. Files are read one at a time, a large one outside the managed heap.
+    /// Null when no drive has the folder.
     /// </summary>
     private static string? ImportOriginals(StockCatalog stock)
     {
@@ -126,18 +129,33 @@ public static class DeviceThemeLibrary
         if (folder is null) return null;
         if (stock.Count == 0) return "Originals skipped: the app has no catalog of this firmware to check them against.";
         var applier = new ThemeApplier(Files, HelperDeviceFiles.UnixSeconds) { Stock = stock };
+        Dictionary<string, (string Path, string Firmware)>? containers = null;
         int imported = 0, there = 0, wrong = 0;
-        string? error = null;
+        string? other = null, error = null;
         foreach (string logical in stock.Paths)
         {
             string path = folder + "/" + logical;
             if (!FileSystem.Exists(path)) continue;
             try
             {
+                bool container = logical.EndsWith(".rco", StringComparison.Ordinal);
                 long size = FileSystem.GetFileSize(path), expected = stock.StockBytes(logical);
-                if (expected > 0 && size != expected) { wrong++; continue; }
+                if (expected > 0 && size != expected && !container) { wrong++; continue; }
                 using FileBytes data = LargeFile.Read(path);
-                switch (applier.ImportOriginal(logical, data.Span))
+                ThemeApplier.OriginalImport result = expected > 0 && size != expected
+                    ? ThemeApplier.OriginalImport.NotStock : applier.ImportOriginal(logical, data.Span);
+                if (result == ThemeApplier.OriginalImport.NotStock && container)
+                {
+                    containers ??= BundledContainers();
+                    if (containers.TryGetValue(ThemePack.Hash(data.Span), out var known) && known.Path == logical)
+                    {
+                        result = applier.ImportOtherFirmware(logical, data.Span);
+                        if (result is ThemeApplier.OriginalImport.OtherFirmware or ThemeApplier.OriginalImport.AlreadyThere)
+                            other = known.Firmware;
+                        if (result == ThemeApplier.OriginalImport.OtherFirmware) continue;
+                    }
+                }
+                switch (result)
                 {
                     case ThemeApplier.OriginalImport.Imported: imported++; break;
                     case ThemeApplier.OriginalImport.AlreadyThere: there++; break;
@@ -146,12 +164,25 @@ public static class DeviceThemeLibrary
             }
             catch (Exception ex) { error ??= logical.Split('/').Last() + ": " + ex.Message; }
         }
-        if (imported + there + wrong == 0 && error is null) return "No originals of this firmware in " + OriginalsFolder + ".";
-        string result = $"{imported} original(s) imported";
-        if (there > 0) result += $" · {there} already there";
-        if (wrong > 0) result += $" · {wrong} not this firmware’s original";
-        if (error is not null) result += " · " + error;
-        return result;
+        if (imported + there + wrong == 0 && other is null && error is null) return "No originals of this firmware in " + OriginalsFolder + ".";
+        string message = $"{imported} original(s) imported";
+        if (there > 0) message += $" · {there} already there";
+        if (other is not null) message += $" · icons and sounds of {other}: Restore defaults puts back what a theme changed";
+        if (wrong > 0) message += $" · {wrong} not this firmware’s original";
+        if (error is not null) message += " · " + error;
+        return message;
+    }
+
+    /// <summary>The original icon containers of every firmware the app carries a catalog for (<see cref="StockCatalog.Containers"/>).</summary>
+    private static Dictionary<string, (string Path, string Firmware)> BundledContainers()
+    {
+        var catalogs = new List<string>();
+        if (FileSystem.TryEnumerateDirectory(StockCatalog.Folder, out var files, out _))
+            foreach (var file in files)
+                if (file.IsFile && file.Name.EndsWith(".json", StringComparison.Ordinal))
+                    try { catalogs.Add(FileSystem.ReadAllText(StockCatalog.Folder + "/" + file.Name)); }
+                    catch (Exception) { }
+        return StockCatalog.Containers(catalogs);
     }
 
     /// <summary>

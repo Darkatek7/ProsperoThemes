@@ -141,6 +141,12 @@ public sealed class ThemeApplier
     /// <summary>Where a backup goes when the system replaced its file: <c>backup/replaced/&lt;time&gt;/&lt;logical&gt;</c>.</summary>
     public const string ReplacedFolder = "backup/replaced";
 
+    /// <summary>
+    /// Another firmware's original icon container, brought in by <see cref="ImportOtherFirmware"/>, as the icons and clips
+    /// Restore defaults puts back by name: <c>backup/other-firmware/&lt;logical&gt;.p5stock</c>.
+    /// </summary>
+    public const string OtherFirmwareFolder = "backup/other-firmware";
+
     private readonly IDeviceFiles _files;
     private readonly string _dataRoot;
     // Seconds since 1970-01-01 UTC. Deliberately not a Func<DateTime>: in the native build that delegate
@@ -561,6 +567,7 @@ public sealed class ThemeApplier
                     : "nothing of the chosen parts has a backup, so nothing was written.");
             Refreshed.Clear();
             NoOriginal.Clear();
+            _putBack = "";
             _sharedBackupTiles = _sharedLiveTiles = null;
             // The pack the state names, read before the state is written again.
             StatePack? kept = all ? null : ReadStatePack();
@@ -628,7 +635,7 @@ public sealed class ThemeApplier
             string gone = missing == 0 ? "" : $" {missing} file(s) no longer exist on the console and were left out.";
             string which = all ? "original(s)" : $"original(s) of {string.Join(", ", ThemeParts.List(parts & ThemePart.All).ConvertAll(ThemeParts.Label))}";
             return errors.Count == 0
-                ? new ApplyResult(true, $"{NoOriginalNote()}{RestartNote(restored)}{RefreshedNote()}Restored and verified {restored.Count} {which}.{gone}", restored)
+                ? new ApplyResult(true, $"{NoOriginalNote()}{RestartNote(restored)}{RefreshedNote()}{_putBack}Restored and verified {restored.Count} {which}.{gone}", restored)
                 : new ApplyResult(false,
                     $"{NoOriginalNote()}{RestartNote(restored)}Restored {restored.Count} of {total} original(s); failed: {string.Join("; ", errors)}.", restored);
         }
@@ -639,7 +646,7 @@ public sealed class ThemeApplier
     }
 
     /// <summary>What <see cref="ImportOriginal"/> did with a file.</summary>
-    public enum OriginalImport { Imported, AlreadyThere, NotListed, NotStock }
+    public enum OriginalImport { Imported, AlreadyThere, NotListed, NotStock, OtherFirmware }
 
     /// <summary>
     /// Takes <paramref name="data"/> as the backup of <paramref name="logical"/> when it is this firmware's stock file: the
@@ -671,6 +678,76 @@ public sealed class ThemeApplier
         else RecordOriginal(logical, stock);
         AddToIndex(logical);
         return result;
+    }
+
+    /// <summary>
+    /// Keeps <paramref name="data"/>, another firmware's original icon container (the caller checked it against that
+    /// firmware's catalog), as the source Restore defaults puts back icons and sounds from by name
+    /// (<see cref="RcoStock.PutBackByName"/>), the way a theme with the original icons and sounds does. Its bytes are never
+    /// written over this console's container: the layout differs between firmware. Only the data root is written.
+    /// </summary>
+    public OriginalImport ImportOtherFirmware(string logical, ReadOnlySpan<byte> data)
+    {
+        if (!logical.EndsWith(".rco", StringComparison.Ordinal) || !Stock.TryStock(logical, out _)
+            || !AssetRoots.TryResolve(logical, out _, out _))
+            return OriginalImport.NotListed;
+        byte[] payload;
+        try
+        {
+            payload = RcoStock.FromContainer(data);
+        }
+        catch (ThemePackException)
+        {
+            return OriginalImport.NotStock;
+        }
+        string path = OtherFirmwarePath(logical);
+        if (_files.Exists(path) && _files.Hash(path) == ThemePack.Hash(payload)) return OriginalImport.AlreadyThere;
+        _files.CreateDirectoryRecursive(ParentOf(path));
+        _files.WriteAllBytes(path + ".tmp", payload);
+        _files.Move(path + ".tmp", path);
+        if (_files.Hash(path) != ThemePack.Hash(payload))
+            throw new InvalidOperationException($"{path} does not match what was written");
+        AddToIndex(logical);   // so Restore defaults visits the container also when it has no backup
+        return OriginalImport.OtherFirmware;
+    }
+
+    private string OtherFirmwarePath(string logical) => $"{_dataRoot}/{OtherFirmwareFolder}/{logical}.p5stock";
+
+    /// <summary>
+    /// Restore defaults for an icon container without an original of this firmware: puts back by name what a theme
+    /// changed, from another firmware's container (<see cref="ImportOtherFirmware"/>). Null when there is none, false when
+    /// nothing of a theme is left to put back, true when the container was written. When the result is this firmware's
+    /// original, byte for byte, it becomes the backup.
+    /// </summary>
+    private bool? PutBackFromOtherFirmware(string device, string logical)
+    {
+        string path = OtherFirmwarePath(logical);
+        if (!logical.EndsWith(".rco", StringComparison.Ordinal) || !_files.Exists(path)) return null;
+        using FileBytes payload = _files.ReadFile(path);
+        using FileBytes live = _files.ReadFile(device);
+        RcoStock.ByName done;
+        try
+        {
+            done = RcoStock.PutBackByName(payload.Span, live.Span, Stock.UntitledIcons, Stock.IconCount);
+        }
+        catch (ThemePackException)
+        {
+            return null;
+        }
+        int left = done.IconsLeft + done.SoundsLeft;
+        if (done.Icons + done.Sounds == 0) return left == 0 ? false : null;
+        string hash = ThemePack.Hash(live.Span);
+        WriteVerified(device, live.Span, hash);
+        _putBack = $"{done.Icons} icon(s) and {done.Sounds} sound(s) came back from another firmware's originals"
+            + (left > 0 ? $", {left} of a theme could not" : "") + ". ";
+        if (Stock.TryStock(logical, out string stock) && hash == stock)
+        {
+            string backup = $"{_dataRoot}/{BackupFolder}/{logical}";
+            if (_files.Exists(backup)) Refresh(logical, backup, live.Span, systemUpdate: false);
+            else WriteBackup(logical, backup, live.Span);
+            AddToIndex(logical);
+        }
+        return true;
     }
 
     /// <summary>
@@ -761,6 +838,7 @@ public sealed class ThemeApplier
     {
         if (OriginalSource(logical, device, _files.Hash(device), strict: true) is not { } source)
         {
+            if (PutBackFromOtherFirmware(device, logical) is { } put) return put;
             if (!NoOriginal.Contains(logical)) NoOriginal.Add(logical);
             return false;
         }
@@ -1194,6 +1272,7 @@ public sealed class ThemeApplier
                 // is the original, it becomes the backup.
                 if (liveHash != stock)
                 {
+                    if (PutBackFromOtherFirmware(device, logical) is { } put) return put;
                     if (!NoOriginal.Contains(logical)) NoOriginal.Add(logical);
                     return false;
                 }

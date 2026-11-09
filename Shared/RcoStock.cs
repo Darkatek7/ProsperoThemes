@@ -140,10 +140,59 @@ public static class RcoStock
                 result = result with { SoundsLeft = result.SoundsLeft + 1 };
                 continue;
             }
-            RcoVag.FitStereo(payload.Slice(at + ClipHeader, length - ClipHeader), found.live).CopyTo(container[found.offset..]);
+            byte[] original = RcoVag.FitStereo(payload.Slice(at + ClipHeader, length - ClipHeader), found.live);
+            // A stock clip with both channels alike looks like a theme's; already the original, it is not counted.
+            if (container.Slice(found.offset, found.live).SequenceEqual(original)) continue;
+            original.CopyTo(container[found.offset..]);
             result = result with { Sounds = result.Sounds + 1 };
         }
         return result;
+    }
+
+    /// <summary>
+    /// A payload of every icon and every clip (with its header) of a whole container, for <see cref="PutBackByName"/>: a
+    /// firmware's original container brought in from elsewhere, whose bytes cannot be written over this console's.
+    /// </summary>
+    /// <exception cref="ThemePackException">The container holds no icon and no clip.</exception>
+    public static byte[] FromContainer(ReadOnlySpan<byte> container)
+    {
+        var places = new List<(int Offset, int Length)>();
+        foreach ((int offset, int length, _) in RcoSvg.Slots(container)) places.Add((offset, length));
+        for (int at = 0; at + ClipHeader <= container.Length;)
+        {
+            int i = container[at..].IndexOf("VAGp"u8);
+            if (i < 0) break;
+            at += i;
+            if (at + ClipHeader > container.Length) break;
+            long length = ClipHeader + (long)BinaryPrimitives.ReadInt32BigEndian(container.Slice(at + 0x0C, 4));
+            if (length > ClipHeader && at + length <= container.Length) places.Add((at, (int)length));
+            at += 4;
+        }
+        places.Sort((a, b) => a.Offset.CompareTo(b.Offset));
+        // A clip or icon that starts inside the one before it is not one of its own.
+        var kept = new List<(int Offset, int Length)>(places.Count);
+        long end = 0;
+        foreach ((int offset, int length) in places)
+        {
+            if (offset < end) continue;
+            kept.Add((offset, length));
+            end = offset + (long)length;
+        }
+        if (kept.Count == 0) throw new ThemePackException("the file holds no icons and no sounds");
+        long total = HeaderSize + kept.Count * (long)EntrySize + kept.Sum(p => (long)p.Length);
+        byte[] payload = new byte[total];
+        Magic.CopyTo(payload, 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(Magic.Length), (uint)kept.Count);
+        int data = HeaderSize + kept.Count * EntrySize;
+        for (int i = 0; i < kept.Count; i++)
+        {
+            (int offset, int length) = kept[i];
+            BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(HeaderSize + i * EntrySize), (uint)offset);
+            BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(HeaderSize + i * EntrySize + 4), (uint)length);
+            container.Slice(offset, length).CopyTo(payload.AsSpan(data));
+            data += length;
+        }
+        return payload;
     }
 
     /// <summary>

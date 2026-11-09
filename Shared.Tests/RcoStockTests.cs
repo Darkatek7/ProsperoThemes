@@ -86,6 +86,28 @@ public class RcoStockTests
     private static readonly System.Collections.Generic.HashSet<int> FirstUntitled = [0];
 
     [Fact]
+    public void A_whole_container_becomes_a_payload_of_its_icons_and_clips()
+    {
+        (byte[] theirs, byte[] stock, byte[] themed) = Firmwares();
+
+        Assert.Equal(AllOf(theirs), RcoStock.FromContainer(theirs));
+        Assert.Equal(new RcoStock.ByName(1, 1, 0, 0), RcoStock.PutBackByName(RcoStock.FromContainer(theirs), themed, FirstUntitled, 3));
+        Assert.Equal(stock, themed);
+        Assert.Throws<ThemePackException>(() => RcoStock.FromContainer(new byte[100]));
+    }
+
+    [Fact]
+    public void By_name_a_stock_clip_with_both_channels_alike_is_not_counted_when_it_is_already_there()
+    {
+        byte[] theirs = Join(Svg("g/iconid_home", 80), Clip("psfx_move", 3, 0x44, 0x44));
+        byte[] stock = Join(new byte[7], Svg(null, 60), Svg("g/iconid_home", 80), Clip("psfx_move", 3, 0x44, 0x44));
+        byte[] container = (byte[])stock.Clone();
+
+        Assert.Equal(new RcoStock.ByName(), RcoStock.PutBackByName(RcoStock.FromContainer(theirs), container, FirstUntitled, 2));
+        Assert.Equal(stock, container);
+    }
+
+    [Fact]
     public void By_name_a_lost_title_comes_back_by_its_length_and_a_theme_sound_by_its_name()
     {
         (byte[] theirs, byte[] stock, byte[] themed) = Firmwares();

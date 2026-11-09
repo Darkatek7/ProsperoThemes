@@ -1488,6 +1488,99 @@ public class ThemeApplierTests
         Assert.Equal(0, CatalogWith(Path1, Live("x")).StockBytes(Path1));
     }
 
+    // ---- another firmware's icon container from USB --------------------------
+
+    [Fact]
+    public void The_bundled_catalogs_name_the_firmware_of_each_original_icon_container()
+    {
+        string folder = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "catalog");
+        var containers = StockCatalog.Containers(Directory.GetFiles(folder, "*.json").Select(File.ReadAllText));
+
+        Assert.Equal((Rco, "13.60"), containers["ed0e9ef531a816b0b5e01a9fee23022a82b406d878b19205ed95515546354f24"]);
+        Assert.Equal("13.00", containers[StockCatalog.Parse(File.ReadAllText(Path.Combine(folder, "13.00.json"))).TryStock(Rco, out string s) ? s : ""].Firmware);
+        Assert.Empty(StockCatalog.Containers(["", "{", """{"firmware":"1.00","assets":[]}"""]));
+    }
+
+    [Fact]
+    public void Another_firmwares_container_puts_back_what_a_theme_changed_after_a_factory_reset()
+    {
+        // A factory reset took the backups and the index; the theme's container is still on the console.
+        (byte[] theirs, byte[] stock, byte[] themed) = RcoStockTests.Firmwares();
+        var fake = DeviceWithLive((RcoDevice, themed));
+        StockCatalog catalog = RcoStockTests.Catalog(Rco, stock);
+
+        Assert.Equal(ThemeApplier.OriginalImport.NotStock, new ThemeApplier(fake, () => FixedNow) { Stock = catalog }.ImportOriginal(Rco, theirs));
+        Assert.Equal(ThemeApplier.OriginalImport.OtherFirmware, new ThemeApplier(fake, () => FixedNow) { Stock = catalog }.ImportOtherFirmware(Rco, theirs));
+        Assert.Equal(ThemeApplier.OriginalImport.AlreadyThere, new ThemeApplier(fake, () => FixedNow) { Stock = catalog }.ImportOtherFirmware(Rco, theirs));
+        Assert.Equal(themed, fake.Files[RcoDevice]);   // the import writes only the data root
+        Assert.False(fake.Files.ContainsKey(RcoBackup));
+
+        var restore = new ThemeApplier(fake, () => FixedNow) { Stock = catalog };
+        ApplyResult result = restore.RestoreOriginals();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(stock, fake.Files[RcoDevice]);
+        Assert.Empty(restore.NoOriginal);
+        Assert.Contains("1 icon(s) and 1 sound(s) came back from another firmware's originals", result.Message);
+        // Byte for byte this firmware's original again, so it is the backup from now on.
+        Assert.Equal(stock, fake.Files[RcoBackup]);
+    }
+
+    [Fact]
+    public void Another_firmwares_container_also_replaces_what_a_backup_made_from_a_theme_cannot()
+    {
+        (byte[] theirs, byte[] stock, byte[] themed) = RcoStockTests.Firmwares();
+        var fake = DeviceWithLive((RcoDevice, themed));
+        fake.Files[RcoBackup] = themed;
+        Index(fake, Rco);
+        StockCatalog catalog = RcoStockTests.Catalog(Rco, stock);
+        Assert.Equal(ThemeApplier.OriginalImport.OtherFirmware, new ThemeApplier(fake, () => FixedNow) { Stock = catalog }.ImportOtherFirmware(Rco, theirs));
+
+        var restore = new ThemeApplier(fake, () => FixedNow) { Stock = catalog };
+        ApplyResult result = restore.RestoreOriginals();
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(stock, fake.Files[RcoDevice]);
+        Assert.Equal(stock, fake.Files[RcoBackup]);
+        Assert.Empty(restore.NoOriginal);
+        Assert.Contains(fake.Files, f => f.Key.Contains("/backup/replaced/", StringComparison.Ordinal) && f.Value.SequenceEqual(themed));
+    }
+
+    [Fact]
+    public void What_another_firmware_cannot_put_back_stays_and_says_so()
+    {
+        // The theme's icon has a length no lost icon of the other firmware has: it stays.
+        (byte[] other, byte[] stock, _) = RcoStockTests.Firmwares();
+        byte[] themed = (byte[])stock.Clone();
+        var slots = RcoSvg.Slots(themed);
+        (int offset, int length, _) = slots[1];
+        byte[] icon = Encoding.ASCII.GetBytes("<svg>" + new string(' ', length - 11) + "</svg>");
+        icon.CopyTo(themed, offset);
+        var fake = DeviceWithLive((RcoDevice, themed));
+        StockCatalog catalog = RcoStockTests.Catalog(Rco, stock);
+        // An "other firmware" whose home icon has another length than this one's.
+        byte[] longer = Encoding.ASCII.GetBytes(Encoding.ASCII.GetString(other).Replace("<title>g/iconid_home</title>", "<title>g/iconid_home</title>  "));
+        Assert.Equal(ThemeApplier.OriginalImport.OtherFirmware, new ThemeApplier(fake, () => FixedNow) { Stock = catalog }.ImportOtherFirmware(Rco, longer));
+
+        var restore = new ThemeApplier(fake, () => FixedNow) { Stock = catalog };
+        ApplyResult result = restore.RestoreOriginals();
+
+        Assert.Equal(themed, fake.Files[RcoDevice]);
+        Assert.Equal(new[] { Rco }, restore.NoOriginal);
+        Assert.False(fake.Files.ContainsKey(RcoBackup));
+    }
+
+    [Fact]
+    public void Only_an_icon_container_is_taken_from_another_firmware()
+    {
+        byte[] stock = Live("stock");
+        var fake = ThemedWithThemedBackup();
+        var applier = new ThemeApplier(fake, () => FixedNow) { Stock = CatalogWithSize(Path1, stock) };
+
+        Assert.Equal(ThemeApplier.OriginalImport.NotListed, applier.ImportOtherFirmware(Path1, RcoStockTests.Firmwares().Theirs));
+        Assert.DoesNotContain(fake.Files, f => f.Key.Contains("/" + ThemeApplier.OtherFirmwareFolder + "/", StringComparison.Ordinal));
+    }
+
     // ---- backups that look like a theme's (no catalog) ------------------------
 
     private const string Rco = "vsh_asset/Sce.PlayStation.PUI_UI3.rco";
