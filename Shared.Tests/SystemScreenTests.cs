@@ -134,6 +134,26 @@ public class SystemScreenTests
     }
 
     [Fact]
+    public void System_says_where_the_stock_catalog_comes_from()
+    {
+        using var renderer = NewRenderer();
+        using var canvas = new PixelBuffer(1920, 1080);
+        var browser = new ThemeBrowser();
+        To(browser, ThemeView.System);
+        renderer.Firmware = "14.000.010";
+        long none = Settled(renderer, canvas, browser, None, 5);
+        renderer.CatalogSource = CatalogSource.Store;
+        long store = Settled(renderer, canvas, browser, None, 10);
+        renderer.CatalogSource = CatalogSource.Bundled;
+        long bundled = Settled(renderer, canvas, browser, None, 15);
+        Assert.NotEqual(none, store);
+        Assert.NotEqual(store, bundled);
+        Assert.NotEqual(none, bundled);
+        renderer.CatalogSource = CatalogSource.None;
+        Assert.Equal(none, Settled(renderer, canvas, browser, None, 20));
+    }
+
+    [Fact]
     public void System_never_leaves_the_content_area_even_with_every_text_at_its_longest()
     {
         using var renderer = NewRenderer();
