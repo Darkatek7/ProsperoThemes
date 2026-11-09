@@ -414,7 +414,7 @@ public sealed class ThemeApplier
             string skipped = Skipped.Count == 0 ? "" : $" Skipped: {string.Join("; ", Skipped)}.";
             string defaults = reset.Count == 0 ? "" : $"Put {reset.Count} earlier change(s) back to default. ";
             return new ApplyResult(true,
-                $"{ApplyRestartNote(plans, reset)}{RefreshedNote()}{_putBack}{defaults}Applied and verified {written.Count} target(s).{skipped} {NoOriginalNote()}".TrimEnd(), written);
+                $"{ApplyRestartNote(plans, reset)}{RefreshedNote()}{_putBack}{defaults}Applied and verified {written.Count} target(s).{skipped}".TrimEnd(), written);
         }
         catch (Exception ex)
         {
@@ -628,9 +628,9 @@ public sealed class ThemeApplier
             string gone = missing == 0 ? "" : $" {missing} file(s) no longer exist on the console and were left out.";
             string which = all ? "original(s)" : $"original(s) of {string.Join(", ", ThemeParts.List(parts & ThemePart.All).ConvertAll(ThemeParts.Label))}";
             return errors.Count == 0
-                ? new ApplyResult(true, $"{RestartNote(restored)}{NoOriginalNote()}{RefreshedNote()}Restored and verified {restored.Count} {which}.{gone}", restored)
+                ? new ApplyResult(true, $"{NoOriginalNote()}{RestartNote(restored)}{RefreshedNote()}Restored and verified {restored.Count} {which}.{gone}", restored)
                 : new ApplyResult(false,
-                    $"{RestartNote(restored)}{NoOriginalNote()}Restored {restored.Count} of {total} original(s); failed: {string.Join("; ", errors)}.", restored);
+                    $"{NoOriginalNote()}{RestartNote(restored)}Restored {restored.Count} of {total} original(s); failed: {string.Join("; ", errors)}.", restored);
         }
         catch (Exception ex)
         {
@@ -1159,9 +1159,11 @@ public sealed class ThemeApplier
         return RestartNote(devices, sounds);
     }
 
-    private string NoOriginalNote() => NoOriginal.Count == 0 ? "" :
-        $"{NoOriginal.Count} changed file(s) have no original on this console any more and stay as they are " +
-        $"({string.Join(", ", NoOriginal.Take(2))}{(NoOriginal.Count > 2 ? ", …" : "")}). ";
+    /// <summary>
+    /// What a restore leaves as it is, by kind (<see cref="RestoreLimits.ResultLine"/>), never as paths: it leads the result,
+    /// since the notice shows two lines at most. An apply does not repeat it; the app tells it once (<see cref="RestoreLimits.ShouldTell"/>).
+    /// </summary>
+    private string NoOriginalNote() => RestoreLimits.ResultLine(RestoreLimits.Of(NoOriginal));
 
     private string RefreshedNote() => Refreshed.Count == 0 ? "" :
         $"{Refreshed.Count} file(s) had been replaced by a system update; that version is now their default " +

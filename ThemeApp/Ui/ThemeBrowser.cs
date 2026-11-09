@@ -58,9 +58,11 @@ public enum PreviewScene { Home, ControlCentre }
 /// that restarts, so it has the option Later only and never emits <see cref="ThemeAction.RestartShell"/>. AvatarApply, AvatarReset and
 /// AvatarRemove are the questions of the Library's avatar row: set the focused avatar as the profile picture, put the console's own picture
 /// back, or take the focused avatar out of the app's avatars. AvatarDownload is the question over a store avatar on the Avatars tab:
-/// download it, download it and set it as the profile picture, or cancel.
+/// download it, download it and set it as the profile picture, or cancel. NoOriginal is the one-time notice after a job found
+/// files another tool had themed, with no original left (<see cref="RestoreLimits"/>): what Restore defaults cannot bring back. It has
+/// the option OK only and emits nothing (the app opens it, <see cref="ThemeBrowser.TellNoOriginal"/>).
 /// </summary>
-public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts, RestoreParts, Reapply, FirmwareReport, RestartShell, SoundVolume, ReportAsk, CommunityDownload, AppUpdate, RestartShellBlocked, AvatarApply, AvatarReset, AvatarRemove, AvatarDownload }
+public enum DialogKind { None, Apply, ApplyScope, Restore, Remove, ApplyParts, RestoreParts, Reapply, FirmwareReport, RestartShell, SoundVolume, ReportAsk, CommunityDownload, AppUpdate, RestartShellBlocked, AvatarApply, AvatarReset, AvatarRemove, AvatarDownload, NoOriginal }
 
 /// <summary>The focusable rows of the System screen, top to bottom.</summary>
 public enum SystemRow { Backgrounds, EarlierThemes, Sounds, SoundVolume, MusicVolume, AiThemes, StoreAddress, FirmwareReport, AppUpdate, Restore }
@@ -84,6 +86,7 @@ public sealed class ThemeBrowser
     private static readonly string[] AvatarResetOptions = ["Use console picture", "Cancel"];
     private static readonly string[] AvatarRemoveOptions = ["Remove avatar", "Cancel"];
     private static readonly string[] AvatarDownloadOptions = ["Download", "Download and set", "Cancel"];
+    private static readonly string[] NoOriginalOptions = ["OK"];
 
     /// <summary>Number of focusable rows on the System screen.</summary>
     public const int SystemRowCount = 10;
@@ -138,6 +141,7 @@ public sealed class ThemeBrowser
         DialogKind.AvatarReset => AvatarResetOptions,
         DialogKind.AvatarRemove => AvatarRemoveOptions,
         DialogKind.AvatarDownload => AvatarDownloadOptions,
+        DialogKind.NoOriginal => NoOriginalOptions,
         DialogKind.ApplyParts or DialogKind.RestoreParts => _partsOptions,
         _ => Array.Empty<string>(),
     };
@@ -272,7 +276,7 @@ public sealed class ThemeBrowser
         // after a system update and the offer to restart the home screen are about the look, not the selection, and the
         // download question is about a store card, so they stay.
         if (Dialog is not (DialogKind.Reapply or DialogKind.RestartShell or DialogKind.RestartShellBlocked or DialogKind.CommunityDownload or DialogKind.AppUpdate
-            or DialogKind.AvatarApply or DialogKind.AvatarReset or DialogKind.AvatarRemove or DialogKind.AvatarDownload)) Dialog = DialogKind.None;
+            or DialogKind.NoOriginal or DialogKind.AvatarApply or DialogKind.AvatarReset or DialogKind.AvatarRemove or DialogKind.AvatarDownload)) Dialog = DialogKind.None;
     }
 
     /// <summary>The number of avatars in the Library's avatar row (after the Console picture card); the focus is kept inside it.</summary>
@@ -950,8 +954,24 @@ public sealed class ThemeBrowser
     /// </summary>
     public void AskRestartShell(HenKind hen = HenKind.Unknown)
     {
-        if (Dialog == DialogKind.None)
-            OpenDialog(RunningHen.AllowsShellRestart(hen) ? DialogKind.RestartShell : DialogKind.RestartShellBlocked, 0);
+        DialogKind kind = RunningHen.AllowsShellRestart(hen) ? DialogKind.RestartShell : DialogKind.RestartShellBlocked;
+        if (Dialog == DialogKind.None) OpenDialog(kind, 0);
+        else if (Dialog == DialogKind.NoOriginal) _afterNotice = kind;   // asked once the notice is closed
+    }
+
+    // The restart question the job's result asked while the NoOriginal notice was open; None when there is none.
+    private DialogKind _afterNotice;
+
+    /// <summary>
+    /// Shows the one-time notice that some files have no original left (<see cref="DialogKind.NoOriginal"/>), unless another
+    /// question is open. It comes before the offer to restart the home screen: <see cref="AskRestartShell"/> called while it is
+    /// open asks once it is closed (OK or O).
+    /// </summary>
+    public void TellNoOriginal()
+    {
+        if (Dialog != DialogKind.None) return;
+        _afterNotice = DialogKind.None;
+        OpenDialog(DialogKind.NoOriginal, 0);
     }
 
     /// <summary>
@@ -978,8 +998,20 @@ public sealed class ThemeBrowser
         DialogFocus = focus;
     }
 
-    // Left/Right and Up/Down move the focus, X takes the focused option, O closes; every other button is ignored.
+    // Left/Right and Up/Down move the focus, X takes the focused option, O closes; every other button is ignored. A question
+    // waiting for the NoOriginal notice opens once it is closed.
     private void UpdateDialog(UiInput input, bool busy)
+    {
+        bool notice = Dialog == DialogKind.NoOriginal;
+        UpdateOpenDialog(input, busy);
+        if (notice && Dialog == DialogKind.None && _afterNotice != DialogKind.None)
+        {
+            OpenDialog(_afterNotice, 0);
+            _afterNotice = DialogKind.None;
+        }
+    }
+
+    private void UpdateOpenDialog(UiInput input, bool busy)
     {
         int last = DialogOptions.Count - 1;   // Cancel is always the last option
         if (input.Cancel)
