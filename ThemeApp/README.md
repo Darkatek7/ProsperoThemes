@@ -90,7 +90,8 @@ launch evidence are recorded separately below.
   bytes, and only if the result is the catalog's hash (otherwise the container stays and the skip note says why). With
   another firmware's bytes it puts back what a theme changed by name: a theme's icon has lost its title, so it is an
   untitled slot the catalog does not list, known by its length; a theme's sound keeps its name and has both channels alike. A backup that
-  does not match the catalog is never written back. On firmware without a catalog (one no report came from yet) the look
+  does not match the catalog is never written back. A firmware the app carries no catalog for can get one from the store
+  without an app release (see "Store catalogs" below). On firmware without any catalog (one no report came from yet) the look
   decides (`Shared/StockLook.cs`): a stock icon container titles every theme icon (home, settings, power, ps_store and
   the rest), and the system tiles' backgrounds all differ; reports from 9.60 to 13.60 agree. A main background with a
   picture two or more tiles share counts as a theme's too (11.60 and 13.60 reports); one tile like it is not enough. A backup that fails this
@@ -136,14 +137,31 @@ launch evidence are recorded separately below.
   `python ThemePackCreator/theme_pack.py catalog-from-report <report> catalog/<fw>.json` turns it into a
   catalog and lists what differs from 13.00. The 13.00 console's own report reproduces
   `catalog/13.00.json` exactly.
+- **Store catalogs** (`Library/StoreCatalog.cs`): when `catalog/<fw>.json` is not in the app, the store can serve the
+  catalog of that firmware, so a newly measured firmware does not wait for a release. `GET <store>/api/catalogs` lists
+  `{"items":[{"firmware","sha256","updatedAt"}]}` (the hash of the exact body of the next request), and
+  `GET <store>/api/catalogs/<fw>` (`<fw>` as `StockCatalog.FirmwareName` makes it, "13.60") answers the catalog in the
+  format of `catalog/*.json`, or 404. At start the bundled catalog wins; without one the app uses its checked copy
+  `/data/prospero-themes/catalogs/<fw>.json` (through the helper when the app's folder needs it). After the first library
+  scan, next to the app update check, a thread of its own asks the store again: a copy whose hash is the listed one is not
+  downloaded again; a new catalog is used from then on and replaces the copy (written as `.tmp`, then renamed). Nothing
+  waits for it: an apply that starts meanwhile keeps the catalog it started with, and a missing network says nothing. A
+  catalog is used and kept only when it is at most 1 MB (the download itself is capped), is a JSON object whose `firmware` is the name asked
+  for, has the listed SHA-256, every `path` (assets, icon container, tile icons) is a logical path under a known asset
+  root (`Shared/AssetRoots.cs`), every `stock_sha256` is 64 lower-case hex digits and it has at least one stock hash; the
+  copy is checked again when it is read at start. A 404, an error or a catalog that fails a check keeps the copy there was.
+  The System tab's info panel names the source after the firmware ("13.60 · catalog in the app", "… catalog from the
+  store", "… no catalog yet"); without any, the Firmware report row says "No catalog for <fw> yet: a report from this
+  console adds one". Every bundled catalog passes the same checks (`StoreCatalogTests`).
 - The on-screen text is English (US spelling). The Inter font atlases cover ASCII plus the characters in
   `CHARS` of `tools/bake-assets.py` (`… · – × “ ” ‘ ’` and some accented Latin letters); keep new UI text
   inside that set.
 - **App update** (System tab, the row before Restore defaults; see "In-app update" below).
 - **System tab:** a focusable list (d-pad up/down, X): App backgrounds (X switches between "Without own image" and
   "All apps"), Store address (X opens the keyboard), Firmware report (X saves the report), Restore defaults (X asks
-  first). Circle goes back to the Library. The first time System opens on a firmware without a bundled catalog
-  (`/app0/sce_sys/prospero-themes/catalog/<fw>.json` missing, firmware known), a "Help support <fw>" question offers
+  first). Circle goes back to the Library. The first time System opens on a firmware without any catalog
+  (`/app0/sce_sys/prospero-themes/catalog/<fw>.json` missing, no store copy kept, firmware known; a store catalog that
+  arrives before System opens takes the question back), a "Help support <fw>" question offers
   "Send report" (the same as Firmware report, Save and send) or "Not now" (Circle too); the firmware is kept as
   `report_asked` in `settings.json`, so it is not asked again for it.
 - **Store address** (System tab, Store address row): X opens an on-screen keyboard that the app draws itself, so no system
