@@ -33,6 +33,12 @@ public sealed partial class ThemeRenderer
     }
 
     /// <summary>
+    /// Where the stock catalog of this firmware comes from (<see cref="Library.CatalogSource"/>). The info panel names it after the
+    /// firmware, and without one the Firmware report row says that a report adds it.
+    /// </summary>
+    public CatalogSource CatalogSource { get; set; }
+
+    /// <summary>
     /// A later release the store knows of (<see cref="AppUpdate"/>), shown after the app's version on the System screen.
     /// Empty when there is none or the store was not asked.
     /// </summary>
@@ -236,9 +242,10 @@ public sealed partial class ThemeRenderer
     /// <summary>The home music volume in percent (<see cref="AppSettings.MusicVolume"/>), shown on its System row.</summary>
     public int MusicVolume { get; set; } = AppSettings.DefaultMusicVolume;
     // Texts of the info panel, rebuilt only when what they show changes.
-    private string _sysCountText = "", _sysFirmwareText = "";
+    private string _sysCountText = "", _sysFirmwareText = "", _sysReportText = SystemDescriptions[(int)SystemRow.FirmwareReport];
     private int _sysCountFor = -1;
     private string? _sysFirmwareFor;
+    private CatalogSource _sysCatalogFor;
     // The store address as the row shows it: its width, measured once per address.
     private string? _sysUrlFor;
     private int _sysUrlWidth;
@@ -259,6 +266,7 @@ public sealed partial class ThemeRenderer
             foreach (string label in SysVolumeLabels) _sysVolumeWidth = Math.Max(_sysVolumeWidth, _small.MeasureText(label) + 2 * SysSegmentPad);
         }
 
+        SysFirmwareTexts();
         // Every row first, then the one focus ring: its glow reaches past the gap into the neighbours.
         int right = Theme.ContentRight - SysRowPad;
         for (int i = 0; i < SystemLabels.Length; i++)
@@ -321,7 +329,8 @@ public sealed partial class ThemeRenderer
                     break;
             }
             int descriptionX = Theme.SafeX + SysRowPad + SysLabelWidth;
-            ClipLeft(_body, s, i == (int)SystemRow.AppUpdate ? _updateRowText : SystemDescriptions[i], descriptionX, textY, text, descriptionRight - descriptionX);
+            string description = i == (int)SystemRow.AppUpdate ? _updateRowText : i == (int)SystemRow.FirmwareReport ? _sysReportText : SystemDescriptions[i];
+            ClipLeft(_body, s, description, descriptionX, textY, text, descriptionRight - descriptionX);
         }
         if (browser.SystemSelected is >= 0 and < ThemeBrowser.SystemRowCount)
         {
@@ -392,7 +401,6 @@ public sealed partial class ThemeRenderer
     private void DrawSysInfo(Surface s, int count, int enter)
     {
         if (_sysCountFor != count) { _sysCountFor = count; _sysCountText = Plural(count, "theme"); }
-        if (!ReferenceEquals(_sysFirmwareFor, Firmware)) { _sysFirmwareFor = Firmware; _sysFirmwareText = FirmwareLabel(Firmware); }
 
         int y = SysInfoTop + enter;
         SysGlass(s, Theme.SafeX, y, Theme.ContentWidth, 2 * SysInfoPad + 2 * SysInfoPitch - 8);
@@ -414,6 +422,19 @@ public sealed partial class ThemeRenderer
         int valueWidth = Theme.ContentRight - SysRowPad - rightX - SysInfoLabelWidth;
         SysInfoRow(s, "Firmware", _sysFirmwareText, rightX, rowY, valueWidth);
         SysInfoRow(s, "Storage", "/data/prospero-themes/library", rightX, rowY + SysInfoPitch, valueWidth);
+    }
+
+    // The firmware and its catalog ("13.60 · catalog from the store") and the Firmware report row's text, made again only when either changes.
+    private void SysFirmwareTexts()
+    {
+        if (ReferenceEquals(_sysFirmwareFor, Firmware) && _sysCatalogFor == CatalogSource) return;
+        _sysFirmwareFor = Firmware;
+        _sysCatalogFor = CatalogSource;
+        // Only a version of the "13.000.012" form names a catalog ("13.00"); the label is the raw text otherwise.
+        string name = FirmwareLabel(Firmware);
+        bool named = Firmware.Length > 0 && name != Firmware;
+        _sysFirmwareText = named ? name + "  ·  " + CatalogSourceText.Info(CatalogSource) : name;
+        _sysReportText = CatalogSourceText.ReportRow(CatalogSource, named ? name : "", SystemDescriptions[(int)SystemRow.FirmwareReport]);
     }
 
     private void SysInfoRow(Surface s, string label, string value, int x, int y, int valueWidth)
