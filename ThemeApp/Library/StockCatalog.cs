@@ -81,6 +81,27 @@ public sealed class StockCatalog
         return stock.Count == 0 ? Empty : new StockCatalog(stock, bytes, untitled, container.GetInt("icons"));
     }
 
+    /// <summary>
+    /// The icon containers every catalog among <paramref name="catalogs"/> knows, by SHA-256: their path and the firmware
+    /// whose original they are. The icon container is the one file whose original differs between firmware; every other
+    /// file a catalog lists is the same on all of them. Broken catalogs are skipped.
+    /// </summary>
+    public static Dictionary<string, (string Path, string Firmware)> Containers(IEnumerable<string> catalogs)
+    {
+        var found = new Dictionary<string, (string, string)>(StringComparer.Ordinal);
+        foreach (string json in catalogs)
+        {
+            if (string.IsNullOrWhiteSpace(json) || !JsonValue.TryParse(json, out JsonValue root) || root.Type != JsonType.Object)
+                continue;
+            JsonValue container = root["icon_container"];
+            if (container.Type != JsonType.Object || container.GetString("path") is not { Length: > 0 } path
+                || container.GetString("stock_sha256") is not { Length: 64 } sha256)
+                continue;
+            found.TryAdd(sha256, (path, root.GetString("firmware") is { Length: > 0 } firmware ? firmware : "another firmware"));
+        }
+        return found;
+    }
+
     private static void Add(Dictionary<string, string> stock, Dictionary<string, long> bytes, JsonValue entry)
     {
         if (entry.GetString("path") is not { Length: > 0 } path || entry.GetString("stock_sha256") is not { Length: 64 } sha256)

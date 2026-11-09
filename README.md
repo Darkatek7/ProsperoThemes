@@ -97,7 +97,7 @@ other file the app can no longer find an original for is left as it is. On a con
 before Prospero Themes ran, the app has no copy of those originals: the first apply or restore that meets them says so
 once ("This console had another theme"), and from then on the Restore defaults row and question say which kinds stay,
 for example the old backgrounds and home music. System icons and sounds can still come back by applying a theme that
-brings the original icons and sounds. Applying a theme starts from the defaults too: whatever an earlier theme changed
+brings the original icons and sounds, or from an original icon container on USB (below). Applying a theme starts from the defaults too: whatever an earlier theme changed
 and the new one does not cover goes back to its original first, so themes never stack.
 
 **Originals from USB.** A file stays themed when the console no longer has its original, for example when a backup was
@@ -107,6 +107,14 @@ drive under `prospero-themes/originals/`, in the same folders (`prospero-themes/
 USB import. The app takes a file only when its size and SHA-256 are exactly those of your firmware's original (from the
 bundled catalog); anything else is skipped and counted. An imported original replaces the backup (the old one is kept
 under `backup/replaced/`), and Restore defaults then puts it back. The app does not provide these files.
+
+Every file except the icon container (`Sce.PlayStation.PUI_UI3.rco`) is the same on all firmware the app knows, so the
+originals of another firmware do for those. The icon container differs between firmware, and another firmware's copy
+must never be written over this console's. The import still takes it when it is the original of a firmware the app
+has a catalog for: Restore defaults then puts back from it, by name, the icons and sounds a theme changed, the way a
+theme with the original icons and sounds does. An icon whose length several lost originals share, or one this firmware
+drew anew, stays as it is, and the result says how many did. When everything came back and the container is this
+firmware's original byte for byte, it becomes the backup.
 
 **Room first.** Each file is written next to the old one as a `.tmp` file and then renamed over it, so its folder needs
 room for the whole new file. Before an apply writes anything, the app checks the free space for every file it will
