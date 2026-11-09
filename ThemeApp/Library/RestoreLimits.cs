@@ -149,7 +149,7 @@ public static class RestoreLimits
     public static string NoticeText(NoOriginalKind kinds)
     {
         if (kinds == NoOriginalKind.None) return "";
-        var text = new StringBuilder("Another tool changed this console before Prospero Themes, so there is no copy of some original files. ");
+        var text = new StringBuilder("Another tool changed this console before Prospero Themes, so some originals are gone. ");
         NoOriginalKind lost = Lost(kinds);
         if (lost != NoOriginalKind.None)
             text.Append("Restore defaults can’t bring back the old ").Append(Names(lost)).Append(": ")
@@ -169,11 +169,11 @@ public static class RestoreLimits
     {
         if (kinds == NoOriginalKind.None) return "";
         NoOriginalKind lost = Lost(kinds);
-        string stays = lost == NoOriginalKind.None ? "" : Capitalized(Names(lost)) + (lost == NoOriginalKind.Music ? " stays" : " stay")
+        string stays = lost == NoOriginalKind.None ? "" : Capitalized(ShortNames(lost)) + (lost == NoOriginalKind.Music ? " stays" : " stay")
             + " as another tool’s theme left " + (lost == NoOriginalKind.Music ? "it" : "them") + ": this console has no original" + (lost == NoOriginalKind.Music ? "" : "s") + ". ";
         string icons = (kinds & ComesBack) == 0 ? ""
             : lost == NoOriginalKind.None ? "Icons and sounds stay as another tool’s theme left them; a theme with the originals brings them back. "
-            : "Icons and sounds come back with a theme that has the originals. ";
+            : "Icons and sounds need a theme with the originals. ";
         return stays + icons;
     }
 
@@ -183,7 +183,7 @@ public static class RestoreLimits
         NoOriginalKind lost = Lost(kinds);
         if (kinds == NoOriginalKind.None) return "Put every background, icon and sound back to the original";
         if (lost == NoOriginalKind.None) return "Icons and sounds need a theme with the originals on this console";
-        return "On this console, the old " + Names(lost) + " can’t come back";
+        return "On this console, the old " + ShortNames(lost) + " can’t come back";
     }
 
     /// <summary>The text of the Restore defaults question (without parts) on this console.</summary>
@@ -201,7 +201,7 @@ public static class RestoreLimits
         if (kinds == NoOriginalKind.None) return plain;
         string limit = lost == NoOriginalKind.None
             ? "Icons and sounds need a theme with the originals: another tool’s theme left them."
-            : "The old " + Names(lost) + " can’t come back: another tool’s theme left " + (lost == NoOriginalKind.Music ? "it." : "them.");
+            : "The old " + ShortNames(lost) + " can’t come back: another tool’s theme left " + (lost == NoOriginalKind.Music ? "it." : "them.");
         return "Tick the parts to put back. System icons and sounds go back together. " + limit;
     }
 
@@ -217,6 +217,19 @@ public static class RestoreLimits
         if ((kinds & NoOriginalKind.Other) != 0) names.Add("other files");
         if (names.Count <= 1) return names.Count == 0 ? "" : names[0];
         return string.Join(", ", names.GetRange(0, names.Count - 1)) + " and " + names[^1];
+    }
+
+    /// <summary>
+    /// <see cref="Names"/> for one line: up to two kinds by name, more as the first one "and other files"
+    /// ("backgrounds and other files"), so a toast or a row never runs long.
+    /// </summary>
+    public static string ShortNames(NoOriginalKind kinds)
+    {
+        int count = 0;
+        for (int bits = (int)kinds; bits != 0; bits &= bits - 1) count++;
+        if (count <= 2) return Names(kinds);
+        NoOriginalKind first = (NoOriginalKind)((int)kinds & -(int)kinds);
+        return Names(first) + " and other files";
     }
 
     // ---- the told kinds in settings.json ---------------------------------------------------------------------------------
