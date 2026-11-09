@@ -22,13 +22,11 @@ public class RestoreLimitsTests
     public void Each_file_has_its_kind(string logical, NoOriginalKind kind) => Assert.Equal(kind, RestoreLimits.Of(logical));
 
     [Fact]
-    public void Only_the_icons_and_sounds_come_back_without_a_backup()
+    public void Every_kind_stays_after_restore_defaults()
     {
-        Assert.Equal(NoOriginalKind.IconsAndSounds, RestoreLimits.ComesBack);
         NoOriginalKind all = RestoreLimits.Of([Hub, Rco, Music, TileIcon, AppPic, Texture]);
-        Assert.Equal(NoOriginalKind.Backgrounds | NoOriginalKind.Music | NoOriginalKind.TileIcons | NoOriginalKind.AppBackgrounds | NoOriginalKind.Other,
-            RestoreLimits.Lost(all));
-        Assert.Equal(NoOriginalKind.None, RestoreLimits.Lost(NoOriginalKind.IconsAndSounds));
+        Assert.Equal(all, RestoreLimits.Lost(all));
+        Assert.Equal(NoOriginalKind.IconsAndSounds, RestoreLimits.Lost(NoOriginalKind.IconsAndSounds));
     }
 
     [Fact]
@@ -47,13 +45,13 @@ public class RestoreLimitsTests
     }
 
     [Fact]
-    public void The_notice_says_what_stays_and_what_still_comes_back()
+    public void The_notice_says_what_stays()
     {
         string text = RestoreLimits.NoticeText(NoOriginalKind.Backgrounds | NoOriginalKind.IconsAndSounds | NoOriginalKind.Music);
 
         Assert.Equal("Another tool changed this console before Prospero Themes, so some originals are gone. " +
-            "Restore defaults can’t bring back the old backgrounds and home music: they stay as that theme left them. " +
-            "Icons and sounds can still come back with a theme that has the originals.", text);
+            "Restore defaults can’t bring back the old backgrounds, icons, sounds and home music: they stay as that theme left them.", text);
+        Assert.DoesNotContain("theme that has the originals", text);   // no such theme is published
     }
 
     [Fact]
@@ -62,7 +60,7 @@ public class RestoreLimitsTests
         string text = RestoreLimits.NoticeText(NoOriginalKind.IconsAndSounds);
 
         Assert.DoesNotContain("background", text);
-        Assert.Contains("a theme with the original icons and sounds can", text);
+        Assert.Contains("the old icons and sounds: they stay", text);
     }
 
     [Fact]
@@ -82,9 +80,10 @@ public class RestoreLimitsTests
             RestoreLimits.ResultLine(NoOriginalKind.Backgrounds));
         Assert.Equal("Home music stays as another tool’s theme left it. ",
             RestoreLimits.ResultLine(NoOriginalKind.Music));
-        Assert.Equal("Backgrounds and home music stay as another tool’s theme left them. " +
-            "Icons and sounds need a theme with the originals. ",
-            RestoreLimits.ResultLine(NoOriginalKind.Backgrounds | NoOriginalKind.Music | NoOriginalKind.IconsAndSounds));
+        Assert.Equal("Backgrounds and home music stay as another tool’s theme left them. ",
+            RestoreLimits.ResultLine(NoOriginalKind.Backgrounds | NoOriginalKind.Music));
+        Assert.Equal("Icons and sounds stay as another tool’s theme left them. ",
+            RestoreLimits.ResultLine(NoOriginalKind.IconsAndSounds));
     }
 
     [Fact]
@@ -105,8 +104,8 @@ public class RestoreLimitsTests
 
         Assert.Contains("backgrounds", RestoreLimits.RowText(kinds));
         Assert.DoesNotContain("Put every background", RestoreLimits.RowText(kinds));
-        Assert.Equal("Puts back what Prospero Themes changed; your theme library stays as it is. The old backgrounds can’t come back: " +
-            "another tool’s theme left them. Icons and sounds need a theme with the originals.", RestoreLimits.DialogText(kinds));
+        Assert.Equal("Puts back what Prospero Themes changed; your theme library stays as it is. The old backgrounds, icons and sounds " +
+            "can’t come back: another tool’s theme left them.", RestoreLimits.DialogText(kinds));
         Assert.Contains("The old backgrounds can’t come back", RestoreLimits.PartsDialogText(kinds));
     }
 

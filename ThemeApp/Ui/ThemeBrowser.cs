@@ -992,6 +992,17 @@ public sealed class ThemeBrowser
     /// </summary>
     public void OfferReport() => _reportOffer = true;
 
+    /// <summary>
+    /// Takes back <see cref="OfferReport"/> when the question has not been shown yet (a store catalog for the firmware came in
+    /// meanwhile); true when it was still waiting. A question on screen stays.
+    /// </summary>
+    public bool WithdrawReportOffer()
+    {
+        bool waiting = _reportOffer;
+        _reportOffer = false;
+        return waiting;
+    }
+
     private void OpenDialog(DialogKind kind, int focus)
     {
         Dialog = kind;

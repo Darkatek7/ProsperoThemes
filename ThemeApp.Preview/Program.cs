@@ -636,6 +636,12 @@ if (args.Contains("--screenshots"))
     browser.StoreUrl = AppSettings.DefaultStoreUrl;
     browser.Update(UiInput.None with { PageDown = true });
     browser.StoreUrl = "http://192.168.0.5:8080"; Save("system", ThemeView.System);
+    // Where the firmware's stock catalog comes from: the info panel says it after the firmware; without one the Firmware
+    // report row says that a report adds it.
+    renderer.Firmware = "13.600.007"; renderer.CatalogSource = CatalogSource.Bundled; Save("system-catalog-bundled", ThemeView.System);
+    renderer.Firmware = "14.000.010"; renderer.CatalogSource = CatalogSource.Store; Save("system-catalog-store", ThemeView.System);
+    renderer.CatalogSource = CatalogSource.None; Save("system-catalog-none", ThemeView.System);
+    renderer.Firmware = "";
     // The store knows of a later release (AppUpdate): the version row says so.
     renderer.AppVersion = "01.000.039";
     renderer.NewerVersion = "01.000.022"; Save("system-update", ThemeView.System);

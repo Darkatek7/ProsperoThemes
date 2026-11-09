@@ -41,35 +41,12 @@ public static class RestoreLimits
     public const string FileName = "no-original.txt";
 
     /// <summary>
-    /// The kinds that still come back without a backup. The icon container's icons and sounds do, from the firmware's
-    /// own bytes in a theme that brings them (<see cref="ThemePack.StockLayer"/>, see <see cref="RcoStock"/>), not from Restore
-    /// defaults. A tile icon comes back from the firmware's copy in <c>/system_ex/rnps/apps</c>, so it is only here when
-    /// even that is gone. Backgrounds, music and the rest have no such source: they stay as they are.
+    /// The kinds that stay as they are after Restore defaults: all of them. A tile icon comes back from the firmware's copy in
+    /// <c>/system_ex/rnps/apps</c>, so it is only here when even that is gone. The icon container's icons and sounds could
+    /// come back from a pack with the firmware's own bytes (<see cref="ThemePack.StockLayer"/>), but no such pack is
+    /// published (the store refuses them), so the texts do not point users at one.
     /// </summary>
-    public const NoOriginalKind ComesBack = NoOriginalKind.IconsAndSounds;
-
-    /// <summary>The kind of one logical path (as <see cref="ThemeApplier.NoOriginal"/> and the backup index name them).</summary>
-    public static NoOriginalKind Of(string logical)
-    {
-        if (logical.EndsWith(".rco", StringComparison.OrdinalIgnoreCase)) return NoOriginalKind.IconsAndSounds;
-        if (logical.EndsWith(".at9", StringComparison.OrdinalIgnoreCase)) return NoOriginalKind.Music;
-        if (logical.StartsWith(AssetRoots.Rnps + "/", StringComparison.Ordinal)) return NoOriginalKind.TileIcons;
-        ThemePart part = ThemeParts.OfLogical(logical);
-        if (part == ThemePart.AppBackgrounds) return NoOriginalKind.AppBackgrounds;
-        if (part == ThemePart.Background) return NoOriginalKind.Backgrounds;
-        return NoOriginalKind.Other;
-    }
-
-    /// <summary>The kinds of <paramref name="logicals"/> together.</summary>
-    public static NoOriginalKind Of(IEnumerable<string> logicals)
-    {
-        NoOriginalKind kinds = NoOriginalKind.None;
-        foreach (string logical in logicals) kinds |= Of(logical);
-        return kinds;
-    }
-
-    /// <summary>The kinds that stay as they are whatever the app does (no backup, no source of the original).</summary>
-    public static NoOriginalKind Lost(NoOriginalKind kinds) => kinds & ~ComesBack;
+    public static NoOriginalKind Lost(NoOriginalKind kinds) => kinds;
 
     // ---- the record ---------------------------------------------------------------------------------------------------
 
@@ -149,16 +126,8 @@ public static class RestoreLimits
     public static string NoticeText(NoOriginalKind kinds)
     {
         if (kinds == NoOriginalKind.None) return "";
-        var text = new StringBuilder("Another tool changed this console before Prospero Themes, so some originals are gone. ");
-        NoOriginalKind lost = Lost(kinds);
-        if (lost != NoOriginalKind.None)
-            text.Append("Restore defaults can’t bring back the old ").Append(Names(lost)).Append(": ")
-                .Append(lost == NoOriginalKind.Music ? "it stays" : "they stay").Append(" as that theme left them. ");
-        if ((kinds & ComesBack) != 0)
-            text.Append(lost == NoOriginalKind.None
-                ? "Restore defaults can’t bring back the icons and sounds, but a theme with the original icons and sounds can."
-                : "Icons and sounds can still come back with a theme that has the originals.");
-        return text.ToString().TrimEnd();
+        return "Another tool changed this console before Prospero Themes, so some originals are gone. Restore defaults can’t bring back the old "
+            + Names(kinds) + ": " + (kinds == NoOriginalKind.Music ? "it stays" : "they stay") + " as that theme left them.";
     }
 
     /// <summary>
@@ -168,23 +137,14 @@ public static class RestoreLimits
     public static string ResultLine(NoOriginalKind kinds)
     {
         if (kinds == NoOriginalKind.None) return "";
-        NoOriginalKind lost = Lost(kinds);
-        string stays = lost == NoOriginalKind.None ? "" : Capitalized(ShortNames(lost)) + (lost == NoOriginalKind.Music ? " stays" : " stay")
-            + " as another tool’s theme left " + (lost == NoOriginalKind.Music ? "it" : "them") + ". ";
-        string icons = (kinds & ComesBack) == 0 ? ""
-            : lost == NoOriginalKind.None ? "Icons and sounds stay as another tool’s theme left them; a theme with the originals brings them back. "
-            : "Icons and sounds need a theme with the originals. ";
-        return stays + icons;
+        return Capitalized(ShortNames(kinds)) + (kinds == NoOriginalKind.Music ? " stays" : " stay")
+            + " as another tool’s theme left " + (kinds == NoOriginalKind.Music ? "it" : "them") + ". ";
     }
 
     /// <summary>The description of the System tab's Restore defaults row on this console (the default one without kinds).</summary>
-    public static string RowText(NoOriginalKind kinds)
-    {
-        NoOriginalKind lost = Lost(kinds);
-        if (kinds == NoOriginalKind.None) return "Put every background, icon and sound back to the original";
-        if (lost == NoOriginalKind.None) return "Icons and sounds need a theme with the originals on this console";
-        return "On this console, the old " + ShortNames(lost) + " can’t come back";
-    }
+    public static string RowText(NoOriginalKind kinds) =>
+        kinds == NoOriginalKind.None ? "Put every background, icon and sound back to the original"
+            : "On this console, the old " + ShortNames(kinds) + " can’t come back";
 
     /// <summary>The text of the Restore defaults question (without parts) on this console.</summary>
     public static string DialogText(NoOriginalKind kinds)
@@ -200,14 +160,9 @@ public static class RestoreLimits
         return kinds == NoOriginalKind.None ? plain : "Tick the parts to put back. System icons and sounds go back together. " + Limit(kinds);
     }
 
-    // What Restore defaults cannot do on this console, in one or two short sentences (the questions show five lines at most).
-    private static string Limit(NoOriginalKind kinds)
-    {
-        NoOriginalKind lost = Lost(kinds);
-        if (lost == NoOriginalKind.None) return "Icons and sounds need a theme with the originals: another tool’s theme left them.";
-        string limit = "The old " + ShortNames(lost) + " can’t come back: another tool’s theme left " + (lost == NoOriginalKind.Music ? "it." : "them.");
-        return (kinds & ComesBack) == 0 ? limit : limit + " Icons and sounds need a theme with the originals.";
-    }
+    // What Restore defaults cannot do on this console, in one short sentence (the questions show five lines at most).
+    private static string Limit(NoOriginalKind kinds) =>
+        "The old " + ShortNames(kinds) + " can’t come back: another tool’s theme left " + (kinds == NoOriginalKind.Music ? "it." : "them.");
 
     /// <summary>The kinds in words, in a fixed order ("backgrounds, tile icons and home music").</summary>
     public static string Names(NoOriginalKind kinds)
@@ -216,7 +171,7 @@ public static class RestoreLimits
         if ((kinds & NoOriginalKind.Backgrounds) != 0) names.Add("backgrounds");
         if ((kinds & NoOriginalKind.AppBackgrounds) != 0) names.Add("app backgrounds");
         if ((kinds & NoOriginalKind.TileIcons) != 0) names.Add("tile icons");
-        if ((kinds & NoOriginalKind.IconsAndSounds) != 0) names.Add("icons and sounds");
+        if ((kinds & NoOriginalKind.IconsAndSounds) != 0) { names.Add("icons"); names.Add("sounds"); }
         if ((kinds & NoOriginalKind.Music) != 0) names.Add("home music");
         if ((kinds & NoOriginalKind.Other) != 0) names.Add("other files");
         if (names.Count <= 1) return names.Count == 0 ? "" : names[0];

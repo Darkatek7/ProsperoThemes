@@ -1511,7 +1511,7 @@ public class ThemeApplierTests
 
         Assert.Equal(StockLookTests.Container(["utility/iconid_extra"]), fake.Files[RcoDevice]);
         Assert.Equal(new[] { Rco }, applier.NoOriginal);
-        Assert.StartsWith("Icons and sounds stay as another tool’s theme left them; a theme with the originals brings them back. ", result.Message);
+        Assert.StartsWith("Icons and sounds stay as another tool’s theme left them. ", result.Message);
         Assert.False(fake.Files.ContainsKey("/data/prospero-themes/backup/originals.txt")
             && Encoding.UTF8.GetString(fake.Files["/data/prospero-themes/backup/originals.txt"]).Contains(Sha(themed)));
     }

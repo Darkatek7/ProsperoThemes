@@ -60,6 +60,8 @@ internal sealed class ThemeApp : ProsperoApp
     /// <summary>The system software version ("13.000.000"), null when it could not be read.</summary>
     private string? _firmware;
     private StockCatalog _stock = StockCatalog.Empty;
+    // Where _stock comes from (the app, the store's kept copy, or none); a store catalog that arrives later replaces it (RefreshStoreCatalog).
+    private CatalogSource _catalogSource;
     // The firmware the System tab asks a report for (see AppSettings.ReportToAsk) until it is answered; null when not asked.
     private string? _reportAsk;
     // The community store: the list on screen and one HTTP client (Http/Ssl resolved at run time, see
@@ -169,14 +171,15 @@ internal sealed class ThemeApp : ProsperoApp
         try { _firmware = SharpProspero.Platform.SystemInfo.SystemSoftwareVersion; }
         catch { _firmware = null; }
         _renderer.Firmware = _firmware ?? "";
-        try { _stock = StockCatalog.Parse(StockCatalog.PathFor(_firmware) is { } catalog ? FileSystem.ReadAllText(catalog) : null); }
+        // The bundled catalog, else the store's kept copy (StoreCatalog; the store is asked again after the first scan).
+        string? bundledCatalog = null;
+        try { if (StockCatalog.PathFor(_firmware) is { } catalog && FileSystem.Exists(catalog)) bundledCatalog = FileSystem.ReadAllText(catalog); }
+        catch { /* then the store's, if there is one */ }
+        try { (_stock, _catalogSource) = StoreCatalog.Load(StockCatalog.FirmwareName(_firmware), bundledCatalog, AppData.Files); }
         catch { /* a firmware without a catalog: only the app's own records tell a theme's file from an original */ }
-        // A named firmware without a bundled catalog is asked once, the first time System opens, for a firmware report.
-        try
-        {
-            string? name = StockCatalog.FirmwareName(_firmware);
-            _reportAsk = _settings.ReportToAsk(name, StockCatalog.PathFor(_firmware) is { } bundled && FileSystem.Exists(bundled));
-        }
+        _renderer.CatalogSource = _catalogSource;
+        // A named firmware without any catalog is asked once, the first time System opens, for a firmware report.
+        try { _reportAsk = _settings.ReportToAsk(StockCatalog.FirmwareName(_firmware), _catalogSource != CatalogSource.None); }
         catch { /* not asked */ }
         if (_reportAsk is not null)
         {
@@ -278,7 +281,11 @@ internal sealed class ThemeApp : ProsperoApp
                         _renderer.ReapplyText = SystemUpdate.Text(update, firmware);
                         _browser.AskReapply();
                     }
-                    if (checkUpdate) CheckAppVersion();
+                    if (checkUpdate)
+                    {
+                        CheckAppVersion();
+                        RefreshStoreCatalog();
+                    }
                     _renderer.AppliedId = applied;
                     RefreshCommunityBadges();
                     // The USB Import screen shows the last import's result; a plain scan has nothing to say there.
@@ -1381,6 +1388,34 @@ internal sealed class ThemeApp : ProsperoApp
                 else _updateNotice = text;
             });
         }) { IsBackground = true, Name = "AppUpdate" }.Start();
+    }
+
+    /// <summary>
+    /// Asks the store for this firmware's stock catalog (<see cref="StoreCatalog"/>) on a thread of its own, once per start
+    /// after the first scan, when the app carries none for it. Nothing waits for it: until it is back, the kept copy (or no
+    /// catalog) is used, and an apply that starts meanwhile keeps the catalog it started with. A catalog that passes the checks
+    /// is used from then on; any failure says nothing and keeps what there was (the next start asks again).
+    /// </summary>
+    private void RefreshStoreCatalog()
+    {
+        string baseUrl = _settings.StoreUrl;
+        if (_catalogSource == CatalogSource.Bundled || baseUrl.Length == 0 || StockCatalog.FirmwareName(_firmware) is not { } name) return;
+        new Thread(() =>
+        {
+            StoreCatalog.RefreshResult result;
+            try { result = StoreCatalog.Refresh(baseUrl, name, url => Http().Get(url, StoreCatalog.MaxBytes), AppData.Files); }
+            catch (Exception ex) { result = new(StoreCatalog.RefreshOutcome.Failed, null, ex.Message); }
+            if (result.Catalog is not { } catalog) return;
+            _results.Post(() =>
+            {
+                _stock = catalog;
+                _catalogSource = CatalogSource.Store;
+                _renderer.CatalogSource = CatalogSource.Store;
+                // The report question is about a firmware without a catalog; not asked when it is not open yet. The next
+                // start finds the kept copy and does not ask either.
+                if (_reportAsk is not null && _browser.WithdrawReportOffer()) _reportAsk = null;
+            });
+        }) { IsBackground = true, Name = "StoreCatalog" }.Start();
     }
 
     /// <summary>Puts what is known about a newer release on the System screen: the version, the row's state and the question's text.</summary>
