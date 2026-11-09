@@ -254,12 +254,14 @@ internal sealed class ThemeApp : ProsperoApp
                 var snapshot = work();
                 string? applied = ReadApplied();
                 ThemePart restorable = ReadRestorable();
+                NoOriginalKind noOriginal = RestoreLimits.Of(ReadNoOriginal());
                 List<LookLayer>? look = ReadLook();
                 AvatarApplier.State? avatar = user is { } id ? AvatarApplier.Current(id, AppData.Files) : null;
                 SystemUpdate.Plan? update = checkUpdate ? ReadUpdatePlan(snapshot.Entries, firmware, skipped, sounds) : null;
                 _results.Post(() =>
                 {
                     _restorable = restorable;
+                    _renderer.NoOriginalKinds = noOriginal;
                     ShowAppliedAvatar(avatar);
                     _renderer.ResetCovers();
                     _added = snapshot.Added ?? _added;
@@ -520,12 +522,77 @@ internal sealed class ThemeApp : ProsperoApp
     /// Runs a system-changing job on the worker: starts ThemeHelper if it is not running yet, then hands the
     /// job an applier whose theme-root writes go through it. The result is shown as a notice.
     /// </summary>
-    private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work, ThemePart parts = ThemePart.All, string? source = null) =>
-        StartHelperWork(busyText, needsHelper: true, _ => work(new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
+    /// <remarks>
+    /// After the job, the files it found without an original (<see cref="ThemeApplier.NoOriginal"/>) update the app's record of
+    /// them (<see cref="RecordNoOriginal"/>); <paramref name="restored"/> names the parts of a Restore defaults. The first job that
+    /// finds a kind the user was not told about shows the notice (<see cref="ShowNoOriginal"/>).
+    /// </remarks>
+    private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work, ThemePart parts = ThemePart.All, string? source = null,
+        ThemePart? restored = null)
+    {
+        // Set on the worker, read by the frame thread once the result is posted.
+        NoOriginalKind found = NoOriginalKind.None, known = _renderer.NoOriginalKinds;
+        StartHelperWork(busyText, needsHelper: true, _ =>
         {
-            IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware, Stock = _stock, Parts = parts,
-            Progress = new WorkProgress(this, busyText), SourcePath = source, UiSoundVolume = _settings.SoundVolume / 100.0, MusicVolume = _settings.MusicVolume / 100.0,
-        }));
+            var applier = new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
+            {
+                IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware, Stock = _stock, Parts = parts,
+                Progress = new WorkProgress(this, busyText), SourcePath = source, UiSoundVolume = _settings.SoundVolume / 100.0, MusicVolume = _settings.MusicVolume / 100.0,
+            };
+            ApplyResult result = work(applier);
+            (found, known) = RecordNoOriginal(applier, result, restored);
+            return result;
+        }, after: () => ShowNoOriginal(found, known));
+    }
+
+    private static string NoOriginalPath => AppData.Root + "/" + RestoreLimits.FileName;
+
+    /// <summary>The app's record of files without an original (<see cref="RestoreLimits.FileName"/>); empty when there is none.</summary>
+    private static List<string> ReadNoOriginal()
+    {
+        try { return RestoreLimits.Parse(AppData.Files.Exists(NoOriginalPath) ? AppData.Files.ReadAllText(NoOriginalPath) : null); }
+        catch { return new List<string>(); }
+    }
+
+    /// <summary>
+    /// Updates the record with what an apply or a restore (<paramref name="restored"/>: its parts) found, on the worker. A restore
+    /// that failed as a whole only adds to it. Returns the kinds the job found and the kinds the console has now.
+    /// </summary>
+    private static (NoOriginalKind Found, NoOriginalKind Known) RecordNoOriginal(ThemeApplier applier, ApplyResult result, ThemePart? restored)
+    {
+        List<string> known = ReadNoOriginal();
+        var written = new List<string>();
+        foreach (string device in result.Written)
+            if (AssetRoots.TryLogical(device, out string logical)) written.Add(logical);
+        List<string> after = restored is { } parts && result.Success
+            ? RestoreLimits.AfterRestore(known, parts, applier.NoOriginal)
+            : RestoreLimits.AfterApply(known, restored is null ? written : [], applier.NoOriginal);
+        try
+        {
+            string text = RestoreLimits.Serialize(after);
+            if (text != RestoreLimits.Serialize(known))
+            {
+                if (after.Count == 0) AppData.Files.DeleteFile(NoOriginalPath);
+                else AppData.Files.WriteAllText(NoOriginalPath, text);
+            }
+        }
+        catch { /* the System tab then says what the last start knew; the next job tries again */ }
+        return (RestoreLimits.Of(applier.NoOriginal), RestoreLimits.Of(after));
+    }
+
+    /// <summary>
+    /// On the frame thread after a job: the System tab's Restore defaults row and question follow <paramref name="known"/>, and the
+    /// notice shows when the job found a kind the user was not told about yet (<see cref="RestoreLimits.ShouldTell"/>), once.
+    /// </summary>
+    private void ShowNoOriginal(NoOriginalKind found, NoOriginalKind known)
+    {
+        _renderer.NoOriginalKinds = known;
+        if (!RestoreLimits.ShouldTell(found, _settings.NoOriginalTold)) return;
+        _settings = _settings with { NoOriginalTold = _settings.NoOriginalTold | found };
+        try { WriteSettings(); }
+        catch { /* told again on the next start's first such job */ }
+        _browser.TellNoOriginal();
+    }
 
     /// <summary>
     /// Passes an apply's or restore's progress from the worker to the toast, at most about ten times a second (each
@@ -555,11 +622,11 @@ internal sealed class ThemeApp : ProsperoApp
     /// runs). With <paramref name="needsHelper"/> a problem ends the job before it starts.
     /// </summary>
     private void StartHelperWork(string busyText, bool needsHelper, Func<string?, ApplyResult> work, bool offerRestart = true,
-        bool holdResult = false)
+        bool holdResult = false, Action? after = null)
     {
         if (_fitChecking)
         {
-            _afterFit = () => StartHelperWork(busyText, needsHelper, work, offerRestart, holdResult);
+            _afterFit = () => StartHelperWork(busyText, needsHelper, work, offerRestart, holdResult, after);
             _renderer.Notify(busyText, NoticeLevel.Info);
             return;
         }
@@ -619,6 +686,8 @@ internal sealed class ThemeApp : ProsperoApp
                 _renderer.Notify(message, ok ? NoticeLevel.Success : NoticeLevel.Error, holdResult);
                 _renderer.Busy = false;
                 _busy = false;
+                // Before the restart question, which waits for a notice it opens.
+                after?.Invoke();
                 // The helper may run now: packs that could not be checked before are asked again.
                 _fitAsked.Clear();
                 if (shellBackups is not null)
@@ -733,7 +802,7 @@ internal sealed class ThemeApp : ProsperoApp
             case ThemeAction.SaveLook when _look is { Count: > 1 } look: SaveLook(look); break;
             case ThemeAction.RestoreOriginals:
                 ThemePart restoreParts = _browser.RestoreParts;
-                StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals(restoreParts));
+                StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals(restoreParts), restored: restoreParts);
                 break;
             case ThemeAction.RemoveTheme when _browser.Selected >= 0 && !_entries[_browser.Selected].Bundled:
                 ThemeLibraryEntry removed = _entries[_browser.Selected];

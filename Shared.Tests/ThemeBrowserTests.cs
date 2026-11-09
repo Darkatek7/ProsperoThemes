@@ -1297,4 +1297,60 @@ public class ThemeBrowserTests
         Assert.Equal("http://a", browser.StoreEditor.Text);
         Assert.Equal("Hinweis", browser.StoreEditor.Notice);
     }
+
+    // ---- the notice about files without an original (RestoreLimits) ----
+
+    [Fact]
+    public void The_no_original_notice_has_ok_only_and_asks_nothing()
+    {
+        var browser = new ThemeBrowser();
+        browser.TellNoOriginal();
+
+        Assert.Equal(DialogKind.NoOriginal, browser.Dialog);
+        Assert.Equal(new[] { "OK" }, browser.DialogOptions);
+        browser.Update(X);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void The_restart_question_waits_for_the_no_original_notice(bool ok)
+    {
+        var browser = new ThemeBrowser();
+        browser.TellNoOriginal();
+        browser.AskRestartShell();   // the same job wrote icons: the restart is offered after the notice
+        Assert.Equal(DialogKind.NoOriginal, browser.Dialog);
+
+        browser.Update(ok ? X : O);
+
+        Assert.Equal(DialogKind.RestartShell, browser.Dialog);
+        Assert.Equal(ThemeAction.None, browser.TakeAction());
+        browser.Update(X);
+        Assert.Equal(ThemeAction.RestartShell, browser.TakeAction());
+    }
+
+    [Fact]
+    public void The_no_original_notice_never_covers_an_open_question()
+    {
+        var browser = new ThemeBrowser();
+        browser.AskRestartShell();
+        browser.TellNoOriginal();
+
+        Assert.Equal(DialogKind.RestartShell, browser.Dialog);
+    }
+
+    [Fact]
+    public void Without_the_notice_the_restart_question_opens_as_before()
+    {
+        var browser = new ThemeBrowser();
+        browser.TellNoOriginal();
+        browser.Update(X);
+        browser.AskRestartShell(HenKind.OnionHen);
+
+        Assert.Equal(DialogKind.RestartShellBlocked, browser.Dialog);
+        browser.Update(X);
+        Assert.Equal(DialogKind.None, browser.Dialog);
+    }
 }

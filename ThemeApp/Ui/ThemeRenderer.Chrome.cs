@@ -145,6 +145,23 @@ public sealed partial class ThemeRenderer
         get => _reportFirmware;
         set { _reportFirmware = value; _dialogBody[(int)DialogKind.ReportAsk - 1] = null; }
     }
+    private NoOriginalKind _noOriginalKinds;
+    private string _restoreRowText = RestoreLimits.RowText(NoOriginalKind.None);
+
+    /// <summary>
+    /// The kinds of file on this console without an original (<see cref="RestoreLimits"/>, from the app's record). They change the
+    /// Restore defaults row and question, and the text of the one-time notice; none gives the usual texts.
+    /// </summary>
+    public NoOriginalKind NoOriginalKinds
+    {
+        get => _noOriginalKinds;
+        set
+        {
+            _noOriginalKinds = value;
+            _restoreRowText = RestoreLimits.RowText(value);
+            _dialogBody[(int)DialogKind.Restore - 1] = _dialogBody[(int)DialogKind.RestoreParts - 1] = _dialogBody[(int)DialogKind.NoOriginal - 1] = null;
+        }
+    }
     private const int DialogWidth = 900, DialogPad = 48, DialogRow = 72, DialogGap = 16;
     // The ticked parts of the ApplyParts dialog are lower rows, so six of them and the two buttons fit on the screen.
     private const int DialogPartRow = 56, DialogPartGap = 8, DialogCheck = 30;
@@ -165,6 +182,7 @@ public sealed partial class ThemeRenderer
         DialogKind.AvatarReset => "Use the console picture?",
         DialogKind.AvatarRemove => "Remove this avatar?",
         DialogKind.AvatarDownload => "Get this avatar?",
+        DialogKind.NoOriginal => RestoreLimits.NoticeTitle,
         _ => "Apply this theme?",
     };
 
@@ -183,12 +201,13 @@ public sealed partial class ThemeRenderer
         DialogKind.AvatarRemove => "Takes it out of your avatars; the file is kept in /data/prospero-themes/attic. If it is your profile picture, it stays until you choose another one.",
         DialogKind.AvatarDownload => "Saves it to Your avatars in the Library. Download and set also makes it your profile picture; it shows after the home screen restarts.",
         DialogKind.FirmwareReport => "Lists the console’s theme files (names, sizes, checksums), the system software and the app version; nothing personal. Save and send also gives it to the store, which answers with a code to post in your GitHub issue.",
-        DialogKind.Restore => "Puts the original backgrounds, icons and sounds back on this console. Your theme library stays as it is.",
+        DialogKind.Restore => RestoreLimits.DialogText(_noOriginalKinds),
+        DialogKind.NoOriginal => RestoreLimits.NoticeText(_noOriginalKinds),
         DialogKind.ApplyScope => "This theme has a background for apps. Choose where it goes: only apps without their own image, or all apps.",
         DialogKind.Remove => "Takes it out of your library; the file is kept in /data/prospero-themes/attic. If it is applied, it stays on the console until another theme replaces it or you restore the defaults.",
         DialogKind.CommunityDownload => "Saves it in your library (an update replaces the older version, which goes to the attic folder). Download and apply then asks what to apply, like Details does. Nothing on the console changes until you confirm that.",
         DialogKind.ApplyParts => "Tick the parts to apply. Icons and sounds change after the next restart.",
-        DialogKind.RestoreParts => "Tick the parts to put back. System icons and sounds share one file, so they go back together. Your library stays as it is.",
+        DialogKind.RestoreParts => RestoreLimits.PartsDialogText(_noOriginalKinds),
         _ => "This changes the backgrounds, icons and sounds on this console. Restore defaults on the System tab puts the originals back.",
     };
 
@@ -196,7 +215,8 @@ public sealed partial class ThemeRenderer
     // once (a full-screen pass is several milliseconds) and copied on every later frame, until something it shows changes.
     private readonly record struct DialogBase(ThemeView View, string? Path, bool Applied, bool Busy, bool AllApps, bool Replace, bool Sounds,
         int Row, string StoreUrl, string Firmware, int Count, string NewerVersion, string ReportCode, string? Card, AppUpdate.State UpdateState,
-        bool AvatarRow, int AvatarCard, int AvatarCount, bool AvatarsLoaded, string? AvatarApplied, int StoreAvatar, int StoreAvatarCount, int StorePreviews);
+        bool AvatarRow, int AvatarCard, int AvatarCount, bool AvatarsLoaded, string? AvatarApplied, int StoreAvatar, int StoreAvatarCount, int StorePreviews,
+        NoOriginalKind NoOriginal);
     private PixelBuffer? _dialogBase;
     private DialogBase _dialogKey;
 
@@ -204,7 +224,7 @@ public sealed partial class ThemeRenderer
         new(browser.View, selected?.Path, selected is not null && IsApplied(selected), Busy, AllAppsBackgrounds, ReplaceEarlierThemes,
             Sounds, browser.SystemSelected, browser.StoreUrl, Firmware, count, NewerVersion, ReportCode, SelectedCommunityId, UpdateState,
             browser.AvatarRowFocused, browser.AvatarSelected, _avatars.Count, AvatarsLoaded, AppliedAvatarId,
-            browser.AvatarStoreSelected, AvatarStore.Count, AvatarStorePreviews.Count);
+            browser.AvatarStoreSelected, AvatarStore.Count, AvatarStorePreviews.Count, _noOriginalKinds);
 
     private void ReleaseDialogBase()
     {
@@ -268,7 +288,7 @@ public sealed partial class ThemeRenderer
                 (name, summary) = (storeAvatar.Name, _dialogStoreAvatarLine);
             }
         }
-        else if (kind is not (DialogKind.Restore or DialogKind.RestoreParts or DialogKind.Reapply or DialogKind.FirmwareReport or DialogKind.RestartShell or DialogKind.RestartShellBlocked or DialogKind.SoundVolume or DialogKind.ReportAsk or DialogKind.AppUpdate or DialogKind.AvatarReset) && entry is not null)
+        else if (kind is not (DialogKind.Restore or DialogKind.RestoreParts or DialogKind.Reapply or DialogKind.FirmwareReport or DialogKind.RestartShell or DialogKind.RestartShellBlocked or DialogKind.SoundVolume or DialogKind.ReportAsk or DialogKind.AppUpdate or DialogKind.AvatarReset or DialogKind.NoOriginal) && entry is not null)
             (name, summary) = (entry.Manifest.Name, SummaryOf(entry).Text);
         bool named = name is not null;
 

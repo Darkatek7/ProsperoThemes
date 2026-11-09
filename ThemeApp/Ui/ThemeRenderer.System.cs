@@ -206,7 +206,7 @@ public sealed partial class ThemeRenderer
         "Where the Themes and Avatars tabs load from",
         "Save or send a list of the console’s theme files",
         "",   // App update: _updateRowText, which follows what the store announced
-        "Put every background, icon and sound back to the original",
+        "",   // Restore defaults: _restoreRowText, which says what cannot come back on this console (RestoreLimits)
     ];
 
     // Ten rows of 44 with 4 between them take the 476 px that nine of 48 with 6 did, so the two-line info panel still fits above the footer.
@@ -321,7 +321,8 @@ public sealed partial class ThemeRenderer
                     break;
             }
             int descriptionX = Theme.SafeX + SysRowPad + SysLabelWidth;
-            ClipLeft(_body, s, i == (int)SystemRow.AppUpdate ? _updateRowText : SystemDescriptions[i], descriptionX, textY, text, descriptionRight - descriptionX);
+            string description = (SystemRow)i switch { SystemRow.AppUpdate => _updateRowText, SystemRow.Restore => _restoreRowText, _ => SystemDescriptions[i] };
+            ClipLeft(_body, s, description, descriptionX, textY, text, descriptionRight - descriptionX);
         }
         if (browser.SystemSelected is >= 0 and < ThemeBrowser.SystemRowCount)
         {
