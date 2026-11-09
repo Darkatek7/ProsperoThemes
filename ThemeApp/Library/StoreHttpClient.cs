@@ -106,6 +106,9 @@ public sealed unsafe class StoreHttpClient : IDisposable
 
     public HttpResponse Get(string url) => Send(HttpMethod.Get, url);
 
+    /// <summary>A GET whose answer may be at most <paramref name="maxBodyBytes"/> long (a larger one throws, see <see cref="Send"/>).</summary>
+    public HttpResponse Get(string url, int maxBodyBytes) => Send(HttpMethod.Get, url, maxBodyBytes: maxBodyBytes);
+
     /// <summary>
     /// A GET that is sent again, up to <paramref name="attempts"/> times in all, when the connection fails while the
     /// request goes out or the answer comes in. On 9.60 a pack download stopped with "sceHttpReadData failed
@@ -128,8 +131,9 @@ public sealed unsafe class StoreHttpClient : IDisposable
 
     /// <summary>Sends one request and reads the whole answer.</summary>
     /// <param name="headers">Header lines such as <c>"X-Device-Id: abc"</c>.</param>
-    /// <exception cref="ProsperoException">The request failed or the answer is larger than <see cref="MaxBodyBytes"/>.</exception>
-    public HttpResponse Send(HttpMethod method, string url, ReadOnlySpan<byte> body = default, string[]? headers = null)
+    /// <param name="maxBodyBytes">The largest answer read; at most <see cref="MaxBodyBytes"/>.</param>
+    /// <exception cref="ProsperoException">The request failed or the answer is larger than <paramref name="maxBodyBytes"/>.</exception>
+    public HttpResponse Send(HttpMethod method, string url, ReadOnlySpan<byte> body = default, string[]? headers = null, int maxBodyBytes = MaxBodyBytes)
     {
         ArgumentException.ThrowIfNullOrEmpty(url);
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -166,7 +170,7 @@ public sealed unsafe class StoreHttpClient : IDisposable
 
                     string responseHeaders = ReadHeaders(reqId);
                     // A result of 0 means the server sent Content-Length; otherwise the body is chunked.
-                    byte[] responseBody = method == HttpMethod.Head ? [] : ReadBody(reqId, lengthResult == 0, contentLength);
+                    byte[] responseBody = method == HttpMethod.Head ? [] : ReadBody(reqId, lengthResult == 0, contentLength, Math.Min(maxBodyBytes, MaxBodyBytes));
                     return new HttpResponse(status, responseBody, responseHeaders);
                 }
                 finally { _api.DeleteRequest(reqId); }
@@ -183,9 +187,9 @@ public sealed unsafe class StoreHttpClient : IDisposable
         return Encoding.UTF8.GetString(header, (int)Math.Min(size, (nuint)int.MaxValue));
     }
 
-    private byte[] ReadBody(int reqId, bool lengthKnown, ulong contentLength)
+    private byte[] ReadBody(int reqId, bool lengthKnown, ulong contentLength, int maxBodyBytes)
     {
-        if (lengthKnown && contentLength > MaxBodyBytes)
+        if (lengthKnown && contentLength > (ulong)maxBodyBytes)
             throw new ProsperoException("Response of " + contentLength + " bytes", -1);
         var output = lengthKnown ? new MemoryStream((int)contentLength) : new MemoryStream();
         byte[] chunk = new byte[64 * 1024];
@@ -196,8 +200,8 @@ public sealed unsafe class StoreHttpClient : IDisposable
                 int read = _api.ReadData(reqId, buffer, (nuint)chunk.Length);
                 SceResult.ThrowIfFailed(read, "sceHttpReadData");
                 if (read == 0) break;
-                if (output.Length + read > MaxBodyBytes)
-                    throw new ProsperoException("Response over " + MaxBodyBytes + " bytes", -1);
+                if (output.Length + read > maxBodyBytes)
+                    throw new ProsperoException("Response over " + maxBodyBytes + " bytes", -1);
                 output.Write(chunk, 0, read);
                 if (lengthKnown && (ulong)output.Length >= contentLength) break;
             }

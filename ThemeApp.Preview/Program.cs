@@ -391,6 +391,18 @@ if (args.Contains("--screenshots"))
     browser.Update(press, parts: ThemePart.All, sounds: false); Save("dialog-apply-parts", ThemeView.Detail, DialogKind.ApplyParts);
     browser.Update(up); Save("dialog-apply-parts-focus", ThemeView.Detail, DialogKind.ApplyParts);
     browser.Update(back);
+    // The first apply on a console another tool had themed: the notice says once what Restore defaults cannot bring back, then the
+    // restart question the same apply asked for opens.
+    renderer.NoOriginalKinds = NoOriginalKind.Backgrounds | NoOriginalKind.IconsAndSounds | NoOriginalKind.Music;
+    browser.TellNoOriginal();
+    browser.AskRestartShell();
+    Save("dialog-no-original", ThemeView.Detail, DialogKind.NoOriginal);
+    browser.Update(press); Save("dialog-no-original-then-restart", ThemeView.Detail, DialogKind.RestartShell);
+    browser.Update(back); browser.TakeAction();
+    renderer.NoOriginalKinds = NoOriginalKind.IconsAndSounds;
+    browser.TellNoOriginal(); Save("dialog-no-original-icons", ThemeView.Detail, DialogKind.NoOriginal);
+    browser.Update(press);
+    renderer.NoOriginalKinds = NoOriginalKind.None;
     // A pack without previews: stand-in tiles on its cover, the same as before the tiles got icons.
     Press(UiInput.None, square: true); Save("preview", ThemeView.Preview);
     Press(press); Save("artwork", ThemeView.Preview);
@@ -624,6 +636,12 @@ if (args.Contains("--screenshots"))
     browser.StoreUrl = AppSettings.DefaultStoreUrl;
     browser.Update(UiInput.None with { PageDown = true });
     browser.StoreUrl = "http://192.168.0.5:8080"; Save("system", ThemeView.System);
+    // Where the firmware's stock catalog comes from: the info panel says it after the firmware; without one the Firmware
+    // report row says that a report adds it.
+    renderer.Firmware = "13.600.007"; renderer.CatalogSource = CatalogSource.Bundled; Save("system-catalog-bundled", ThemeView.System);
+    renderer.Firmware = "14.000.010"; renderer.CatalogSource = CatalogSource.Store; Save("system-catalog-store", ThemeView.System);
+    renderer.CatalogSource = CatalogSource.None; Save("system-catalog-none", ThemeView.System);
+    renderer.Firmware = "";
     // The store knows of a later release (AppUpdate): the version row says so.
     renderer.AppVersion = "01.000.039";
     renderer.NewerVersion = "01.000.022"; Save("system-update", ThemeView.System);
@@ -644,6 +662,21 @@ if (args.Contains("--screenshots"))
     for (int i = 0; i < 7; i++) browser.Update(up, restorable: ThemePart.All);
     browser.Update(press, restorable: ThemePart.All); Save("dialog-restore-parts-untick", ThemeView.System, DialogKind.RestoreParts);
     browser.Update(back);
+    // A console another tool had themed (the app's record of files without an original): the row and the questions say what
+    // stays, and the result of Restore defaults leads with it.
+    renderer.NoOriginalKinds = NoOriginalKind.Backgrounds | NoOriginalKind.IconsAndSounds | NoOriginalKind.Music;
+    Save("system-restore-no-original", ThemeView.System);
+    browser.Update(press); Save("dialog-restore-no-original", ThemeView.System, DialogKind.Restore);
+    browser.Update(back);
+    browser.Update(press, restorable: ThemePart.All); Save("dialog-restore-parts-no-original", ThemeView.System, DialogKind.RestoreParts);
+    browser.Update(back);
+    renderer.Notify(RestoreLimits.ResultLine(renderer.NoOriginalKinds) + "Icons and sounds change after the next restart of the console. " +
+        "Restored and verified 4 original(s).", NoticeLevel.Success);
+    Save("toast-restore-no-original", ThemeView.System);
+    renderer.ClearNotice();
+    renderer.NoOriginalKinds = NoOriginalKind.Backgrounds | NoOriginalKind.AppBackgrounds | NoOriginalKind.TileIcons | NoOriginalKind.Music | NoOriginalKind.Other;
+    Save("system-restore-no-original-many", ThemeView.System);
+    renderer.NoOriginalKinds = NoOriginalKind.None;
     // App update: the store announced a release with a ZIP, so X asks; then the same row when the files are in, and when it only knows of a release.
     browser.Update(up);
     renderer.NewerVersion = "01.000.027";

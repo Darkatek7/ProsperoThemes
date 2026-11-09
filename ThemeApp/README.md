@@ -84,19 +84,43 @@ launch evidence are recorded separately below.
   `catalog/<firmware>.json` (StockCatalog: 9.60, 10.01, 10.20, 10.40, 10.60, 11.00, 11.20, 11.40, 11.60, 12.00, 12.02, 12.20, 12.40, 12.60, 12.70, 13.00, 13.20, 13.40, 13.42, 13.60) has the stock hash of each asset
   and of the icon container. A tile icon then comes back from the firmware's own copy in
   `/system_ex/rnps/apps` (on 13.00, 8 of the 9 icons are identical to it; Sony's servers updated NPXS40305).
-  Any other such file has no original left on the console: Restore defaults leaves it and names it. A pack can still
+  Any other such file has no original left on the console: Restore defaults leaves it and says so by kind (see "Files
+  without an original" below). A pack can still
   bring it back: a payload with the firmware's own bytes counts as put back, is written at full volume if it is music, and a
   `stock` target (`Shared/RcoStock.cs`) restores the icon container's icons and sounds: exactly when it has this firmware's
   bytes, and only if the result is the catalog's hash (otherwise the container stays and the skip note says why). With
   another firmware's bytes it puts back what a theme changed by name: a theme's icon has lost its title, so it is an
   untitled slot the catalog does not list, known by its length; a theme's sound keeps its name and has both channels alike. A backup that
-  does not match the catalog is never written back. On firmware without a catalog (one no report came from yet) the look
+  does not match the catalog is never written back. A firmware the app carries no catalog for can get one from the store
+  without an app release (see "Store catalogs" below). On firmware without any catalog (one no report came from yet) the look
   decides (`Shared/StockLook.cs`): a stock icon container titles every theme icon (home, settings, power, ps_store and
   the rest), and the system tiles' backgrounds all differ; reports from 9.60 to 13.60 agree. A main background with a
   picture two or more tiles share counts as a theme's too (11.60 and 13.60 reports); one tile like it is not enough. A backup that fails this
   (made from another tool's theme, as on a 12.40 console whose 13 tile backgrounds were one picture) is never written
-  back nor recorded as an original, and a first apply keeps no backup of such a live file; both are named. The System tab shows the firmware
+  back nor recorded as an original, and a first apply keeps no backup of such a live file (`ThemeApplier.NoOriginal` lists
+  both). The System tab shows the firmware
   (`SystemInfo.SystemSoftwareVersion`, "13.000.040" on the test console); `state.json` records it.
+- **Files without an original** (`Library/RestoreLimits.cs`; issue #12): about a third of the firmware reports come from consoles
+  another tool had themed before this app ran, with no backup of the originals. The app tells these users what Restore defaults
+  can and cannot do there, by kind and never by path (13 tile backgrounds are "backgrounds"), without changing what the applier
+  writes. What comes back without a backup: tile icons (the firmware's copy in `/system_ex/rnps/apps`, by Restore defaults
+  itself) and the icon container's system icons and UI sounds (only by applying a theme with the original icons and sounds, a
+  `stock` target; Restore defaults leaves the container). What does not: the home and system tile backgrounds, a title's
+  own background, the home music (`.at9`) and any other file, unless a pack brings the firmware's own bytes.
+  - **Once, on the first job that meets them:** after an apply or a restore whose `NoOriginal` has a kind the user was not told
+    about yet (`RestoreLimits.ShouldTell`, kept as `no_original_told` in settings.json), the dialog "This console had another
+    theme" says it ("…Restore defaults can't bring back the old backgrounds and home music: they stay as that theme left them."),
+    OK only. The texts count icons and sounds among what stays: a pack with the firmware's own bytes could bring them back,
+    but none is published and the store refuses one, so they point users at nothing they cannot get. A home screen restart question
+    from the same job opens after it. A kind met later for the first time tells once more; nothing else repeats it.
+  - **Every restore:** the result leads with what stayed ("Backgrounds and home music stay as another tool's theme left
+    them."). An apply's result no longer names such files.
+  - **Findable again:** the app keeps the files in `/data/prospero-themes/no-original.txt` (logical paths; an apply drops the
+    files it wrote with an original and adds what it found, a full restore replaces the list, a restore of some parts replaces
+    those parts). While it lists any, the System tab's Restore defaults row says "On this console, the old backgrounds
+    can't come back" and both Restore questions say what stays. Not updated by the home screen restart's own restore nor by
+    "apply your look again" after a system update; the next apply or restore of the file brings it up to date. Preview:
+    `dialog-no-original*.png`, `system-restore-no-original*.png`, `dialog-restore*-no-original.png`, `toast-restore-no-original.png`.
 - **Room before each write** (issue #13, helper v10): every console file is written as `<file>.tmp` and renamed over the
   old one, so its filesystem needs room for the whole new file first. A 12.40 console with a full `/system_ex` was left
   with half an icon container (`Sce.PlayStation.PUI_UI3.rco.tmp`, 52 MB of 106 MB) that the next boot kept. Now the app
@@ -136,14 +160,31 @@ launch evidence are recorded separately below.
   `python ThemePackCreator/theme_pack.py catalog-from-report <report> catalog/<fw>.json` turns it into a
   catalog and lists what differs from 13.00. The 13.00 console's own report reproduces
   `catalog/13.00.json` exactly.
+- **Store catalogs** (`Library/StoreCatalog.cs`): when `catalog/<fw>.json` is not in the app, the store can serve the
+  catalog of that firmware, so a newly measured firmware does not wait for a release. `GET <store>/api/catalogs` lists
+  `{"items":[{"firmware","sha256","updatedAt"}]}` (the hash of the exact body of the next request), and
+  `GET <store>/api/catalogs/<fw>` (`<fw>` as `StockCatalog.FirmwareName` makes it, "13.60") answers the catalog in the
+  format of `catalog/*.json`, or 404. At start the bundled catalog wins; without one the app uses its checked copy
+  `/data/prospero-themes/catalogs/<fw>.json` (through the helper when the app's folder needs it). After the first library
+  scan, next to the app update check, a thread of its own asks the store again: a copy whose hash is the listed one is not
+  downloaded again; a new catalog is used from then on and replaces the copy (written as `.tmp`, then renamed). Nothing
+  waits for it: an apply that starts meanwhile keeps the catalog it started with, and a missing network says nothing. A
+  catalog is used and kept only when it is at most 1 MB (the download itself is capped), is a JSON object whose `firmware` is the name asked
+  for, has the listed SHA-256, every `path` (assets, icon container, tile icons) is a logical path under a known asset
+  root (`Shared/AssetRoots.cs`), every `stock_sha256` is 64 lower-case hex digits and it has at least one stock hash; the
+  copy is checked again when it is read at start. A 404, an error or a catalog that fails a check keeps the copy there was.
+  The System tab's info panel names the source after the firmware ("13.60 · catalog in the app", "… catalog from the
+  store", "… no catalog yet"); without any, the Firmware report row says "No catalog for <fw> yet: a report from this
+  console adds one". Every bundled catalog passes the same checks (`StoreCatalogTests`).
 - The on-screen text is English (US spelling). The Inter font atlases cover ASCII plus the characters in
   `CHARS` of `tools/bake-assets.py` (`… · – × “ ” ‘ ’` and some accented Latin letters); keep new UI text
   inside that set.
 - **App update** (System tab, the row before Restore defaults; see "In-app update" below).
 - **System tab:** a focusable list (d-pad up/down, X): App backgrounds (X switches between "Without own image" and
   "All apps"), Store address (X opens the keyboard), Firmware report (X saves the report), Restore defaults (X asks
-  first). Circle goes back to the Library. The first time System opens on a firmware without a bundled catalog
-  (`/app0/sce_sys/prospero-themes/catalog/<fw>.json` missing, firmware known), a "Help support <fw>" question offers
+  first). Circle goes back to the Library. The first time System opens on a firmware without any catalog
+  (`/app0/sce_sys/prospero-themes/catalog/<fw>.json` missing, no store copy kept, firmware known; a store catalog that
+  arrives before System opens takes the question back), a "Help support <fw>" question offers
   "Send report" (the same as Firmware report, Save and send) or "Not now" (Circle too); the firmware is kept as
   `report_asked` in `settings.json`, so it is not asked again for it.
 - **Store address** (System tab, Store address row): X opens an on-screen keyboard that the app draws itself, so no system

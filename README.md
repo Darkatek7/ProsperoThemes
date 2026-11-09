@@ -93,7 +93,11 @@ System tab, where X switches between the two. Themes without an app background g
 **Restore defaults** is the last row on the System tab. X opens a dialog that asks first. Cancel is selected at the
 start, so choose "Restore defaults" and press X to go ahead. It puts every changed file back from the backups the
 app made before the first change. When a backup is gone, tile icons come back from the firmware's own copy; any
-other file the app can no longer find an original for is left as it is and named in the result. Applying a theme starts from the defaults too: whatever an earlier theme changed
+other file the app can no longer find an original for is left as it is. On a console another tool had already themed
+before Prospero Themes ran, the app has no copy of those originals: the first apply or restore that meets them says so
+once ("This console had another theme"), and from then on the Restore defaults row and question say which kinds stay,
+for example the old backgrounds and home music. System icons and sounds can still come back by applying a theme that
+brings the original icons and sounds. Applying a theme starts from the defaults too: whatever an earlier theme changed
 and the new one does not cover goes back to its original first, so themes never stack.
 
 **Originals from USB.** A file stays themed when the console no longer has its original, for example when a backup was
@@ -120,13 +124,18 @@ replaced and takes those as the new defaults, so Restore defaults never puts an 
 It then offers to apply your theme again. Before 13.00 the file with the system icons and sounds is about 100 MB; the
 app holds files that large outside its own memory, so preparing the backups no longer runs out of memory (issue #13).
 
-On another firmware, please send a report. The first time you open the System tab on a firmware this app has no
+On another firmware, please send a report. The System tab's info panel says whether the app has a catalog (the
+measured original files) for your firmware: in the app, from the store, or none yet. A firmware measured after a release
+does not need a new app version: the app asks the store for its catalog in the background at start, checks it and keeps a
+copy (`/data/prospero-themes/catalogs/`). The first time you open the System tab on a firmware this app has no
 measurements for, it asks once ("Send report" or "Not now"; it does not ask again for that firmware). You can also
 send one yourself: on the System tab, X on the Firmware report row offers "Save" or
 "Save and send". It saves `/data/prospero-themes/reports/firmware-<version>.json` (and a copy on a connected USB
 drive); "Save and send" also sends it to the store and shows a short code. It only reads, and describes the files
 a theme can change (sizes, hashes, formats, the icon list). Open an issue on this repository with the code, or
-attach the file; `ThemePackCreator/theme_pack.py catalog-from-report` turns it into a catalog for that firmware.
+attach the file; `ThemePackCreator/theme_pack.py catalog-from-report` turns it into a catalog for that firmware. Once
+the store serves that catalog, every console on that firmware gets it at its next start, before the next app release
+bundles it.
 
 ## Avatars
 
@@ -165,7 +174,7 @@ The pack format is described in [`Shared/README.md`](Shared/README.md).
 | [`Shared.Tests/`](Shared.Tests/README.md) | PC unit tests. |
 | [`ThemeApp.Preview/`](ThemeApp.Preview/README.md) | Runs the app's UI on the PC in a browser window. |
 | [`ThemePackCreator/`](ThemePackCreator/README.md), [`ZstdWrap/`](ZstdWrap/README.md) | PC tools that build packs and handle the console's `.dds.zst` textures. |
-| `catalog/`, `docs/` | The measured asset catalog and screen list for firmware 13.00. |
+| `catalog/`, `docs/` | The measured asset catalogs of each firmware (bundled with the app; the store can serve newer ones) and the screen list for firmware 13.00. |
 
 Some developer notes in these READMEs mention DevProbe and other research payloads from the author's private
 research repository. They are not part of this repository, and neither building nor using the app needs them.

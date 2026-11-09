@@ -60,6 +60,8 @@ internal sealed class ThemeApp : ProsperoApp
     /// <summary>The system software version ("13.000.000"), null when it could not be read.</summary>
     private string? _firmware;
     private StockCatalog _stock = StockCatalog.Empty;
+    // Where _stock comes from (the app, the store's kept copy, or none); a store catalog that arrives later replaces it (RefreshStoreCatalog).
+    private CatalogSource _catalogSource;
     // The firmware the System tab asks a report for (see AppSettings.ReportToAsk) until it is answered; null when not asked.
     private string? _reportAsk;
     // The community store: the list on screen and one HTTP client (Http/Ssl resolved at run time, see
@@ -169,14 +171,15 @@ internal sealed class ThemeApp : ProsperoApp
         try { _firmware = SharpProspero.Platform.SystemInfo.SystemSoftwareVersion; }
         catch { _firmware = null; }
         _renderer.Firmware = _firmware ?? "";
-        try { _stock = StockCatalog.Parse(StockCatalog.PathFor(_firmware) is { } catalog ? FileSystem.ReadAllText(catalog) : null); }
+        // The bundled catalog, else the store's kept copy (StoreCatalog; the store is asked again after the first scan).
+        string? bundledCatalog = null;
+        try { if (StockCatalog.PathFor(_firmware) is { } catalog && FileSystem.Exists(catalog)) bundledCatalog = FileSystem.ReadAllText(catalog); }
+        catch { /* then the store's, if there is one */ }
+        try { (_stock, _catalogSource) = StoreCatalog.Load(StockCatalog.FirmwareName(_firmware), bundledCatalog, AppData.Files); }
         catch { /* a firmware without a catalog: only the app's own records tell a theme's file from an original */ }
-        // A named firmware without a bundled catalog is asked once, the first time System opens, for a firmware report.
-        try
-        {
-            string? name = StockCatalog.FirmwareName(_firmware);
-            _reportAsk = _settings.ReportToAsk(name, StockCatalog.PathFor(_firmware) is { } bundled && FileSystem.Exists(bundled));
-        }
+        _renderer.CatalogSource = _catalogSource;
+        // A named firmware without any catalog is asked once, the first time System opens, for a firmware report.
+        try { _reportAsk = _settings.ReportToAsk(StockCatalog.FirmwareName(_firmware), _catalogSource != CatalogSource.None); }
         catch { /* not asked */ }
         if (_reportAsk is not null)
         {
@@ -254,12 +257,14 @@ internal sealed class ThemeApp : ProsperoApp
                 var snapshot = work();
                 string? applied = ReadApplied();
                 ThemePart restorable = ReadRestorable();
+                NoOriginalKind noOriginal = RestoreLimits.Of(ReadNoOriginal());
                 List<LookLayer>? look = ReadLook();
                 AvatarApplier.State? avatar = user is { } id ? AvatarApplier.Current(id, AppData.Files) : null;
                 SystemUpdate.Plan? update = checkUpdate ? ReadUpdatePlan(snapshot.Entries, firmware, skipped, sounds) : null;
                 _results.Post(() =>
                 {
                     _restorable = restorable;
+                    _renderer.NoOriginalKinds = noOriginal;
                     ShowAppliedAvatar(avatar);
                     _renderer.ResetCovers();
                     _added = snapshot.Added ?? _added;
@@ -276,7 +281,11 @@ internal sealed class ThemeApp : ProsperoApp
                         _renderer.ReapplyText = SystemUpdate.Text(update, firmware);
                         _browser.AskReapply();
                     }
-                    if (checkUpdate) CheckAppVersion();
+                    if (checkUpdate)
+                    {
+                        CheckAppVersion();
+                        RefreshStoreCatalog();
+                    }
                     _renderer.AppliedId = applied;
                     RefreshCommunityBadges();
                     // The USB Import screen shows the last import's result; a plain scan has nothing to say there.
@@ -520,12 +529,77 @@ internal sealed class ThemeApp : ProsperoApp
     /// Runs a system-changing job on the worker: starts ThemeHelper if it is not running yet, then hands the
     /// job an applier whose theme-root writes go through it. The result is shown as a notice.
     /// </summary>
-    private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work, ThemePart parts = ThemePart.All, string? source = null) =>
-        StartHelperWork(busyText, needsHelper: true, _ => work(new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
+    /// <remarks>
+    /// After the job, the files it found without an original (<see cref="ThemeApplier.NoOriginal"/>) update the app's record of
+    /// them (<see cref="RecordNoOriginal"/>); <paramref name="restored"/> names the parts of a Restore defaults. The first job that
+    /// finds a kind the user was not told about shows the notice (<see cref="ShowNoOriginal"/>).
+    /// </remarks>
+    private void StartSystemWork(string busyText, Func<ThemeApplier, ApplyResult> work, ThemePart parts = ThemePart.All, string? source = null,
+        ThemePart? restored = null)
+    {
+        // Set on the worker, read by the frame thread once the result is posted.
+        NoOriginalKind found = NoOriginalKind.None, known = _renderer.NoOriginalKinds;
+        StartHelperWork(busyText, needsHelper: true, _ =>
         {
-            IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware, Stock = _stock, Parts = parts,
-            Progress = new WorkProgress(this, busyText), SourcePath = source, UiSoundVolume = _settings.SoundVolume / 100.0, MusicVolume = _settings.MusicVolume / 100.0,
-        }));
+            var applier = new ThemeApplier(new HelperDeviceFiles(), HelperDeviceFiles.UnixSeconds)
+            {
+                IncludeAllApps = _allAppsBackgrounds, KeepEarlierThemes = !_settings.ReplaceEarlierThemes, Firmware = _firmware, Stock = _stock, Parts = parts,
+                Progress = new WorkProgress(this, busyText), SourcePath = source, UiSoundVolume = _settings.SoundVolume / 100.0, MusicVolume = _settings.MusicVolume / 100.0,
+            };
+            ApplyResult result = work(applier);
+            (found, known) = RecordNoOriginal(applier, result, restored);
+            return result;
+        }, after: () => ShowNoOriginal(found, known));
+    }
+
+    private static string NoOriginalPath => AppData.Root + "/" + RestoreLimits.FileName;
+
+    /// <summary>The app's record of files without an original (<see cref="RestoreLimits.FileName"/>); empty when there is none.</summary>
+    private static List<string> ReadNoOriginal()
+    {
+        try { return RestoreLimits.Parse(AppData.Files.Exists(NoOriginalPath) ? AppData.Files.ReadAllText(NoOriginalPath) : null); }
+        catch { return new List<string>(); }
+    }
+
+    /// <summary>
+    /// Updates the record with what an apply or a restore (<paramref name="restored"/>: its parts) found, on the worker. A restore
+    /// that failed as a whole only adds to it. Returns the kinds the job found and the kinds the console has now.
+    /// </summary>
+    private static (NoOriginalKind Found, NoOriginalKind Known) RecordNoOriginal(ThemeApplier applier, ApplyResult result, ThemePart? restored)
+    {
+        List<string> known = ReadNoOriginal();
+        var written = new List<string>();
+        foreach (string device in result.Written)
+            if (AssetRoots.TryLogical(device, out string logical)) written.Add(logical);
+        List<string> after = restored is { } parts && result.Success
+            ? RestoreLimits.AfterRestore(known, parts, applier.NoOriginal)
+            : RestoreLimits.AfterApply(known, restored is null ? written : [], applier.NoOriginal);
+        try
+        {
+            string text = RestoreLimits.Serialize(after);
+            if (text != RestoreLimits.Serialize(known))
+            {
+                if (after.Count == 0) AppData.Files.DeleteFile(NoOriginalPath);
+                else AppData.Files.WriteAllText(NoOriginalPath, text);
+            }
+        }
+        catch { /* the System tab then says what the last start knew; the next job tries again */ }
+        return (RestoreLimits.Of(applier.NoOriginal), RestoreLimits.Of(after));
+    }
+
+    /// <summary>
+    /// On the frame thread after a job: the System tab's Restore defaults row and question follow <paramref name="known"/>, and the
+    /// notice shows when the job found a kind the user was not told about yet (<see cref="RestoreLimits.ShouldTell"/>), once.
+    /// </summary>
+    private void ShowNoOriginal(NoOriginalKind found, NoOriginalKind known)
+    {
+        _renderer.NoOriginalKinds = known;
+        if (!RestoreLimits.ShouldTell(found, _settings.NoOriginalTold)) return;
+        _settings = _settings with { NoOriginalTold = _settings.NoOriginalTold | found };
+        try { WriteSettings(); }
+        catch { /* told again on the next start's first such job */ }
+        _browser.TellNoOriginal();
+    }
 
     /// <summary>
     /// Passes an apply's or restore's progress from the worker to the toast, at most about ten times a second (each
@@ -555,11 +629,11 @@ internal sealed class ThemeApp : ProsperoApp
     /// runs). With <paramref name="needsHelper"/> a problem ends the job before it starts.
     /// </summary>
     private void StartHelperWork(string busyText, bool needsHelper, Func<string?, ApplyResult> work, bool offerRestart = true,
-        bool holdResult = false)
+        bool holdResult = false, Action? after = null)
     {
         if (_fitChecking)
         {
-            _afterFit = () => StartHelperWork(busyText, needsHelper, work, offerRestart, holdResult);
+            _afterFit = () => StartHelperWork(busyText, needsHelper, work, offerRestart, holdResult, after);
             _renderer.Notify(busyText, NoticeLevel.Info);
             return;
         }
@@ -619,6 +693,8 @@ internal sealed class ThemeApp : ProsperoApp
                 _renderer.Notify(message, ok ? NoticeLevel.Success : NoticeLevel.Error, holdResult);
                 _renderer.Busy = false;
                 _busy = false;
+                // Before the restart question, which waits for a notice it opens.
+                after?.Invoke();
                 // The helper may run now: packs that could not be checked before are asked again.
                 _fitAsked.Clear();
                 if (shellBackups is not null)
@@ -733,7 +809,7 @@ internal sealed class ThemeApp : ProsperoApp
             case ThemeAction.SaveLook when _look is { Count: > 1 } look: SaveLook(look); break;
             case ThemeAction.RestoreOriginals:
                 ThemePart restoreParts = _browser.RestoreParts;
-                StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals(restoreParts));
+                StartSystemWork("Restoring defaults…", applier => applier.RestoreOriginals(restoreParts), restored: restoreParts);
                 break;
             case ThemeAction.RemoveTheme when _browser.Selected >= 0 && !_entries[_browser.Selected].Bundled:
                 ThemeLibraryEntry removed = _entries[_browser.Selected];
@@ -1312,6 +1388,34 @@ internal sealed class ThemeApp : ProsperoApp
                 else _updateNotice = text;
             });
         }) { IsBackground = true, Name = "AppUpdate" }.Start();
+    }
+
+    /// <summary>
+    /// Asks the store for this firmware's stock catalog (<see cref="StoreCatalog"/>) on a thread of its own, once per start
+    /// after the first scan, when the app carries none for it. Nothing waits for it: until it is back, the kept copy (or no
+    /// catalog) is used, and an apply that starts meanwhile keeps the catalog it started with. A catalog that passes the checks
+    /// is used from then on; any failure says nothing and keeps what there was (the next start asks again).
+    /// </summary>
+    private void RefreshStoreCatalog()
+    {
+        string baseUrl = _settings.StoreUrl;
+        if (_catalogSource == CatalogSource.Bundled || baseUrl.Length == 0 || StockCatalog.FirmwareName(_firmware) is not { } name) return;
+        new Thread(() =>
+        {
+            StoreCatalog.RefreshResult result;
+            try { result = StoreCatalog.Refresh(baseUrl, name, url => Http().Get(url, StoreCatalog.MaxBytes), AppData.Files); }
+            catch (Exception ex) { result = new(StoreCatalog.RefreshOutcome.Failed, null, ex.Message); }
+            if (result.Catalog is not { } catalog) return;
+            _results.Post(() =>
+            {
+                _stock = catalog;
+                _catalogSource = CatalogSource.Store;
+                _renderer.CatalogSource = CatalogSource.Store;
+                // The report question is about a firmware without a catalog; not asked when it is not open yet. The next
+                // start finds the kept copy and does not ask either.
+                if (_reportAsk is not null && _browser.WithdrawReportOffer()) _reportAsk = null;
+            });
+        }) { IsBackground = true, Name = "StoreCatalog" }.Start();
     }
 
     /// <summary>Puts what is known about a newer release on the System screen: the version, the row's state and the question's text.</summary>

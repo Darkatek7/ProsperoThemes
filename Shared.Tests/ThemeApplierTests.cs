@@ -1335,11 +1335,15 @@ public class ThemeApplierTests
         Assert.Equal(Frame(1000, "two"), fake.Files[Dev1]);
         Assert.False(fake.Files.ContainsKey(Backup1));
         Assert.Equal(new[] { Path1 }, again.NoOriginal);
-        Assert.Contains("no original on this console", apply.Message);
+        // An apply does not say it every time (the app tells once); a restore does, by kind and without paths.
+        Assert.DoesNotContain("no original", apply.Message);
 
-        ApplyResult restore = Applier(fake).RestoreOriginals();
+        ThemeApplier restorer = Applier(fake);
+        ApplyResult restore = restorer.RestoreOriginals();
         Assert.Equal(Frame(1000, "two"), fake.Files[Dev1]);
-        Assert.Contains("1 changed file(s) have no original", restore.Message);
+        Assert.Equal(new[] { Path1 }, restorer.NoOriginal);
+        Assert.StartsWith("Backgrounds stay as another tool’s theme left them. ", restore.Message);
+        Assert.DoesNotContain(Path1, restore.Message);
     }
 
     [Fact]
@@ -1387,7 +1391,7 @@ public class ThemeApplierTests
 
         Assert.Equal(Zst("theme"), fake.Files[Dev1]);
         Assert.Equal(new[] { Path1 }, applier.NoOriginal);
-        Assert.Contains("no original", result.Message);
+        Assert.Contains("Backgrounds stay", result.Message);
 
         // Once the console has the stock file again, it becomes the backup.
         fake.Files[Dev1] = stock;
@@ -1507,7 +1511,7 @@ public class ThemeApplierTests
 
         Assert.Equal(StockLookTests.Container(["utility/iconid_extra"]), fake.Files[RcoDevice]);
         Assert.Equal(new[] { Rco }, applier.NoOriginal);
-        Assert.Contains("no original", result.Message);
+        Assert.StartsWith("Icons and sounds stay as another tool’s theme left them. ", result.Message);
         Assert.False(fake.Files.ContainsKey("/data/prospero-themes/backup/originals.txt")
             && Encoding.UTF8.GetString(fake.Files["/data/prospero-themes/backup/originals.txt"]).Contains(Sha(themed)));
     }
@@ -1537,10 +1541,28 @@ public class ThemeApplierTests
         Index(fake, TileA, TileB);
 
         ThemeApplier applier = Applier(fake);
-        applier.RestoreOriginals();
+        ApplyResult result = applier.RestoreOriginals();
 
         Assert.Equal(Frame(1000, "live-a"), fake.Files["/system_ex/" + TileA]);
         Assert.Equal(new[] { TileA, TileB }, applier.NoOriginal.OrderBy(p => p, StringComparer.Ordinal));
+        // Two tiles are one kind: the result names backgrounds once and no path.
+        Assert.StartsWith("Backgrounds stay as another tool’s theme left them. ", result.Message);
+        Assert.DoesNotContain("bg_NPXS", result.Message);
+    }
+
+    [Fact]
+    public void A_first_apply_on_another_tools_theme_does_not_name_the_files_in_its_result()
+    {
+        byte[] theme = Frame(1000, "other-tool");
+        var fake = DeviceWithLive(("/system_ex/" + TileA, theme), ("/system_ex/" + TileB, theme));
+
+        ThemeApplier applier = Applier(fake);
+        ApplyResult result = applier.Apply(MakePack(null, (TileA, Frame(1000, "ours"))));
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(NoOriginalKind.Backgrounds, RestoreLimits.Of(applier.NoOriginal));
+        Assert.DoesNotContain(TileA, result.Message);
+        Assert.DoesNotContain("another tool", result.Message);
     }
 
     [Fact]
