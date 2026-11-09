@@ -93,7 +93,11 @@ System tab, where X switches between the two. Themes without an app background g
 **Restore defaults** is the last row on the System tab. X opens a dialog that asks first. Cancel is selected at the
 start, so choose "Restore defaults" and press X to go ahead. It puts every changed file back from the backups the
 app made before the first change. When a backup is gone, tile icons come back from the firmware's own copy; any
-other file the app can no longer find an original for is left as it is and named in the result. Applying a theme starts from the defaults too: whatever an earlier theme changed
+other file the app can no longer find an original for is left as it is. On a console another tool had already themed
+before Prospero Themes ran, the app has no copy of those originals: the first apply or restore that meets them says so
+once ("This console had another theme"), and from then on the Restore defaults row and question say which kinds stay,
+for example the old backgrounds and home music. System icons and sounds can still come back by applying a theme that
+brings the original icons and sounds. Applying a theme starts from the defaults too: whatever an earlier theme changed
 and the new one does not cover goes back to its original first, so themes never stack.
 
 **Originals from USB.** A file stays themed when the console no longer has its original, for example when a backup was

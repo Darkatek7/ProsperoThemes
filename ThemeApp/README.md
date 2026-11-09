@@ -84,7 +84,8 @@ launch evidence are recorded separately below.
   `catalog/<firmware>.json` (StockCatalog: 9.60, 10.01, 10.20, 10.40, 10.60, 11.00, 11.20, 11.40, 11.60, 12.00, 12.02, 12.20, 12.40, 12.60, 12.70, 13.00, 13.20, 13.40, 13.42, 13.60) has the stock hash of each asset
   and of the icon container. A tile icon then comes back from the firmware's own copy in
   `/system_ex/rnps/apps` (on 13.00, 8 of the 9 icons are identical to it; Sony's servers updated NPXS40305).
-  Any other such file has no original left on the console: Restore defaults leaves it and names it. A pack can still
+  Any other such file has no original left on the console: Restore defaults leaves it and says so by kind (see "Files
+  without an original" below). A pack can still
   bring it back: a payload with the firmware's own bytes counts as put back, is written at full volume if it is music, and a
   `stock` target (`Shared/RcoStock.cs`) restores the icon container's icons and sounds: exactly when it has this firmware's
   bytes, and only if the result is the catalog's hash (otherwise the container stays and the skip note says why). With
@@ -95,8 +96,29 @@ launch evidence are recorded separately below.
   the rest), and the system tiles' backgrounds all differ; reports from 9.60 to 13.60 agree. A main background with a
   picture two or more tiles share counts as a theme's too (11.60 and 13.60 reports); one tile like it is not enough. A backup that fails this
   (made from another tool's theme, as on a 12.40 console whose 13 tile backgrounds were one picture) is never written
-  back nor recorded as an original, and a first apply keeps no backup of such a live file; both are named. The System tab shows the firmware
+  back nor recorded as an original, and a first apply keeps no backup of such a live file (`ThemeApplier.NoOriginal` lists
+  both). The System tab shows the firmware
   (`SystemInfo.SystemSoftwareVersion`, "13.000.040" on the test console); `state.json` records it.
+- **Files without an original** (`Library/RestoreLimits.cs`; issue #12): about a third of the firmware reports come from consoles
+  another tool had themed before this app ran, with no backup of the originals. The app tells these users what Restore defaults
+  can and cannot do there, by kind and never by path (13 tile backgrounds are "backgrounds"), without changing what the applier
+  writes. What comes back without a backup: tile icons (the firmware's copy in `/system_ex/rnps/apps`, by Restore defaults
+  itself) and the icon container's system icons and UI sounds (only by applying a theme with the original icons and sounds, a
+  `stock` target; Restore defaults leaves the container). What does not: the home and system tile backgrounds, a title's
+  own background, the home music (`.at9`) and any other file, unless a pack brings the firmware's own bytes.
+  - **Once, on the first job that meets them:** after an apply or a restore whose `NoOriginal` has a kind the user was not told
+    about yet (`RestoreLimits.ShouldTell`, kept as `no_original_told` in settings.json), the dialog "This console had another
+    theme" says it ("…Restore defaults can't bring back the old backgrounds and home music: they stay as that theme left them.
+    Icons and sounds can still come back with a theme that has the originals."), OK only. A home screen restart question
+    from the same job opens after it. A kind met later for the first time tells once more; nothing else repeats it.
+  - **Every restore:** the result leads with what stayed ("Backgrounds and home music stay as another tool's theme left
+    them. Icons and sounds need a theme with the originals."). An apply's result no longer names such files.
+  - **Findable again:** the app keeps the files in `/data/prospero-themes/no-original.txt` (logical paths; an apply drops the
+    files it wrote with an original and adds what it found, a full restore replaces the list, a restore of some parts replaces
+    those parts). While it lists any, the System tab's Restore defaults row says "On this console, the old backgrounds
+    can't come back" and both Restore questions say what stays. Not updated by the home screen restart's own restore nor by
+    "apply your look again" after a system update; the next apply or restore of the file brings it up to date. Preview:
+    `dialog-no-original*.png`, `system-restore-no-original*.png`, `dialog-restore*-no-original.png`, `toast-restore-no-original.png`.
 - **Room before each write** (issue #13, helper v10): every console file is written as `<file>.tmp` and renamed over the
   old one, so its filesystem needs room for the whole new file first. A 12.40 console with a full `/system_ex` was left
   with half an icon container (`Sce.PlayStation.PUI_UI3.rco.tmp`, 52 MB of 106 MB) that the next boot kept. Now the app
