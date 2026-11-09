@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pc-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The SDK branch the README names (SvenGDK/SharpProspero#6) until it is merged upstream.
+      - name: Check out SharpProspero
+        uses: actions/checkout@v4
+        with:
+          repository: Darkatek7/SharpProspero
+          ref: sharpprospero-crt-allproc-fw13
+          path: SharpProspero
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Shared.Tests
+        env:
+          SHARPPROSPERO_ROOT: ${{ github.workspace }}/SharpProspero
+        run: dotnet test Shared.Tests --logger "console;verbosity=minimal"
