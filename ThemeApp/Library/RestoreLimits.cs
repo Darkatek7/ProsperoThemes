@@ -170,7 +170,7 @@ public static class RestoreLimits
         if (kinds == NoOriginalKind.None) return "";
         NoOriginalKind lost = Lost(kinds);
         string stays = lost == NoOriginalKind.None ? "" : Capitalized(ShortNames(lost)) + (lost == NoOriginalKind.Music ? " stays" : " stay")
-            + " as another tool’s theme left " + (lost == NoOriginalKind.Music ? "it" : "them") + ": this console has no original" + (lost == NoOriginalKind.Music ? "" : "s") + ". ";
+            + " as another tool’s theme left " + (lost == NoOriginalKind.Music ? "it" : "them") + ". ";
         string icons = (kinds & ComesBack) == 0 ? ""
             : lost == NoOriginalKind.None ? "Icons and sounds stay as another tool’s theme left them; a theme with the originals brings them back. "
             : "Icons and sounds need a theme with the originals. ";
@@ -190,19 +190,23 @@ public static class RestoreLimits
     public static string DialogText(NoOriginalKind kinds)
     {
         const string plain = "Puts the original backgrounds, icons and sounds back on this console. Your theme library stays as it is.";
-        return kinds == NoOriginalKind.None ? plain : "Puts back what Prospero Themes changed. Your theme library stays as it is. " + NoticeText(kinds);
+        return kinds == NoOriginalKind.None ? plain : "Puts back what Prospero Themes changed; your theme library stays as it is. " + Limit(kinds);
     }
 
     /// <summary>The text of the Restore defaults question with parts on this console: the parts first, then the limit in one sentence.</summary>
     public static string PartsDialogText(NoOriginalKind kinds)
     {
         const string plain = "Tick the parts to put back. System icons and sounds share one file, so they go back together. Your library stays as it is.";
+        return kinds == NoOriginalKind.None ? plain : "Tick the parts to put back. System icons and sounds go back together. " + Limit(kinds);
+    }
+
+    // What Restore defaults cannot do on this console, in one or two short sentences (the questions show five lines at most).
+    private static string Limit(NoOriginalKind kinds)
+    {
         NoOriginalKind lost = Lost(kinds);
-        if (kinds == NoOriginalKind.None) return plain;
-        string limit = lost == NoOriginalKind.None
-            ? "Icons and sounds need a theme with the originals: another tool’s theme left them."
-            : "The old " + ShortNames(lost) + " can’t come back: another tool’s theme left " + (lost == NoOriginalKind.Music ? "it." : "them.");
-        return "Tick the parts to put back. System icons and sounds go back together. " + limit;
+        if (lost == NoOriginalKind.None) return "Icons and sounds need a theme with the originals: another tool’s theme left them.";
+        string limit = "The old " + ShortNames(lost) + " can’t come back: another tool’s theme left " + (lost == NoOriginalKind.Music ? "it." : "them.");
+        return (kinds & ComesBack) == 0 ? limit : limit + " Icons and sounds need a theme with the originals.";
     }
 
     /// <summary>The kinds in words, in a fixed order ("backgrounds, tile icons and home music").</summary>

@@ -78,11 +78,11 @@ public class RestoreLimitsTests
     [Fact]
     public void The_restore_result_leads_with_the_kinds_that_stay()
     {
-        Assert.Equal("Backgrounds stay as another tool’s theme left them: this console has no originals. ",
+        Assert.Equal("Backgrounds stay as another tool’s theme left them. ",
             RestoreLimits.ResultLine(NoOriginalKind.Backgrounds));
-        Assert.Equal("Home music stays as another tool’s theme left it: this console has no original. ",
+        Assert.Equal("Home music stays as another tool’s theme left it. ",
             RestoreLimits.ResultLine(NoOriginalKind.Music));
-        Assert.Equal("Backgrounds and home music stay as another tool’s theme left them: this console has no originals. " +
+        Assert.Equal("Backgrounds and home music stay as another tool’s theme left them. " +
             "Icons and sounds need a theme with the originals. ",
             RestoreLimits.ResultLine(NoOriginalKind.Backgrounds | NoOriginalKind.Music | NoOriginalKind.IconsAndSounds));
     }
@@ -105,7 +105,8 @@ public class RestoreLimitsTests
 
         Assert.Contains("backgrounds", RestoreLimits.RowText(kinds));
         Assert.DoesNotContain("Put every background", RestoreLimits.RowText(kinds));
-        Assert.Contains("can’t bring back the old backgrounds", RestoreLimits.DialogText(kinds));
+        Assert.Equal("Puts back what Prospero Themes changed; your theme library stays as it is. The old backgrounds can’t come back: " +
+            "another tool’s theme left them. Icons and sounds need a theme with the originals.", RestoreLimits.DialogText(kinds));
         Assert.Contains("The old backgrounds can’t come back", RestoreLimits.PartsDialogText(kinds));
     }
 
@@ -121,6 +122,9 @@ public class RestoreLimitsTests
         Assert.InRange(RestoreLimits.NoticeText(kinds).Length, 1, 300);
         Assert.InRange(RestoreLimits.ResultLine(kinds).Length, 1, 150);
         Assert.InRange(RestoreLimits.RowText(kinds).Length, 1, 80);
+        // The Restore questions: five lines of the dialog, the parts one with its first sentences.
+        Assert.InRange(RestoreLimits.DialogText(kinds).Length, 1, 260);
+        Assert.InRange(RestoreLimits.PartsDialogText(kinds).Length, 1, 260);
     }
 
     [Fact]

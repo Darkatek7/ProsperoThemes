@@ -1342,7 +1342,7 @@ public class ThemeApplierTests
         ApplyResult restore = restorer.RestoreOriginals();
         Assert.Equal(Frame(1000, "two"), fake.Files[Dev1]);
         Assert.Equal(new[] { Path1 }, restorer.NoOriginal);
-        Assert.StartsWith("Backgrounds stay as another tool’s theme left them: this console has no originals. ", restore.Message);
+        Assert.StartsWith("Backgrounds stay as another tool’s theme left them. ", restore.Message);
         Assert.DoesNotContain(Path1, restore.Message);
     }
 
@@ -1546,7 +1546,7 @@ public class ThemeApplierTests
         Assert.Equal(Frame(1000, "live-a"), fake.Files["/system_ex/" + TileA]);
         Assert.Equal(new[] { TileA, TileB }, applier.NoOriginal.OrderBy(p => p, StringComparer.Ordinal));
         // Two tiles are one kind: the result names backgrounds once and no path.
-        Assert.StartsWith("Backgrounds stay as another tool’s theme left them: this console has no originals. ", result.Message);
+        Assert.StartsWith("Backgrounds stay as another tool’s theme left them. ", result.Message);
         Assert.DoesNotContain("bg_NPXS", result.Message);
     }
 
