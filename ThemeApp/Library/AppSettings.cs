@@ -79,6 +79,12 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     public string? ReportAsked { get; init; }
 
     /// <summary>
+    /// The kinds of file without an original (<see cref="RestoreLimits"/>) the user was told about once ("no_original_told",
+    /// as "backgrounds,music"), so the notice does not come back on every apply. None when never told.
+    /// </summary>
+    public NoOriginalKind NoOriginalTold { get; init; }
+
+    /// <summary>
     /// The firmware to ask a report for on the System tab, or null: only a named firmware without a bundled catalog
     /// (<paramref name="hasCatalog"/>) that was not asked about yet.
     /// </summary>
@@ -95,7 +101,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
     public static AppSettings Parse(string? json, Func<string> newDeviceId)
     {
         bool all = false, replace = false, sounds = true, newest = false, hideAi = false;
-        string url = DefaultStoreUrl, device = "", skipped = "", asked = "", volume = "", music = "";
+        string url = DefaultStoreUrl, device = "", skipped = "", asked = "", volume = "", music = "", told = "";
         // The SDK's parser, not System.Text.Json: JsonDocument seeds its hashing from the BCL's crypto
         // random source, which pulls OpenSSL imports the console cannot link (see ThemePack.Hash).
         if (!string.IsNullOrWhiteSpace(json) && JsonValue.TryParse(json, out JsonValue root) && root.Type == JsonType.Object)
@@ -111,6 +117,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
             asked = root.GetString("report_asked");
             volume = root.GetString("sound_volume");
             music = root.GetString("music_volume");
+            told = root.GetString("no_original_told");
         }
         if (!IsDeviceId(device)) device = newDeviceId();
         return new AppSettings(all, url, device)
@@ -118,6 +125,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
             ReplaceEarlierThemes = replace, Sounds = sounds, LibrarySort = newest ? LibrarySort.Newest : LibrarySort.Name, HideAi = hideAi,
             ReapplySkipped = skipped.Length > 0 ? skipped : null, ReportAsked = asked.Length > 0 ? asked : null,
             SoundVolume = VolumeOf(volume, DefaultSoundVolume), MusicVolume = VolumeOf(music, DefaultMusicVolume),
+            NoOriginalTold = RestoreLimits.ParseKinds(told),
         };
     }
 
@@ -135,6 +143,7 @@ public sealed record AppSettings(bool AllAppsBackgrounds, string StoreUrl, strin
         o["device_id"] = DeviceId;
         if (ReapplySkipped is { Length: > 0 }) o["reapply_skipped"] = ReapplySkipped;
         if (ReportAsked is { Length: > 0 }) o["report_asked"] = ReportAsked;
+        if (NoOriginalTold != NoOriginalKind.None) o["no_original_told"] = RestoreLimits.KindsText(NoOriginalTold);
         return o.Write(indented: true) + "\n";
     }
 
