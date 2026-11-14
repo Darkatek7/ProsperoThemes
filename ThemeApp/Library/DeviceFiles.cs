@@ -67,16 +67,20 @@ public sealed class DeviceFiles : IDeviceFiles
     /// <summary>The names of the files in a folder; empty when it does not exist.</summary>
     public IReadOnlyList<string> ListFiles(string path) => List(path).Files;
 
+    // A folder that cannot be listed lists as empty, except in the app's folder: there the helper lists it when the app's
+    // own listing is refused (see AppData.ListingRefused), and from then on keeps the whole folder.
     private static (IReadOnlyList<string> Folders, IReadOnlyList<string> Files) List(string path) => AppData.Route(path, () =>
     {
         var folders = new List<string>();
         var files = new List<string>();
-        if (FileSystem.TryEnumerateDirectory(path, out var entries, out _))
+        if (FileSystem.TryEnumerateDirectory(path, out var entries, out int code))
             foreach (var e in entries)
             {
                 if (e.IsDirectory) folders.Add(e.Name);
                 else if (e.IsFile) files.Add(e.Name);
             }
+        else if (code != Folders.NoSuchEntry && AppData.Owns(path) && AppData.ListingRefused(code))
+            return ThemeHelperClient.ListEntries(path);
         return ((IReadOnlyList<string>)folders, (IReadOnlyList<string>)files);
     }, () => ThemeHelperClient.ListEntries(path));
 }
@@ -119,10 +123,21 @@ public static class AppData
             if (!_viaHelper)
             {
                 Folders.Ensure(Root);
-                if (!FileSystem.Exists(ForceHelperMarker)) return null;
-                string? problem = ThemeHelperClient.EnsureRunning();
-                if (problem is not null) return problem;
-                _viaHelper = true;
+                // Listing can be refused while reading and writing work: SharpProspero's directory reads used an 8 KiB
+                // buffer, which kstuff (11.00, 13.00) and Relapse (13.20) refuse with EINVAL, 0x80020016 (#18, #20). The
+                // library then looked empty. The SDK reads 64 KiB now; should a listing still be refused, the helper keeps
+                // the folder.
+                if (!FileSystem.TryEnumerateDirectory(Root, out _, out int code))
+                {
+                    if (code == Folders.NoSuchEntry || !ListingRefused(code)) return null;
+                }
+                else
+                {
+                    if (!FileSystem.Exists(ForceHelperMarker)) return null;
+                    string? problem = ThemeHelperClient.EnsureRunning();
+                    if (problem is not null) return problem;
+                    _viaHelper = true;
+                }
             }
         }
         catch (IOException local)
@@ -131,6 +146,24 @@ public static class AppData
         }
         try { ThemeHelperClient.MakeDirectories(Root); return null; }
         catch (Exception ex) { return ex.Message; }
+    }
+
+    /// <summary>
+    /// The app's own listing of a folder in its folder was refused (<paramref name="code"/>, not "no such entry"): the app's
+    /// folder goes through the helper from now on, when it runs or starts. False when it cannot take over; then the folder
+    /// lists as empty, as before.
+    /// </summary>
+    internal static bool ListingRefused(int code)
+    {
+        lock (Gate)
+        {
+            if (_viaHelper) return true;
+            if (ThemeHelperClient.EnsureRunning() is not null) return false;
+            try { ThemeHelperClient.MakeDirectories(Root); }
+            catch (Exception) { return false; }
+            _viaHelper = true;
+            return true;
+        }
     }
 
     /// <summary>
@@ -223,7 +256,10 @@ public static class LargeFile
 /// <summary>Folder creation and error messages that name the file.</summary>
 public static class Folders
 {
-    private const int AlreadyExists = unchecked((int)0x80020011), NoSuchEntry = unchecked((int)0x80020002);
+    private const int AlreadyExists = unchecked((int)0x80020011);
+
+    /// <summary>The kernel's "no such file or directory" (ENOENT).</summary>
+    public const int NoSuchEntry = unchecked((int)0x80020002);
 
     /// <summary>
     /// Creates <paramref name="path"/> and the folders above it that are missing. It asks mkdir itself instead of

@@ -98,6 +98,9 @@ fi
 # collector commits across ranges it reserved separately, and only the first one got memory behind it.
 grep -q 'JumpIfAtOrAbove("after")' "$sdk/tools/SharpProspero.Link/CompatEmitter.cs" \
     || die "the SDK at $sdk lacks the mprotect region walk; the app would crash at start. Use branch $SDK_BRANCH of $SDK_REPO."
+# With an 8 KiB directory read, kstuff and Relapse refuse every listing of /data, and the library looks empty (#18, #20).
+grep -q 'ReadBufferSize = 65536' "$sdk/src/SharpProspero/Storage/FileSystem.cs" \
+    || die "the SDK at $sdk reads directories with a small buffer; the library would look empty under kstuff. Update branch $SDK_BRANCH of $SDK_REPO."
 
 # --- libc.prx -------------------------------------------------------------------------------------
 libc="$repo/third_party/modules/libc.prx"
