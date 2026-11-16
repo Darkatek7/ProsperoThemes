@@ -97,6 +97,82 @@ public class RcoSvgTests
         Assert.Contains("#f00", Encoding.UTF8.GetString(live, o, n));
     }
 
+    /// <summary>A catalog of <see cref="Container"/>: its two icons titled at #0 and #1, as a report of an untouched console lists them.</summary>
+    private static StockCatalog LayoutCatalog(int icons = 2)
+    {
+        List<(int Offset, int Length, string? Title)> slots = RcoSvg.Slots(Container());
+        string rows = string.Join(",", slots.Select((s, i) => $"[{i},{s.Length},\"{s.Title}\"]"));
+        return StockCatalog.Parse($$"""
+            {"firmware":"11.00","assets":[],"icon_container":{"path":"{{RcoPath}}","stock_bytes":{{Container().Length}},
+             "stock_sha256":"{{ThemePack.Hash(Container())}}","icons":{{icons}},"untitled":[],"titled":[{{rows}}]} }
+            """);
+    }
+
+    /// <summary>The console after a theme's icons were applied and the app's folder was deleted: themed, no backup, no records.</summary>
+    private static MemoryDeviceFiles ThemedWithoutBackup()
+    {
+        var files = new MemoryDeviceFiles();
+        files.Files[RcoDevice] = Container();
+        Assert.True(new ThemeApplier(files, () => 0).Apply(SvgPack("a", ("iconid_settings", Star), ("iconid_notification", Star))).Success);
+        foreach (string path in files.Files.Keys.Where(k => k.StartsWith("/data/", StringComparison.Ordinal)).ToList())
+            files.Files.Remove(path);
+        return files;
+    }
+
+    [Fact]
+    public void Without_a_stock_copy_a_theme_replaces_an_earlier_themes_icons_where_the_catalog_has_them()
+    {
+        // Issue #20: the backup was made from a themed container, so the icons an earlier theme replaced have no title.
+        byte[] green = Encoding.UTF8.GetBytes(Icon("iconid_settings", "#00FF00"));
+        MemoryDeviceFiles files = ThemedWithoutBackup();
+        Assert.Empty(RcoSvg.Slots(files.Files[RcoDevice]).Where(s => s.Title is not null));
+
+        ApplyResult refused = new ThemeApplier(files, () => 0).Apply(SvgPack("b", ("iconid_settings", green)));
+        Assert.False(refused.Success);
+        Assert.Contains("matches 0 entries", refused.Message);
+
+        ApplyResult result = new ThemeApplier(files, () => 0) { Stock = LayoutCatalog() }.Apply(SvgPack("b", ("iconid_settings", green)));
+
+        Assert.True(result.Success, result.Message);
+        byte[] live = files.Files[RcoDevice];
+        Assert.Equal(Container().Length, live.Length);
+        (int o, int n) = RcoSvg.Find(Container(), "iconid_settings");
+        Assert.Contains("#00FF00", Encoding.UTF8.GetString(live, o, n));
+        (o, n) = RcoSvg.Find(Container(), "iconid_notification");
+        Assert.Contains("#f00", Encoding.UTF8.GetString(live, o, n));   // not in theme b: stays as theme a left it
+    }
+
+    [Fact]
+    public void The_catalogs_place_is_refused_when_the_container_does_not_match_it()
+    {
+        byte[] themed = ThemedWithoutBackup().Files[RcoDevice];
+        (int o, int n) = RcoSvg.Find(Container(), "iconid_settings");
+
+        Assert.Equal((o, n), RcoSvg.FindAt(themed, "iconid_settings", 0, n, 2));
+        // Another number of icons (another firmware, or a tool added some), another length, or a titled icon there: refused.
+        Assert.Throws<ThemePackException>(() => RcoSvg.FindAt(themed, "iconid_settings", 0, n, 3));
+        Assert.Throws<ThemePackException>(() => RcoSvg.FindAt(themed, "iconid_settings", 0, n + 1, 2));
+        Assert.Throws<ThemePackException>(() => RcoSvg.FindAt(Container(), "iconid_settings", 0, n, 2));
+
+        ApplyResult result = new ThemeApplier(ThemedWithoutBackup(), () => 0) { Stock = LayoutCatalog(icons: 3) }
+            .Apply(SvgPack("b", ("iconid_settings", Star)));
+        Assert.False(result.Success);
+        Assert.Contains("not the firmware's 3", result.Message);
+    }
+
+    [Fact]
+    public void The_catalog_names_an_icon_by_its_title_or_the_end_of_it()
+    {
+        StockCatalog catalog = LayoutCatalog();
+        Assert.True(catalog.TryIconSlot("iconid_notification", out int index, out int length));
+        Assert.Equal(1, index);
+        Assert.Equal(RcoSvg.Find(Container(), "iconid_notification").Length, length);
+        Assert.True(catalog.TryIconSlot("utility/iconid_settings", out index, out _));
+        Assert.Equal(0, index);
+        Assert.False(catalog.TryIconSlot("iconid_set", out _, out _));
+        Assert.False(StockCatalog.Empty.TryIconSlot("iconid_settings", out _, out _));
+    }
+
     [Fact]
     public void An_icon_this_container_does_not_have_is_skipped_and_the_rest_is_applied()
     {

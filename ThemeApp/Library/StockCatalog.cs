@@ -18,19 +18,40 @@ public sealed class StockCatalog
 
     /// <summary>A catalog that knows no file.</summary>
     public static readonly StockCatalog Empty = new(new Dictionary<string, string>(StringComparer.Ordinal),
-        new Dictionary<string, long>(StringComparer.Ordinal), null, 0);
+        new Dictionary<string, long>(StringComparer.Ordinal), null, 0, []);
 
     private readonly Dictionary<string, string> _stock;
     private readonly Dictionary<string, long> _bytes;
+    private readonly List<(int Index, int Length, string Title)> _titled;
 
-    private StockCatalog(Dictionary<string, string> stock, Dictionary<string, long> bytes, HashSet<int>? untitled, int icons) =>
-        (_stock, _bytes, UntitledIcons, IconCount) = (stock, bytes, untitled, icons);
+    private StockCatalog(Dictionary<string, string> stock, Dictionary<string, long> bytes, HashSet<int>? untitled, int icons,
+        List<(int Index, int Length, string Title)> titled) =>
+        (_stock, _bytes, UntitledIcons, IconCount, _titled) = (stock, bytes, untitled, icons, titled);
 
     /// <summary>Which icons of this firmware's stock icon container have no title, by position; null when the catalog does not say.</summary>
     public IReadOnlySet<int>? UntitledIcons { get; }
 
     /// <summary>How many icons this firmware's stock icon container has; 0 when the catalog does not say.</summary>
     public int IconCount { get; }
+
+    /// <summary>
+    /// Where this firmware's stock icon container has the icon <paramref name="name"/> (its title is the name or ends in
+    /// <c>/name</c>), and its length: the catalog's <c>titled</c> rows, taken from a report of an untouched console. A
+    /// theme's icon loses its title but keeps the place and length of the one it replaced, so this finds that icon again
+    /// in a themed container when there is no stock copy. False when the catalog has no such row, or more than one.
+    /// </summary>
+    public bool TryIconSlot(string name, out int index, out int length)
+    {
+        (index, length) = (-1, 0);
+        int matches = 0;
+        foreach ((int at, int bytes, string title) in _titled)
+        {
+            if (title != name && !title.EndsWith("/" + name, StringComparison.Ordinal)) continue;
+            (index, length) = (at, bytes);
+            matches++;
+        }
+        return matches == 1;
+    }
 
     /// <summary>How many files the catalog knows.</summary>
     public int Count => _stock.Count;
@@ -78,7 +99,16 @@ public sealed class StockCatalog
             untitled = new HashSet<int>(list.Count);
             for (int i = 0; i < list.Count; i++) untitled.Add(list[i].AsInt(-1));
         }
-        return stock.Count == 0 ? Empty : new StockCatalog(stock, bytes, untitled, container.GetInt("icons"));
+        var titled = new List<(int, int, string)>();
+        if (container["titled"] is { Type: JsonType.Array } rows)
+            for (int i = 0; i < rows.Count; i++)
+            {
+                JsonValue row = rows[i];
+                int index = row[0].AsInt(-1), length = row[1].AsInt(0);
+                string title = row[2].AsString();
+                if (row.Count == 3 && index >= 0 && length > 0 && title.Length > 0) titled.Add((index, length, title));
+            }
+        return stock.Count == 0 ? Empty : new StockCatalog(stock, bytes, untitled, container.GetInt("icons"), titled);
     }
 
     /// <summary>

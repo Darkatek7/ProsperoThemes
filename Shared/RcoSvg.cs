@@ -55,6 +55,24 @@ public static class RcoSvg
     }
 
     /// <summary>
+    /// The icon <paramref name="name"/> where a firmware's stock container has it (<paramref name="index"/>, with
+    /// <paramref name="length"/> bytes), in a container whose copy of that icon is a theme's: a theme's icon has no title
+    /// but keeps the place and length of the one it replaced. Taken only when the container has the stock number of icons
+    /// (<paramref name="icons"/>) and the icon there has no title and that length; otherwise refused, so no other icon is
+    /// ever replaced.
+    /// </summary>
+    /// <exception cref="ThemePackException">The container does not have it there.</exception>
+    public static (int Offset, int Length) FindAt(ReadOnlySpan<byte> container, string name, int index, int length, int icons)
+    {
+        System.Collections.Generic.List<(int Offset, int Length, string? Title)> slots = Slots(container);
+        if (icons <= 0 || slots.Count != icons)
+            throw new ThemePackException($"icon '{name}' has lost its title, and this container has {slots.Count} icons, not the firmware's {icons}");
+        if (index < 0 || index >= slots.Count || slots[index] is not { Title: null } slot || slot.Length != length)
+            throw new ThemePackException($"icon '{name}' matches 0 entries in the container, and #{index} is not a theme's copy of it");
+        return (slot.Offset, slot.Length);
+    }
+
+    /// <summary>
     /// Untitled icons by name (FW 13.00, <c>Sce.PlayStation.PUI_UI3.rco</c>): the top-bar search magnifier is the
     /// 876th SVG in the container and has no <c>&lt;title&gt;</c>. Proven on hardware (recoloured red). Its stock
     /// length and hash are checked too, so a container in another order (another firmware) is refused instead
