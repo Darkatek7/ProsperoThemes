@@ -1488,6 +1488,26 @@ public class ThemeApplierTests
         Assert.Equal(0, CatalogWith(Path1, Live("x")).StockBytes(Path1));
     }
 
+    [Fact]
+    public void The_bundled_catalogs_place_the_icons_themes_change()
+    {
+        // #20 on 11.00: an earlier theme's icons are found by these places when no stock copy is left.
+        string folder = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "catalog");
+        StockCatalog fw1100 = StockCatalog.Parse(File.ReadAllText(Path.Combine(folder, "11.00.json")));
+        Assert.True(fw1100.TryIconSlot("iconid_app_library_game", out int index, out int length));
+        Assert.Equal((134, 1895), (index, length));
+        Assert.Equal(1015, fw1100.IconCount);
+
+        foreach (string file in Directory.GetFiles(folder, "*.json"))
+        {
+            StockCatalog catalog = StockCatalog.Parse(File.ReadAllText(file));
+            if (!catalog.TryIconSlot("iconid_settings", out index, out _)) continue;   // a catalog without places
+            Assert.False(catalog.UntitledIcons!.Contains(index), file);
+            foreach (string icon in StockLook.ThemeIcons)
+                Assert.True(catalog.TryIconSlot(icon, out index, out _) && index < catalog.IconCount, $"{file}: {icon}");
+        }
+    }
+
     // ---- another firmware's icon container from USB --------------------------
 
     [Fact]

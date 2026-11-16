@@ -797,6 +797,18 @@ def report_looks_themed(report: dict) -> set:
     return themed
 
 
+def catalog_text(catalog: dict) -> str:
+    """The catalog as the repo keeps it: json.dumps(indent=2), but each row of the icon container's "titled" list on one
+    line (a row per icon, about 830 of them). The store's port (server/src/catalogs.ts catalogText) writes the same."""
+    rows = (catalog.get("icon_container") or {}).get("titled")
+    if not rows:
+        return json.dumps(catalog, indent=2) + "\n"
+    marker = "@@titled@@"
+    shown = {**catalog, "icon_container": {**catalog["icon_container"], "titled": marker}}
+    block = "[\n" + ",\n".join("      " + json.dumps(r) for r in rows) + "\n    ]"
+    return json.dumps(shown, indent=2).replace(json.dumps(marker), block, 1) + "\n"
+
+
 def cmd_catalog_from_report(args: argparse.Namespace) -> int:
     """A catalog for another firmware from the app's firmware report (System tab, Options).
 
@@ -865,13 +877,17 @@ def cmd_catalog_from_report(args: argparse.Namespace) -> int:
             "path": icons["path"], "stock_bytes": icons["bytes"], "stock_sha256": icons["sha256"],
             "icons": len(icons.get("icons", [])),
             "untitled": [i for i, x in enumerate(icons.get("icons", [])) if x.get("title") is None],
+            # Where each titled icon is and how long it is: a theme's icon loses its title but keeps both, so the app
+            # finds it again in a themed container without a stock copy (StockCatalog.TryIconSlot).
+            "titled": [[i, x["bytes"], x["title"]] for i, x in enumerate(icons.get("icons", []))
+                       if x.get("title") and x.get("bytes")],
         }
     catalog["tile_icons"] = [{"path": f["path"], "exists": bool(f.get("exists")), **({"width": f["width"], "height": f["height"]} if "width" in f else {})}
                              for f in report["files"] if f["path"].startswith("rnps/")]
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
+    out.write_text(catalog_text(catalog), encoding="utf-8")
     print(f"catalog {firmware}: {len(assets)} assets -> {out}")
     print(f"  same as {base['firmware']}: {len(same)}, changed: {len(changed)}, new: {len(added)}, missing: {len(missing)}")
     for label, paths in (("changed", changed), ("new", added), ("missing", missing), ("error", errors),

@@ -943,7 +943,7 @@ public sealed class ThemeApplier
                             }
                             else
                             {
-                                (int offset, int length) = RcoSvg.Find(stock.Span, plan.Target.Resource!);
+                                (int offset, int length) = FindIcon(stock.Span, plan.Target.Resource!);
                                 RcoSvg.Fit(payload, length);
                                 _slots[(plan.Device, plan.Target.Layer, plan.Target.Resource!)] = (offset, length, 0);
                             }
@@ -1073,6 +1073,23 @@ public sealed class ThemeApplier
 
     private static bool IsTitleBackground(string targetPath) =>
         targetPath == AssetRoots.AllAppsBackground || AssetRoots.IsAppBackground(targetPath, out _);
+
+    /// <summary>
+    /// The icon <paramref name="name"/> in <paramref name="container"/>: by its title, or, when an earlier theme replaced it
+    /// and no stock copy is left to find it in (the backup was made from a theme's container), where this firmware's
+    /// catalog has it (<see cref="StockCatalog.TryIconSlot"/>, <see cref="RcoSvg.FindAt"/>).
+    /// </summary>
+    private (int Offset, int Length) FindIcon(ReadOnlySpan<byte> container, string name)
+    {
+        try
+        {
+            return RcoSvg.Find(container, name);
+        }
+        catch (ThemePackException) when (Stock.TryIconSlot(name, out int index, out int length))
+        {
+            return RcoSvg.FindAt(container, name, index, length, Stock.IconCount);
+        }
+    }
 
     /// <summary>
     /// Returns the console's original of a file, which the caller disposes: its backup, made now from the live file when
